@@ -6,6 +6,8 @@ No LLM calls and no natural-language re-interpretation.
 """
 from __future__ import annotations
 
+import json
+
 from app.data.ingestion.compiler.spec_mapper import (
     map_intervention_to_spec,
     map_interventions_to_specs,
@@ -40,6 +42,113 @@ from app.contracts.planning.p1_closure import (
     build_grounding_request,
     build_physical_project_assembly,
 )
+
+
+_RELATION_DIAGNOSTIC_CODES = frozenset({
+    "relation_subject_type_mismatch",
+    "relation_object_type_mismatch",
+    "relation_object_ref_kind_mismatch",
+    "relation_unknown_subject",
+    "relation_unknown_object",
+    "relation_parameters_invalid",
+    "relation_parameters_missing",
+    "relation_parameter_type_mismatch",
+    "relation_deferred",
+    "relation_missing_object",
+    "unsupported_relation_template",
+})
+_GROUND_DEFERRABLE_RELATION_CODES = frozenset({
+    "relation_parameters_invalid",
+    "relation_parameters_missing",
+    "relation_parameter_type_mismatch",
+    "relation_missing_object",
+})
+
+
+def _intent_graph_diagnostic_severity(item: str, intent_graph: object) -> str:
+    """Preserve relation semantics when graph diagnostics cross the boundary.
+
+    ``PlanningIntentGraph`` intentionally stores compact diagnostic strings,
+    while the relation object carries criticality.  Parameter/object gaps are
+    explicit GROUND prerequisites, including for hard relations; endpoint
+    incompatibilities remain blocking source-semantic errors.
+    """
+
+    code = str(item or "").split(":", 1)[0]
+    if code not in _RELATION_DIAGNOSTIC_CODES:
+        return "warning"
+    if code in _GROUND_DEFERRABLE_RELATION_CODES:
+        return "warning"
+    relation = next(
+        (
+            candidate
+            for candidate in getattr(intent_graph, "relations", ())
+            if str(item).startswith(f"{code}:{candidate.relation_id}:")
+        ),
+        None,
+    )
+    if relation is not None and relation.criticality != "hard":
+        return "warning"
+    return "error"
+
+
+def _relation_diagnostic_trace(
+    program: PlanningProgram,
+    intent_graph: object,
+    item: str,
+) -> tuple[str, str, str]:
+    """Keep relation diagnostics traceable to their L3 source component."""
+
+    _code, _separator, remainder = str(item or "").partition(":")
+    relation_id, _separator, _detail = remainder.partition(":")
+    relation = next(
+        (
+            candidate
+            for candidate in getattr(intent_graph, "relations", ())
+            if str(getattr(candidate, "relation_id", "")) == relation_id
+        ),
+        None,
+    )
+    if relation is None:
+        return "", "", ""
+    target_id = str(getattr(relation, "subject_ref", "") or "")
+    intervention = next(
+        (
+            candidate
+            for candidate in program.interventions
+            if str(candidate.target_id or candidate.intervention_id) == target_id
+        ),
+        None,
+    )
+    claim_id = ""
+    dimension_key = ""
+    if intervention is not None:
+        claim_ids = [str(value) for value in intervention.claim_refs if str(value).strip()]
+        claim_id = claim_ids[0] if claim_ids else ""
+        claim = next(
+            (candidate for candidate in program.claims if candidate.claim_id == claim_id),
+            None,
+        )
+        dimension_key = str(getattr(claim, "dimension_key", "") or "")
+    ordinal = next(
+        (
+            index
+            for index, candidate in enumerate(getattr(intent_graph, "relations", ()))
+            if str(getattr(candidate, "relation_id", "")) == relation_id
+        ),
+        -1,
+    )
+    trace = json.dumps(relation.model_dump(mode="json"), ensure_ascii=False, sort_keys=True)
+    return (
+        target_id,
+        f"relations[{ordinal}]",
+        " ".join((
+            f"source_claim_id={claim_id or 'unknown'}",
+            f"dimension_key={dimension_key or 'unknown'}",
+            f"relation_ordinal={ordinal}",
+            f"compiled_relation={trace}",
+        )),
+    )
 
 
 def _spatial_hint(intervention: PlanningIntervention) -> str:
@@ -626,26 +735,22 @@ def compile_program_deterministic(
         for intervention_id, reasons in admission_failures.items()
         if reasons
     )
-    diagnostics.extend(
-        ParseDiagnostic(
-            diagnostic_id=f"intent-graph-{index}",
-            severity="error" if item.startswith((
-                "relation_subject_type_mismatch",
-                "relation_object_type_mismatch",
-                "relation_unknown_subject",
-                "relation_unknown_object",
-                "relation_parameters_invalid",
-                "relation_parameters_missing",
-                "relation_parameter_type_mismatch",
-                "relation_deferred",
-                "relation_missing_object",
-                "unsupported_relation_template",
-            )) else "warning",
-            code=item.split(":", 1)[0],
-            message=item,
+    for index, item in enumerate(intent_graph.diagnostics):
+        target_id, field_path, trace = _relation_diagnostic_trace(
+            program,
+            intent_graph,
+            item,
         )
-        for index, item in enumerate(intent_graph.diagnostics)
-    )
+        diagnostics.append(
+            ParseDiagnostic(
+                diagnostic_id=f"intent-graph-{index}",
+                severity=_intent_graph_diagnostic_severity(item, intent_graph),
+                code=item.split(":", 1)[0],
+                message=f"{item}; {trace}" if trace else item,
+                field_path=field_path,
+                target_id=target_id,
+            )
+        )
 
     provenance = Provenance(
         source="target_projection",

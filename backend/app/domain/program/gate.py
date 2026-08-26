@@ -42,134 +42,88 @@ def evaluate_l3_gate(
         and bool(l2_strategy.spatial_structure.strip())
     )
 
-    contradictions = [
-        issue
-        for issue in program.program_issues
-        if issue.severity == "error"
-        and issue.code != "classification_decision_required"
-    ]
-    # A program may contain both admitted spatial interventions and claims
-    # that are intentionally diagnostic-only (missing typed parameters,
-    # package identity, or evidence lineage).  Those rejected claims must
-    # remain visible in the gate diagnostics, but they must not suppress an
-    # independently admissible subset.  If there is no admissible subset,
-    # retain the strict L3 rework boundary.
-    blocking_contradictions = [
-        issue
-        for issue in contradictions
-        if not (
-            issue.code in {"claim_admission_incomplete", "claim_not_executable"}
-            and program.interventions
+    from app.domain.program.failure_scope import (
+        ClaimDependencyGraph,
+        FailureScope,
+        classify_failure_scope,
+    )
+
+    dependency_graph = ClaimDependencyGraph.from_program(program)
+    blocking_contradictions: list[Any] = []
+    for issue in program.program_issues:
+        if issue.severity != "error" or issue.code == "classification_decision_required":
+            continue
+        decision = classify_failure_scope(issue, dependency_graph)
+        admission_without_spatial_output = (
+            issue.code == "claim_admission_incomplete"
+            and bool(program.claims)
+            and not program.interventions
         )
-    ]
+        if not decision.blocking and not admission_without_spatial_output:
+            continue
+        if (
+            decision.scope in {FailureScope.CLAIM, FailureScope.RELATION}
+            and not decision.dependency_scope
+            and not (
+                admission_without_spatial_output
+            )
+        ):
+            # The claim was quarantined before admission, so an unrelated
+            # admitted intervention remains eligible for projection.
+            continue
+        blocking_contradictions.append((issue, decision))
     if blocking_contradictions:
         return GateDecision(
-            stage=stage, passed=False, feedback_route="L3",
+            stage=stage,
+            passed=False,
+            feedback_route="L3",
             pending_requests=[
                 PendingRequest(
-                    request_id=f"pr-l3-rework-{i.dimension_key or 'program'}-{i.code}",
+                    request_id=f"pr-l3-rework-{issue.dimension_key or 'program'}-{issue.code}",
                     stage="l3",
                     request_type="program_rework",
                     context={
-                        "dimension_key": i.dimension_key,
-                        "claim_id": i.claim_id,
-                        "message": i.message,
-                        "detail": i.detail or "",
+                        "dimension_key": issue.dimension_key,
+                        "claim_id": issue.claim_id,
+                        "message": issue.message,
+                        "detail": issue.detail or "",
+                        "root_issue_id": decision.root_issue_id,
+                        "failure_scope": decision.scope.value,
+                        "dependency_scope": sorted(decision.dependency_scope),
                     },
                 )
-                for i in blocking_contradictions
+                for issue, decision in blocking_contradictions
             ],
-            context_version=cv, artifact_id=gate_artifact_id,
+            context_version=cv,
+            artifact_id=gate_artifact_id,
         )
 
-    if not program.interventions and program.claims and not has_spatial_strategy:
+    if program.claims and not program.interventions:
         return GateDecision(
             stage=stage,
             passed=False,
             feedback_route="HUMAN",
             pending_requests=[
                 PendingRequest(
-                    request_id="pr-l3-claim-only-review",
+                    request_id="pr-l3-zero-spatial-interventions",
                     stage="l3",
-                    request_type="program_review",
+                    request_type="zero_spatial_interventions",
                     context={
-                        "message": "L3 claims were preserved but none were admitted as spatial interventions",
-                        "claim_count": len(program.claims),
-                        "reason_code": "zero_spatial_interventions",
+                        "message": (
+                            "L3 contains claims but no admitted spatial interventions; "
+                            "human review must decide whether a spatial program is required"
+                        ),
+                        "claim_ids": [
+                            str(claim.claim_id)
+                            for claim in program.claims
+                            if str(claim.claim_id).strip()
+                        ],
                     },
                 )
             ],
-            route_reason="zero_spatial_interventions",
             context_version=cv,
             artifact_id=gate_artifact_id,
-        )
-
-    if empty_program and not has_spatial_strategy:
-        pending: list[PendingRequest] = []
-        if l1_constraints:
-            pending.append(
-                PendingRequest(
-                    request_id="pr-l3-empty-l1",
-                    stage="l3",
-                    request_type="program_rework",
-                    context={
-                        "message": "L3 produced an empty program but L1 constraints are present",
-                        "l1_constraints_present": len(l1_constraints),
-                    },
-                )
-            )
-        return GateDecision(
-            stage=stage, passed=False, feedback_route="HUMAN",
-            pending_requests=pending,
-            context_version=cv, artifact_id=gate_artifact_id,
-        )
-
-    if has_spatial_strategy and not program.interventions:
-        return GateDecision(
-            stage=stage, passed=False, feedback_route="L3",
-            pending_requests=[
-                PendingRequest(
-                    request_id="pr-l3-strategy-orphan",
-                    stage="l3",
-                    request_type="program_rework",
-                    context={
-                        "message": "L2 spatial structure defined but L3 produced zero interventions",
-                        "detail": l2_strategy.spatial_structure.strip()[:200],
-                    },
-                )
-            ],
-            context_version=cv, artifact_id=gate_artifact_id,
-        )
-
-    # Error is a contract severity, not an allow-listed log label.  Passing an
-    # unknown error code allowed malformed L3 claim sets to reach EXECUTE and
-    # multiply into thousands of spatial conflicts.  Semantic repair may
-    # explicitly downgrade a resolved normalization/audit item; every error
-    # that remains must route back to L3.
-    #
-    # ``classification_decision_required`` is deliberately excluded: it is a
-    # HUMAN-boundary decision (see below), not a contradiction of the source
-    # program.  The assembler records it at error severity so EXECUTE can never
-    # run an unclassified polygon target, but treating it as a rework
-    # contradiction would make the classification branch unreachable and loop
-    # the graph at L3 forever.
-    if blocking_contradictions:
-        return GateDecision(
-            stage=stage, passed=False, feedback_route="L3",
-            pending_requests=[
-                PendingRequest(
-                    request_id=f"pr-l3-rework-{i.dimension_key or 'program'}-{i.code}",
-                    stage="l3",
-                    request_type="program_rework",
-                    context={
-                        "dimension_key": i.dimension_key,
-                        "message": i.message,
-                        "detail": i.detail or "",
-                    },
-                )
-                for i in blocking_contradictions
-            ],
-            context_version=cv, artifact_id=gate_artifact_id,
+            route_reason="zero_spatial_interventions",
         )
 
     classification_targets = classification_review_targets(program)
@@ -209,7 +163,7 @@ def evaluate_l3_gate(
         )
 
     actionable_gaps = [g for g in program.evidence_gaps if g.severity in ("warning", "error")]
-    missing_sources = not program.sources and not program.interventions
+    missing_sources = not program.sources and empty_program
     if missing_sources or actionable_gaps:
         pending: list[PendingRequest] = []
         if missing_sources:

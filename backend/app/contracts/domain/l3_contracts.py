@@ -158,6 +158,15 @@ class ProgramIssue(BaseModel):
     message: str = ""
     detail: str = ""
     reason: str = ""
+    root_issue_id: str = ""
+    failure_scope: Literal[
+        "field",
+        "relation",
+        "claim",
+        "project_package",
+        "program",
+    ] = "program"
+    dependency_scope: list[str] = Field(default_factory=list)
 
 
 class ClaimDisposition(BaseModel):

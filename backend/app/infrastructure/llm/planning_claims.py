@@ -16,7 +16,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.core.settings import LLM_MAX_CONCURRENT, LLM_STREAM_TIMEOUT
+from app.core.settings import LLM_MAX_CONCURRENT, LLM_STREAM_TIMEOUT, MAX_TOKENS
 from app.infrastructure.llm.structured import run_structured_output
 
 
@@ -44,12 +44,30 @@ class PlanningClaimGenerator:
         *,
         instruction: str,
         validation_feedback: list[str] | None = None,
-        content_fallback_mode: str = "strict",
     ) -> Any:
         """Run one bounded provider call for one semantic projection only."""
 
         await asyncio.wait_for(self._slots.acquire(), timeout=LLM_STREAM_TIMEOUT)
         try:
+            report_projection = response_model.__name__ == "L3ReportOutput"
+            configured_max_tokens = max(
+                256,
+                int(
+                    os.getenv(
+                        "L3_REPORT_MAX_TOKENS" if report_projection else "L3_MAX_TOKENS",
+                        str(min(MAX_TOKENS, 4096) if report_projection else MAX_TOKENS),
+                    )
+                ),
+            )
+            incomplete_output_max_tokens = max(
+                configured_max_tokens,
+                int(
+                    os.getenv(
+                        "L3_INCOMPLETE_OUTPUT_MAX_TOKENS",
+                        str(configured_max_tokens),
+                    )
+                ),
+            )
             retry_count = max(0, int(os.getenv("L3_PROVIDER_PARSE_RETRIES", "0")))
             last_error: Exception | None = None
             for attempt in range(retry_count + 1):
@@ -57,7 +75,7 @@ class PlanningClaimGenerator:
                     feedback_text = ""
                     if validation_feedback:
                         feedback_text = (
-                            "\nRepair only these deterministic validation findings; "
+                            "\nCorrect only these deterministic closed-set findings; "
                             "do not add new claims or report content:\n- "
                             + "\n- ".join(validation_feedback[:40])
                         )
@@ -77,8 +95,9 @@ class PlanningClaimGenerator:
                         max_retries=1,
                         timeout=float(LLM_STREAM_TIMEOUT),
                         temperature=0.1,
+                        max_tokens=configured_max_tokens,
+                        incomplete_output_max_tokens=incomplete_output_max_tokens,
                         llm=self._get_llm(),
-                        content_fallback_mode=content_fallback_mode,
                         max_concurrent=self._max_concurrent,
                         semaphore_scope="l3",
                     )
@@ -135,7 +154,6 @@ class PlanningClaimGenerator:
                 "or source facts; do not return a claims array."
             ),
             validation_feedback=validation_feedback,
-            content_fallback_mode="report_text",
         )
 
 

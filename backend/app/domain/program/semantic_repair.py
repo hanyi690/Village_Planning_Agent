@@ -782,7 +782,6 @@ async def repair_planning_program(
                 max_retries=0,
                 timeout=timeout_seconds,
                 max_tokens=8192,
-                allow_content_json_fallback=False,
             )
             result_pending = result.pending
             result_issues = result.issues

@@ -79,10 +79,9 @@ def test_claims_prompt_has_no_unbound_metric_placeholders_or_legacy_output_order
 
     assert "{landuse_metrics_farmland}" not in prompt
     assert "claims-only" in prompt
-    assert "旧报告模板中的表格和‘至少列出’不是本轮输出指令" in prompt
-    assert "suggested_output_kind 只能是 parcel/polygon/point/line/action" in prompt
-    assert "avoid_constraint、near、serve、connect_network" in prompt
-    assert "suggested_category=action、suggested_output_kind=action、asset_kind=none" in prompt
+    assert "旧报告模板中的表格和‘至少列出’只是背景" in prompt
+    assert "结构化 schema 是字段、组件类型和参数块的唯一约束来源" in prompt
+    assert "candidate_context" in prompt
 
 
 def test_non_spatial_claims_are_not_required_to_have_spatial_anchors():
@@ -95,7 +94,7 @@ def test_non_spatial_claims_are_not_required_to_have_spatial_anchors():
     )
 
     assert "非空间指标可以没有 locator" in prompt
-    assert "空间干预 claim 才需要" in prompt
+    assert "空间组件即使还没有 locator 也要保留语义" in prompt
 
 
 def test_claims_prompt_has_reusable_package_typed_and_lineage_emit_checklist():
@@ -108,9 +107,6 @@ def test_claims_prompt_has_reusable_package_typed_and_lineage_emit_checklist():
         location_evidence='{"fact_id":"l1:fact:001","source_refs":["l1:source:001"]}',
     )
 
-    assert "只有 planning_role=spatial_intervention 或 project_package 的 claim 才必须有非空 project_package_ref" in prompt
-    assert "对同一交付物的相关 claim 原样复用" in prompt
-    assert "先选 category/output 的合法组合，再填写且只填写一个对应 typed 参数块" in prompt
-    assert "L1 planning fact_id→source_fact_refs" in prompt
-    assert "typed facts 的 source_refs→source_refs" in prompt
-    assert "没有明确 ID 时保持引用为空，不得编造" in prompt
+    assert "复用同一个 project_package_ref" in prompt
+    assert "source_fact_refs 只能逐字复制" in prompt
+    assert "没有合适身份就留空" in prompt

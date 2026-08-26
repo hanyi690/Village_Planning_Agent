@@ -27,6 +27,18 @@ class RelationTemplateSpec:
         return bool(self.parameter_types)
 
 
+@dataclass(frozen=True)
+class RelationCandidate:
+    """One relation choice exposed to a claim compiler."""
+
+    template: str
+    subject_kind: str
+    object_kinds: frozenset[str]
+    object_ref_kinds: frozenset[str]
+    parameter_types: frozenset[str]
+    criticality: str
+
+
 _TARGETS = frozenset({"site_area", "zone", "facility", "road", "linear", "axis", "action"})
 _SPATIAL_TARGETS = frozenset(_TARGETS - {"action"})
 _ANY_OBJECT = frozenset({"target", "entity", "place_hint", "constraint"})
@@ -127,4 +139,29 @@ def relation_spec(template: str) -> RelationTemplateSpec | None:
     return RELATION_CATALOG.get(template)
 
 
-__all__ = ["RelationTemplateSpec", "RELATION_CATALOG", "relation_spec"]
+def relation_options(subject_kind: str) -> tuple[RelationCandidate, ...]:
+    """Return only catalog relations legal for one typed subject."""
+
+    subject = str(subject_kind or "").strip()
+    options = [
+        RelationCandidate(
+            template=spec.template,
+            subject_kind=subject,
+            object_kinds=spec.object_kinds,
+            object_ref_kinds=spec.object_ref_kinds,
+            parameter_types=spec.parameter_types,
+            criticality=spec.default_criticality,
+        )
+        for spec in RELATION_CATALOG.values()
+        if subject in spec.subject_kinds
+    ]
+    return tuple(sorted(options, key=lambda item: item.template))
+
+
+__all__ = [
+    "RelationCandidate",
+    "RelationTemplateSpec",
+    "RELATION_CATALOG",
+    "relation_options",
+    "relation_spec",
+]

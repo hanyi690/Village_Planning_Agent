@@ -653,7 +653,6 @@ async def generate_classification_decisions(
                 max_retries=0,
                 timeout=180,
                 max_tokens=4096,
-                allow_content_json_fallback=False,
             )
 
             accepted_ids: set[str] = set()

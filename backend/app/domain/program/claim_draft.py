@@ -8,9 +8,9 @@ the only place that converts provider drafts into the strict claim contract.
 from __future__ import annotations
 
 import json
-from typing import Any, Literal, TypeAlias
+from typing import Annotated, Any, Literal, TypeAlias
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.contracts.program import (
     PlanningClaim,
@@ -80,7 +80,7 @@ PlanningRoleDraft: TypeAlias = Literal[
 
 
 class RoadPlanningParametersDraft(BaseModel):
-    action: Literal["preserve", "new", "upgrade", "widen", "harden", "repair"] = "new"
+    action: Literal["preserve", "new", "upgrade", "widen", "harden", "repair"]
     road_level: str = ""
     length: MeasureDraft | None = None
     roadbed_width: MeasureDraft | None = None
@@ -104,12 +104,17 @@ class RoadPlanningParametersDraft(BaseModel):
 
 
 class LinearAssetPlanningParametersDraft(BaseModel):
-    action: Literal["preserve", "new", "upgrade", "expand", "repair"] = "new"
+    action: Literal["preserve", "new", "upgrade", "expand", "repair"]
     length: MeasureDraft | None = None
     diameter: MeasureDraft | None = None
     material: str = ""
     alignment_refs: list[str] = Field(default_factory=list)
     connects: list[str] = Field(default_factory=list)
+
+    @field_validator("material", mode="before")
+    @classmethod
+    def default_material(cls, value: Any) -> Any:
+        return "" if value is None else value
 
     @field_validator("alignment_refs", "connects", mode="before")
     @classmethod
@@ -128,7 +133,7 @@ class LinearAssetPlanningParametersDraft(BaseModel):
 
 class FacilityPlanningParametersDraft(BaseModel):
     facility_type: str = ""
-    action: PlanningActionDraft = "new"
+    action: PlanningActionDraft
     service_radius: MeasureDraft | None = None
     capacity: MeasureDraft | None = None
     footprint_area: MeasureDraft | None = None
@@ -142,7 +147,7 @@ class FacilityPlanningParametersDraft(BaseModel):
 
 
 class AxisPlanningParametersDraft(BaseModel):
-    action: Literal["preserve", "new", "upgrade"] = "new"
+    action: Literal["preserve", "new", "upgrade"]
     axis_type: Literal["primary", "secondary", "spatial_control"] = "primary"
     direction: str = ""
     reference_features: list[str] = Field(default_factory=list)
@@ -188,7 +193,7 @@ class SiteAreaPlanningParametersDraft(BaseModel):
     site_type: str = Field(
         default="",
     )
-    action: PlanningActionDraft = "new"
+    action: PlanningActionDraft
     capacity: MeasureDraft | None = None
     footprint_area: MeasureDraft | None = None
 
@@ -282,6 +287,174 @@ class PlanningClaimDraft(BaseModel):
         return value
 
 
+class _ClaimComponentBase(BaseModel):
+    """Shared semantic and lineage fields for the provider component union.
+
+    The provider-facing union deliberately does not include the six optional
+    typed parameter blocks.  Each concrete component adds only the block that
+    belongs to its component kind.  ``PlanningClaimDraft`` remains the local
+    internal conversion shape used by deterministic normalization.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    component_kind: str
+    claim_id: str = ""
+    dimension_key: str = ""
+    statement: str = ""
+    planning_role: PlanningRoleDraft = "spatial_intervention"
+    project_package_ref: str = ""
+    affected_population: float | None = None
+    affected_parcel_refs: list[str] = Field(default_factory=list)
+    suggested_interventions: list[str] = Field(default_factory=list)
+    quantity: float | None = None
+    quantity_unit: str | None = None
+    intervention_action: PlanningActionDraft
+    implementation_phase: Literal["short", "medium", "long"] = "short"
+    location_hints: list[str] = Field(default_factory=list)
+    constraint_refs: list[str] = Field(default_factory=list)
+    objective_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    source_fact_refs: list[str] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+    spatial_requirements: PlanningSpatialRequirements | None = None
+    confidence: float | None = None
+    uncertainty: str = ""
+
+
+class FacilityComponentDraft(_ClaimComponentBase):
+    component_kind: Literal["facility"] = "facility"
+    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
+    suggested_category: Literal["facility"] = "facility"
+    suggested_output_kind: Literal["point"] = "point"
+    asset_kind: Literal["facility"] = "facility"
+    facility_parameters: FacilityPlanningParametersDraft | None = None
+
+
+class RoadComponentDraft(_ClaimComponentBase):
+    component_kind: Literal["road"] = "road"
+    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
+    suggested_category: Literal["road"] = "road"
+    suggested_output_kind: Literal["line"] = "line"
+    asset_kind: Literal["road"] = "road"
+    road_parameters: RoadPlanningParametersDraft | None = None
+
+
+class LinearComponentDraft(_ClaimComponentBase):
+    component_kind: Literal["linear"] = "linear"
+    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
+    suggested_category: Literal["road"] = "road"
+    suggested_output_kind: Literal["line"] = "line"
+    asset_kind: Literal[
+        "water_supply",
+        "sewer",
+        "stormwater",
+        "power",
+        "communication",
+        "drainage_channel",
+        "revetment",
+    ] = "sewer"
+    linear_parameters: LinearAssetPlanningParametersDraft | None = None
+
+
+class AxisComponentDraft(_ClaimComponentBase):
+    component_kind: Literal["axis"] = "axis"
+    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
+    suggested_category: Literal["axis"] = "axis"
+    suggested_output_kind: Literal["line"] = "line"
+    asset_kind: Literal["axis"] = "axis"
+    axis_parameters: AxisPlanningParametersDraft | None = None
+
+
+class RestorationOverlayComponentDraft(_ClaimComponentBase):
+    component_kind: Literal["restoration_overlay"] = "restoration_overlay"
+    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
+    suggested_category: Literal["restoration"] = "restoration"
+    suggested_output_kind: Literal["polygon"] = "polygon"
+    asset_kind: Literal["none"] = "none"
+    polygon_parameters: PolygonPlanningParametersDraft | None = None
+
+
+class ProtectionOverlayComponentDraft(_ClaimComponentBase):
+    component_kind: Literal["protection_overlay"] = "protection_overlay"
+    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
+    suggested_category: Literal["protection"] = "protection"
+    suggested_output_kind: Literal["polygon"] = "polygon"
+    asset_kind: Literal["none"] = "none"
+    polygon_parameters: PolygonPlanningParametersDraft | None = None
+
+
+class ZoneComponentDraft(_ClaimComponentBase):
+    component_kind: Literal["zone"] = "zone"
+    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
+    suggested_category: Literal["zone"] = "zone"
+    suggested_output_kind: Literal["polygon"] = "polygon"
+    asset_kind: Literal["none"] = "none"
+    polygon_parameters: PolygonPlanningParametersDraft | None = None
+
+
+class LandUseAssignmentComponentDraft(_ClaimComponentBase):
+    component_kind: Literal["land_use_assignment"] = "land_use_assignment"
+    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
+    suggested_category: Literal["zone"] = "zone"
+    suggested_output_kind: Literal["polygon"] = "polygon"
+    asset_kind: Literal["land_use"] = "land_use"
+    polygon_parameters: PolygonPlanningParametersDraft | None = None
+
+
+class SiteAreaComponentDraft(_ClaimComponentBase):
+    component_kind: Literal["site_area"] = "site_area"
+    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
+    suggested_category: Literal["site_area"] = "site_area"
+    suggested_output_kind: Literal["parcel", "polygon"] = "polygon"
+    asset_kind: Literal["none"] = "none"
+    site_area_parameters: SiteAreaPlanningParametersDraft | None = None
+
+
+class NonSpatialActionComponentDraft(_ClaimComponentBase):
+    component_kind: Literal["non_spatial_action"] = "non_spatial_action"
+    planning_role: Literal[
+        "evidence_statement",
+        "indicator",
+        "constraint",
+        "objective",
+        "non_spatial_action",
+        "project_package",
+    ] = "non_spatial_action"
+    suggested_category: Literal["action"] = "action"
+    suggested_output_kind: Literal["action"] = "action"
+    asset_kind: Literal["none"] = "none"
+
+
+ClaimComponentDraft: TypeAlias = Annotated[
+    FacilityComponentDraft
+    | RoadComponentDraft
+    | LinearComponentDraft
+    | AxisComponentDraft
+    | RestorationOverlayComponentDraft
+    | ProtectionOverlayComponentDraft
+    | ZoneComponentDraft
+    | LandUseAssignmentComponentDraft
+    | SiteAreaComponentDraft
+    | NonSpatialActionComponentDraft,
+    Field(discriminator="component_kind"),
+]
+
+
+def component_to_planning_claim_draft(
+    component: ClaimComponentDraft,
+    *,
+    dimension_key: str = "",
+) -> PlanningClaimDraft:
+    """Adapt one validated component to the existing deterministic normalizer."""
+
+    payload = component.model_dump(mode="python")
+    payload.pop("component_kind", None)
+    if dimension_key and not payload.get("dimension_key"):
+        payload["dimension_key"] = dimension_key
+    return PlanningClaimDraft.model_validate(payload)
+
+
 class PlanningClaimDraftSet(BaseModel):
     """Provider response before domain validation."""
 
@@ -305,7 +478,7 @@ class PlanningClaimDraftSet(BaseModel):
             decoded = _decode_json_container(value)
             if not isinstance(decoded, list):
                 raise TypeError("structured claims argument must decode to a list")
-            return decoded
+            value = decoded
         return value
 
     @field_validator("diagnostics", mode="before")
@@ -322,7 +495,7 @@ class PlanningClaimDraftSet(BaseModel):
 class L3ClaimOutput(BaseModel):
     """L3 planning-intent pass; no human report field is requested."""
 
-    claims: list[PlanningClaimDraft] = Field(default_factory=list)
+    claims: list[ClaimComponentDraft] = Field(default_factory=list)
 
     @field_validator("claims", mode="before")
     @classmethod
@@ -331,7 +504,6 @@ class L3ClaimOutput(BaseModel):
             value = _decode_json_container(value)
             if not isinstance(value, list):
                 raise TypeError("structured claims argument must decode to a list")
-            return value
         return value
 
 
@@ -646,7 +818,6 @@ def _claim_draft_semantic_errors(raw: PlanningClaimDraft) -> list[str]:
         if getattr(raw, field, None) is not None
     ]
     reasons: list[str] = []
-
     if category == "action":
         if asset in _LINEAR_ASSETS:
             reasons.append(
@@ -689,22 +860,21 @@ def _claim_draft_semantic_errors(raw: PlanningClaimDraft) -> list[str]:
                 "typed parameter blocks must be null"
             )
     else:
-        expected_output = (
-            next(iter(_SITE_AREA_OUTPUTS))
-            if category == "site_area" and output not in _SITE_AREA_OUTPUTS
-            else output
-        )
+        expected_outputs = _SITE_AREA_OUTPUTS if category == "site_area" else {output}
         expected_output = {
             "facility": "point",
             "axis": "line",
             "restoration": "polygon",
             "protection": "polygon",
             "zone": "polygon",
-        }.get(category, expected_output)
-        if output != expected_output:
+        }.get(category)
+        if expected_output is not None:
+            expected_outputs = {expected_output}
+        if output not in expected_outputs:
+            expected_text = "/".join(sorted(expected_outputs))
             reasons.append(
                 f"suggested_category={category} requires "
-                f"suggested_output_kind={expected_output}"
+                f"suggested_output_kind={expected_text}"
             )
         allowed_assets = {
             "facility": {"none", "facility"},
@@ -739,17 +909,6 @@ def _claim_draft_semantic_errors(raw: PlanningClaimDraft) -> list[str]:
         f"ERROR[draft_contract_invalid] {claim_id}: "
         + "; ".join(dict.fromkeys(reasons))
     ]
-
-
-def claim_draft_semantic_errors(
-    draft_set: PlanningClaimDraftSet,
-) -> list[str]:
-    """Return claim-local cross-field contract errors from provider drafts."""
-
-    errors: list[str] = []
-    for raw in draft_set.claims:
-        errors.extend(_claim_draft_semantic_errors(raw))
-    return list(dict.fromkeys(errors))
 
 
 def _measure_value(
@@ -1133,26 +1292,6 @@ def normalize_claim_draft_set(
             diagnostics.extend(draft_contract_errors)
             continue
         category = _normalize_category(raw, diagnostics)
-        raw_asset_kind = _text(raw.asset_kind).lower()
-        raw_output = _raw_output_kind(raw)
-        if (
-            category == "facility"
-            and raw_output == "line"
-            and raw_asset_kind in _LINEAR_ASSETS
-        ):
-            # Providers occasionally follow the semantic asset enum but put
-            # a utility line under ``facility``.  Preserve the declared
-            # linear asset and let GROUND resolve its corridor; do not turn a
-            # pipeline into a point merely because the typed block was
-            # omitted.  No geometry or measurements are synthesized here.
-            _diagnostic(
-                diagnostics,
-                "warning",
-                "linear_category_repaired",
-                claim_id,
-                f"{category}/{raw_output} with asset_kind {raw_asset_kind!r} normalized to road/line",
-            )
-            category = "road"
         output = _normalize_output(raw, category, diagnostics)
         asset_kind = _normalize_asset_kind(raw, category, output, diagnostics)
         if category == "road" and asset_kind == "none":
@@ -1194,25 +1333,6 @@ def normalize_claim_draft_set(
             if category == "road" and asset_kind not in {"none", "road"}
             else None
         )
-        if category == "road" and asset_kind not in {"none", "road"} and linear_parameters is None:
-            # Keep an incomplete utility claim auditable and routable.  The
-            # source statement/location hints remain the only semantic input;
-            # GROUND must still find evidence before any spatial output.
-            linear_parameters = LinearAssetPlanningParameters(
-                action=_normalized_action(
-                    raw.intervention_action,
-                    claim_id=claim_id,
-                    diagnostics=diagnostics,
-                    allowed={"preserve", "new", "upgrade", "expand", "repair"},
-                )
-            )
-            _diagnostic(
-                diagnostics,
-                "warning",
-                "linear_parameters_defaulted_for_grounding",
-                claim_id,
-                "linear asset had no typed parameters; preserved as an evidence-dependent corridor",
-            )
         facility_parameters = (
             _normalize_facility_parameters(raw, claim_id, diagnostics)
             if category == "facility"
@@ -1232,21 +1352,6 @@ def normalize_claim_draft_set(
             )
         else:
             polygon_parameters, area_range_ha = None, None
-        if category == "zone" and polygon_parameters is None:
-            # A functional overlay has no authoritative parcel assignment or
-            # area claim.  It is the safe typed representation for a zone
-            # whose provider response omitted polygon_parameters; GROUND and
-            # VALIDATE remain responsible for evidence and geometry.
-            polygon_parameters = PolygonPlanningParameters(
-                materialization_role="functional_overlay"
-            )
-            _diagnostic(
-                diagnostics,
-                "warning",
-                "polygon_parameters_defaulted_for_grounding",
-                claim_id,
-                "zone omitted polygon_parameters; preserved as an evidence-dependent functional overlay",
-            )
         site_area_parameters = (
             _normalize_site_area_parameters(raw, claim_id, diagnostics)
             if category == "site_area"
@@ -1330,91 +1435,13 @@ def normalize_claim_draft_set(
 
 
 def claim_set_semantic_errors(claim_set: PlanningClaimSet) -> list[str]:
-    """Return source-compilation errors that should be retried in this L3 worker.
+    """Expose strict-normalizer errors without recreating draft diagnostics."""
 
-    This validator checks object semantics only.  It never requires BSMs,
-    coordinates, geometry, or a successful place binding; those belong to
-    GROUND.  Evidence-backed uncertainty may therefore remain explicit.
-    """
-
-    errors = [
+    return list(dict.fromkeys(
         str(item)
         for item in claim_set.diagnostics
         if str(item).startswith("ERROR[")
-    ]
-    # L3 is preference-level planning: it supplies the structured intent and a
-    # rough location preference (location_hints / statement).  Precise spatial
-    # evidence (road corridor alignment, axis direction, exact widths, area
-    # ranges) is GROUND's job to resolve from location hints + KG topology, so
-    # those are NOT compile errors here.  Only the structural contract matters:
-    # the parameter object must exist and carry its minimum typed fields.
-    for claim in claim_set.claims:
-        prefix = f"{claim.claim_id}:"
-        if claim.suggested_category == "road":
-            if claim.asset_kind == "road":
-                if claim.road_parameters is None:
-                    errors.append(f"{prefix} road_parameters are required for road asset_kind")
-            elif claim.asset_kind not in {
-                "water_supply", "sewer", "stormwater", "power", "communication",
-                "drainage_channel", "revetment",
-            }:
-                errors.append(f"{prefix} asset_kind must be a supported closed-set linear asset")
-            elif claim.linear_parameters is None:
-                errors.append(f"{prefix} linear_parameters are required for {claim.asset_kind}")
-        elif claim.suggested_category == "facility":
-            if claim.facility_parameters is None:
-                errors.append(f"{prefix} facility_parameters are required")
-            elif not claim.facility_parameters.facility_type:
-                errors.append(f"{prefix} facility_type is required")
-        elif claim.suggested_category == "axis":
-            if claim.axis_parameters is None:
-                errors.append(f"{prefix} axis_parameters are required")
-        elif claim.suggested_category == "zone":
-            if claim.polygon_parameters is None:
-                errors.append(f"{prefix} polygon_parameters are required for zone")
-        elif claim.suggested_category in {"protection", "restoration"}:
-            if claim.polygon_parameters is None:
-                errors.append(f"{prefix} overlay materialization parameters are required")
-    return list(dict.fromkeys(errors))
-
-
-def semantic_error_claim_ids(errors: list[str]) -> list[str]:
-    """Extract only claim ids named by deterministic compiler feedback."""
-    ids: list[str] = []
-    for error in errors:
-        text = str(error or "")
-        if "] " in text:
-            text = text.split("] ", 1)[1]
-        claim_id = text.split(":", 1)[0].strip()
-        if claim_id and claim_id not in {"claim", "program"}:
-            ids.append(claim_id)
-    return list(dict.fromkeys(ids))
-
-
-def merge_repaired_claim_drafts(
-    original: PlanningClaimDraftSet,
-    repaired: PlanningClaimDraftSet,
-    target_claim_ids: list[str],
-) -> PlanningClaimDraftSet:
-    """Replace only validator-rejected drafts; preserve all accepted claims."""
-    target_ids = set(target_claim_ids)
-    repaired_by_id = {
-        str(item.claim_id): item
-        for item in repaired.claims
-        if str(item.claim_id) in target_ids
-    }
-    merged = [
-        repaired_by_id.get(str(item.claim_id), item)
-        for item in original.claims
-    ]
-    return original.model_copy(
-        update={
-            "schema_version": "2.0",
-            "claims": merged,
-            "diagnostics": list(repaired.diagnostics),
-        },
-        deep=True,
-    )
+    ))
 
 
 __all__ = [
@@ -1422,9 +1449,6 @@ __all__ = [
     "L3ReportOutput",
     "PlanningClaimDraft",
     "PlanningClaimDraftSet",
-    "claim_draft_semantic_errors",
     "claim_set_semantic_errors",
-    "merge_repaired_claim_drafts",
     "normalize_claim_draft_set",
-    "semantic_error_claim_ids",
 ]

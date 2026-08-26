@@ -23,10 +23,14 @@ class _StructuredInvoker:
         return {
             "claims": [
                 {
+                    "component_kind": "facility",
                     "claim_id": "industry-1",
                     "statement": "Provide a small agricultural service point.",
-                    "suggested_category": "facility",
-                    "suggested_output_kind": "point",
+                    "intervention_action": "new",
+                    "facility_parameters": {
+                        "facility_type": "service point",
+                        "action": "new",
+                    },
                 }
             ],
         }
@@ -86,7 +90,7 @@ def test_l3_prompt_exposes_split_projections_and_typed_fact_ids(monkeypatch) -> 
 
     context = SimpleNamespace(
         l1_fact_records=[L1Fact(
-            fact_id="l1:road:one",
+            fact_id="l1:fact:road-one",
             statement="现状村道需要提升",
             fact_kind="document_observation",
             dimension_key="traffic",
@@ -110,13 +114,13 @@ def test_l3_prompt_exposes_split_projections_and_typed_fact_ids(monkeypatch) -> 
     )
 
     assert "report_body" in prompt
-    assert "claims pass 只写结构化判断" in prompt
+    assert "结构化 schema 是字段、组件类型和参数块的唯一约束来源" in prompt
     assert "report-synthesis pass" in prompt
-    assert "l1:road:one" in prompt
+    assert "l1:fact:road-one" in prompt
     assert "feature:road:one" in prompt
     assert "source_fact_refs" in prompt
     assert "现状道路分布于村庄主要居民点。" in prompt
-    assert "当前模板中的项目数量" in prompt
+    assert "旧报告模板中的表格和‘至少列出’只是背景" in prompt
 
 
 def test_l3_prompt_bounds_upstream_background_for_provider_context(monkeypatch) -> None:

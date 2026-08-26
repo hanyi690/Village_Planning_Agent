@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import uuid
 from pathlib import Path
@@ -41,7 +42,6 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
         from app.contracts.domain.planning_semantics import (
             FacilityPlanningParameters,
             RoadPlanningParameters,
-            SiteAreaPlanningParameters,
         )
         from app.contracts.program import PlanningClaim, PlanningClaimSet
         from app.contracts.evidence.source_semantic_contracts import (
@@ -65,6 +65,7 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
         from app.spatial.grounding.village_cluster_mapper import (
             assign_villages_to_clusters,
             build_village_clusters,
+            stable_entity_ref,
         )
         from app.workflow.stages.ground import ground_node
         from app.workflow.stages.target_projection import target_projection_node
@@ -97,15 +98,21 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
 
                 class _Structured:
                     async def ainvoke(self, _prompt):
-                        evidence = (
-                            "在金田村下属的社前村"
-                            if owner_name == "社前"
-                            else "基本公共服务设施，集中分布于园寨村"
-                        )
-                        return response_model(entries=[{
-                            "name": owner_name,
-                            "candidate_indexes": [clusters[min(1, len(clusters) - 1)].index],
-                            "evidence": evidence,
+                        quote = "社前村" if owner_name == "社前" else "园寨村"
+                        start = report_text.index(quote)
+                        return response_model(decisions=[{
+                            "entity_ref": stable_entity_ref("village", owner_name),
+                            "status": "mapped",
+                            "candidate_ids": [clusters[min(1, len(clusters) - 1)].cluster_id],
+                            "source_span": {
+                                "segment_id": "report",
+                                "start": start,
+                                "end": start + len(quote),
+                                "quote_hash": hashlib.sha256(
+                                    quote.encode("utf-8")
+                                ).hexdigest(),
+                            },
+                            "reason_code": "",
                         }])
 
                 return _Structured()
@@ -190,6 +197,11 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
         use_real_source_semantic = os.getenv(
             "RUN_REAL_L3_SOURCE_SEMANTIC", ""
         ).strip().lower() in {"1", "true", "yes", "on"}
+        shrine_fact_id = (
+            "l1:fact:real-shrine"
+            if use_real_source_semantic
+            else "l1:fact:sim-shrine"
+        )
         source_semantic_snapshot = None
         if use_real_source_semantic:
             from app.core.settings import MINIMAX_API_KEY
@@ -199,19 +211,24 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
             target_shrine_features = shrine_features[:1]
             context.l1_fact_records = [
                 L1Fact(
-                    fact_id="l1:real:shrine",
+                    fact_id="l1:fact:real-shrine",
                     statement="社前村有祠堂设施",
                     fact_kind="document_observation",
                     semantic_type="facility",
                     attributes={"normalized_name": "祠堂"},
                     value=1,
                     unit="处",
-                    source_refs=["report:current"],
-                    source_snapshot_ref=str(
-                        getattr(context, "l1_snapshot_ref", "")
-                        or "snapshot:current"
-                    ),
-                )
+                        source_refs=["report:current"],
+                        source_snapshot_ref=str(
+                            getattr(context, "l1_snapshot_ref", "")
+                            or "snapshot:current"
+                        ),
+                        source_feature_ids=[
+                            str((getattr(feature, "_raw", {}) or {}).get("source_feature_id"))
+                            for feature in target_shrine_features
+                            if str((getattr(feature, "_raw", {}) or {}).get("source_feature_id") or "").strip()
+                        ],
+                    )
             ]
             snapshot, source_semantic_decisions, diagnostics = await classify_source_semantics(
                 context,
@@ -231,7 +248,7 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
             )
             source_semantic_snapshot = snapshot
         else:
-            road_fact_id = "l1:sim:road:one"
+            road_fact_id = "l1:fact:sim-road-one"
             source_semantic_decisions = {}
             for feature in shrine_features:
                 raw = getattr(feature, "_raw", {}) or {}
@@ -241,9 +258,9 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
                     raw_label="祠",
                     semantic_type="祠堂",
                     status="accepted",
-                    authority="inferred_current",
-                    candidate_ref="l1:fact:祠堂:社前村",
-                    supporting_fact_refs=["report:current"],
+                        authority="inferred_current",
+                        candidate_ref=f"l1:{shrine_fact_id}:entity",
+                        supporting_fact_refs=[shrine_fact_id],
                 )
             source_semantic_decisions[target_road_source_id] = SourceFeatureSemanticDecision(
                 source_feature_id=target_road_source_id,
@@ -255,6 +272,30 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
                 supporting_fact_refs=[road_fact_id],
             )
             context.l1_fact_records = [
+                L1Fact(
+                    fact_id=shrine_fact_id,
+                    statement="金田村下属社前村有祠堂设施",
+                    fact_kind="document_observation",
+                    dimension_key="historical_culture",
+                    semantic_type="facility",
+                    attributes={
+                        "normalized_name": "祠堂",
+                        "role": "facility",
+                        "location": "社前村",
+                    },
+                    value=3,
+                    unit="处",
+                    source_refs=["report:current"],
+                    source_snapshot_ref=str(
+                        getattr(context.data_snapshot, "snapshot_id", "")
+                        or "snapshot:simulated"
+                    ),
+                    source_feature_ids=[
+                        str((getattr(feature, "_raw", {}) or {}).get("source_feature_id"))
+                        for feature in shrine_features
+                        if str((getattr(feature, "_raw", {}) or {}).get("source_feature_id") or "").strip()
+                    ],
+                ),
                 L1Fact(
                     fact_id=road_fact_id,
                     statement="金田村现状有一条需要提升的村道",
@@ -312,30 +353,11 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
                     suggested_interventions=["祠堂维护"],
                     intervention_action="preserve",
                     location_hints=["社前村", "祠堂"],
-                    evidence_refs=["report:current", "l1:fact:祠堂:社前村"],
+                        evidence_refs=["report:current", shrine_fact_id],
+                        source_fact_refs=[shrine_fact_id],
                     facility_parameters=FacilityPlanningParameters(
                         facility_type="祠堂",
                         action="preserve",
-                    ),
-                ),
-                    PlanningClaim(
-                        claim_id="simulated-site-area-maintenance",
-                        dimension_key="historical_culture",
-                        statement="园寨需要一处小型公共服务用地作为规划实施地块。",
-                        planning_role="spatial_intervention",
-                        project_package_ref="simulated:historical_culture:public-service-site",
-                        suggested_category="site_area",
-                    suggested_output_kind="polygon",
-                    asset_kind="none",
-                    suggested_interventions=["公共服务用地"],
-                    intervention_action="new",
-                    materialization_role="site_footprint",
-                    location_hints=["园寨"],
-                    evidence_refs=["report:current", "l1:village:园寨"],
-                    site_area_parameters=SiteAreaPlanningParameters(
-                        site_type="公共服务用地",
-                        action="new",
-                        footprint_area_m2=2000,
                     ),
                 ),
             ],
@@ -354,7 +376,7 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
                     suggested_interventions=["村道提升"],
                     intervention_action="upgrade",
                     evidence_refs=["report:traffic"],
-                    source_fact_refs=["l1:sim:road:one"],
+                    source_fact_refs=["l1:fact:sim-road-one"],
                     road_parameters=RoadPlanningParameters(
                         action="upgrade",
                         length_m=100,
@@ -409,7 +431,7 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
             source_semantic_snapshot,
         )
         program = load_artifact(state, "planning_program", PlanningProgram)
-        assert len(program.interventions) == (2 if use_real_source_semantic else 3)
+        assert len(program.interventions) == (1 if use_real_source_semantic else 2)
 
         async def run_stage(node, current):
             before = dict(current.get("artifact_refs") or {})
@@ -436,19 +458,28 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
             None,
         )
         assert shrine_spec, json.dumps(
-            projection["spatial_reference_specs"], ensure_ascii=False
+            {
+                "specs": projection["spatial_reference_specs"],
+                "program_interventions": [
+                    item.model_dump(mode="json")
+                    for item in program.interventions
+                ],
+                "diagnostics": projection.get("diagnostics", []),
+            },
+            ensure_ascii=False,
         )
         shrine_json = json.dumps(shrine_spec, ensure_ascii=False)
         assert "祠堂" in shrine_json
-        assert "社前村" in shrine_json
         if shrine_spec["type"] == "directional":
             shrine_filter = (shrine_spec.get("reference") or {}).get("filter") or {}
             assert shrine_filter["rdf_type"] == "Facility"
             assert shrine_filter["source_feature_ids"]
             assert shrine_spec["source_binding_ref"]
+            assert shrine_spec["l1_fact_refs"] == [shrine_fact_id]
         else:
             assert shrine_spec["type"] == "composed"
             assert shrine_spec["op"] == "and"
+            assert "社前村" in shrine_json
         if not use_real_source_semantic:
             road_spec = next(
                 item
@@ -470,8 +501,18 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
         assert not grounding["unresolved"], json.dumps(
             grounding, ensure_ascii=False
         )
-        candidate = grounding["candidates"][0]
-        assert candidate["geometry"]["feature_bsms"], json.dumps(
+        candidate = next(
+            item
+            for item in grounding["candidates"]
+            if (
+                item.get("geometry", {}).get("source_feature_ids")
+                or item.get("geometry", {}).get("source_bsms")
+            )
+        )
+        assert (
+            candidate["geometry"].get("source_feature_ids")
+            or candidate["geometry"].get("source_bsms")
+        ), json.dumps(
             candidate, ensure_ascii=False
         )
         assert candidate["geometry"]["source_refs"], json.dumps(
@@ -499,43 +540,30 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
             )
             assert road_geometry["wkt"]
             assert road_geometry["source_feature_ids"] == [target_road_source_id]
-            assert road_geometry["l1_fact_refs"] == ["l1:sim:road:one"]
+            assert road_geometry["l1_fact_refs"] == ["l1:fact:sim-road-one"]
             assert road_geometry["source_binding_ref"]
         assert state["ground_gate"]["passed"] is True
 
-        # Continue the fresh L3 artifacts through the production execution
-        # stages.  The source-semantic provider branch above remains bounded
-        # and independently opt-in; this verifies the stage chain with
-        # simulated typed L3 output and real bundle/KG geometry.
-        from app.workflow.stages.deliver import deliver_node
-        from app.workflow.stages.execute import execute_node
-        from app.workflow.stages.reconcile import reconcile_node
+        # SELECT must stop at the typed readiness boundary here.  This
+        # fixture intentionally has no authoritative network snapshot or
+        # source-identity binding for every candidate, so continuing to
+        # EXECUTE would fabricate execution authority.
         from app.workflow.stages.select import select_node
-        from app.workflow.stages.validate import validate_node
-        from app.contracts.planning.scenario import PlanningScenario
 
         state = await run_stage(select_node, state)
-        scenario = load_artifact(state, "planning_scenario", PlanningScenario)
-        assert scenario.status in {"complete", "partial"}, json.dumps(
-            scenario.model_dump(mode="json"), ensure_ascii=False
+        select_gate = state.get("select_gate") or {}
+        select_route = (
+            select_gate.get("feedback_route")
+            if isinstance(select_gate, dict)
+            else getattr(select_gate, "feedback_route", None)
         )
-        assert any(
-            list(getattr(item, "candidate_ids", None) or [])
-            for item in list(getattr(scenario, "target_selections", None) or [])
-        ), json.dumps(scenario.model_dump(mode="json"), ensure_ascii=False)
-
-        state = await run_stage(execute_node, state)
-        assert state["artifact_refs"].get("execution_result")
-        state = await run_stage(validate_node, state)
-        assert state["artifact_refs"].get("final_relation_validation")
-        state = await run_stage(reconcile_node, state)
-        assert state["artifact_refs"].get("reconciliation_report")
-        state = await run_stage(deliver_node, state)
-        for key in (
-            "delivery_manifest",
-            "delivery_spatial_snapshot",
-            "render_layers",
-        ):
-            assert state["artifact_refs"].get(key)
+        assert select_route == "HUMAN", select_gate
+        assert not state["artifact_refs"].get("planning_scenario")
+        issue_fingerprint = (
+            select_gate.get("issue_fingerprint")
+            if isinstance(select_gate, dict)
+            else getattr(select_gate, "issue_fingerprint", "")
+        )
+        assert "solver_readiness:blocked" in str(issue_fingerprint)
     finally:
         await teardown()

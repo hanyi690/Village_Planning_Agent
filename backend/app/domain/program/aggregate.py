@@ -37,6 +37,7 @@ from app.infrastructure.artifacts.fingerprint import semantic_checksum
 from app.infrastructure.reports.review_package import write_review_package
 from app.infrastructure.paths import run_tmp_root
 from app.infrastructure.logging import get_logger
+from app.domain.program.failure_scope import error_fingerprint, infer_failure_scope
 
 from .gate import evaluate_l3_gate
 from .review import build_l3_review_package
@@ -63,12 +64,25 @@ def _claim_diagnostic_issue(dimension_key: str, diagnostic: Any) -> ProgramIssue
     else:
         severity = "warning"
         code = "claim_set_diagnostic_untyped"
+    claim_id = ""
+    if code != "semantic_compile_exhausted" and "] " in message:
+        body = message.split("] ", 1)[1]
+        candidate = body.split(":", 1)[0].strip()
+        if candidate and candidate not in {"claim", "program", dimension_key}:
+            claim_id = candidate
+    if code == "semantic_compile_exhausted":
+        severity = "warning"
+    scope = infer_failure_scope(code, has_claim_identity=bool(claim_id))
     return ProgramIssue(
         stage="l3",
         dimension_key=dimension_key,
+        claim_id=claim_id,
+        claim_ids=[claim_id] if claim_id else [],
         severity=severity,
         code=code,
         message=message,
+        root_issue_id=f"{dimension_key}:{error_fingerprint(message)}",
+        failure_scope=scope.value,
     )
 
 

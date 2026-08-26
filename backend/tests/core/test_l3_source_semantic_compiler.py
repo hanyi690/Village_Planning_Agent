@@ -7,7 +7,6 @@ from app.domain.program.claim_draft import (
     PlanningClaimDraft,
     PlanningClaimDraftSet,
     claim_set_semantic_errors,
-    merge_repaired_claim_drafts,
     normalize_claim_draft_set,
 )
 
@@ -264,14 +263,7 @@ def test_typed_semantics_survive_claim_proposal_program_boundaries() -> None:
     assert intervention.road_parameters.pavement_width_m == 4.5
 
 
-def test_local_repair_replaces_only_rejected_claims() -> None:
-    accepted = PlanningClaimDraft(
-        claim_id="FAC-OK",
-        statement="新建卫生站。",
-        suggested_category="facility",
-        suggested_output_kind="point",
-        facility_parameters={"facility_type": "卫生站", "action": "new"},
-    )
+def test_rejected_claims_are_quarantined_without_local_repair() -> None:
     rejected = PlanningClaimDraft(
         claim_id="ROAD-BAD",
         statement="道路升级。",
@@ -279,29 +271,10 @@ def test_local_repair_replaces_only_rejected_claims() -> None:
         suggested_output_kind="line",
         asset_kind="road",
     )
-    original = PlanningClaimDraftSet(claims=[accepted, rejected])
-    repaired = PlanningClaimDraftSet(
-        claims=[
-            PlanningClaimDraft(
-                claim_id="ROAD-BAD",
-                statement="道路升级。",
-                suggested_category="road",
-                suggested_output_kind="line",
-                asset_kind="road",
-                road_parameters={
-                    "action": "upgrade",
-                    "pavement_width": {"value": 4.5, "unit": "m"},
-                    "alignment_refs": ["现状村道"],
-                },
-            )
-        ]
-    )
+    claim_set = normalize_claim_draft_set(PlanningClaimDraftSet(claims=[rejected]))
 
-    merged = merge_repaired_claim_drafts(original, repaired, ["ROAD-BAD"])
-
-    assert merged.claims[0] == accepted
-    assert merged.claims[1].road_parameters is not None
-    assert merged.claims[1].road_parameters.pavement_width.value == 4.5
+    assert claim_set.claims == []
+    assert any("claim_contract_invalid" in item for item in claim_set.diagnostics)
 
 
 @pytest.mark.parametrize(
@@ -380,7 +353,7 @@ def test_functional_overlay_is_not_compiled_as_land_use_area_assignment() -> Non
         ("protection", "polygon", "drainage_channel"),
     ],
 )
-def test_mismatched_asset_kind_is_normalized_before_program_assembly(
+def test_mismatched_asset_kind_is_quarantined_before_program_assembly(
     category: str,
     output: str,
     asset_kind: str,
@@ -388,16 +361,17 @@ def test_mismatched_asset_kind_is_normalized_before_program_assembly(
     draft = PlanningClaimDraft(
         claim_id="BAD-ASSET-MIX",
         statement="不兼容资产语义",
+        planning_role="spatial_intervention",
         suggested_category=category,
         suggested_output_kind=output,
         asset_kind=asset_kind,
         facility_parameters=(
-            {"facility_type": "供水设施"}
+            {"facility_type": "供水设施", "action": "new"}
             if category == "facility"
             else None
         ),
         site_area_parameters=(
-            {"site_type": "变压器改造"}
+            {"site_type": "变压器改造", "action": "new"}
             if category == "site_area"
             else None
         ),
@@ -410,11 +384,8 @@ def test_mismatched_asset_kind_is_normalized_before_program_assembly(
 
     claim_set = normalize_claim_draft_set(PlanningClaimDraftSet(claims=[draft]))
 
-    assert len(claim_set.claims) == 1
-    assert claim_set.claims[0].asset_kind in {"facility", "none"}
-    assert any(
-        "asset_kind_category_mismatch" in item for item in claim_set.diagnostics
-    )
+    assert claim_set.claims == []
+    assert any("draft_contract_invalid" in item for item in claim_set.diagnostics)
 
 
 def test_site_area_point_without_typed_footprint_is_quarantined() -> None:
@@ -423,7 +394,7 @@ def test_site_area_point_without_typed_footprint_is_quarantined() -> None:
         statement="新建综合服务中心，位置在村北入口。",
         suggested_category="site_area",
         suggested_output_kind="point",
-        site_area_parameters={"site_type": "综合服务中心"},
+        site_area_parameters={"site_type": "综合服务中心", "action": "new"},
     )
 
     claim_set = normalize_claim_draft_set(PlanningClaimDraftSet(claims=[draft]))

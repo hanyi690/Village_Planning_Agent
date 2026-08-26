@@ -88,8 +88,8 @@ def test_real_contradiction_still_routes_l3_even_with_classification_targets() -
             ProgramIssue(
                 stage="synthesize",
                 severity="error",
-                code="semantic_compile_exhausted",
-                message="source object semantics unresolved",
+                code="program_semantic_contradiction",
+                message="two admitted spatial targets have incompatible hard constraints",
             ),
         ],
     )
@@ -97,9 +97,7 @@ def test_real_contradiction_still_routes_l3_even_with_classification_targets() -
     gate = evaluate_l3_gate(program)
 
     assert gate.feedback_route == "L3"
-    assert all(
-        request.request_type == "program_rework" for request in gate.pending_requests
-    )
+    assert all(request.request_type == "program_rework" for request in gate.pending_requests)
 
 
 def test_classification_targets_preserve_non_generic_lineage_as_evidence() -> None:

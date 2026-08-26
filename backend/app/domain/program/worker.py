@@ -220,6 +220,46 @@ def _bounded_prompt_attributes(value: Any) -> dict[str, str]:
     return rows
 
 
+def _fact_value(fact: Any, name: str, default: Any = "") -> Any:
+    if isinstance(fact, dict):
+        return fact.get(name, default)
+    return getattr(fact, name, default)
+
+
+def _l3_fact_catalog(
+    state: Dict[str, Any],
+    dimension_key: str,
+    source_dimensions: Iterable[str],
+):
+    """Build the one bounded L1 fact catalog shared by prompt and validator."""
+
+    from app.domain.program.claim_compiler import source_fact_options
+    from app.domain.validation.l1_fact_catalog import (
+        build_l1_fact_catalog,
+        empty_l1_fact_catalog,
+    )
+
+    try:
+        from app.infrastructure.context.planning_context_factory import get_cached_context
+
+        context = get_cached_context(str(state.get("session_id", "")))
+        facts = list(getattr(context, "l1_fact_records", []) or []) if context is not None else []
+        options = source_fact_options(
+            dimension_key,
+            "fact",
+            facts,
+            source_dimensions=source_dimensions,
+        )[:48]
+        allowed_ids = {item.ref_id for item in options}
+        return build_l1_fact_catalog(
+            fact
+            for fact in facts
+            if str(_fact_value(fact, "fact_id", "") or "").strip() in allowed_ids
+        )
+    except Exception:
+        return empty_l1_fact_catalog()
+
+
 def _typed_l1_fact_evidence(
     state: Dict[str, Any],
     dimension_key: str,
@@ -238,6 +278,10 @@ def _typed_l1_fact_evidence(
     """
     try:
         from app.infrastructure.context.planning_context_factory import get_cached_context
+        from app.domain.validation.l1_fact_catalog import (
+            SPATIAL_L1_FACT_KINDS,
+            is_canonical_l1_fact_id,
+        )
 
         context = get_cached_context(str(state.get("session_id", "")))
     except Exception:
@@ -285,7 +329,7 @@ def _typed_l1_fact_evidence(
             continue
         statement = str(getattr(fact, "statement", "") or "").strip()
         fact_id = str(getattr(fact, "fact_id", "") or "").strip()
-        if not statement or not fact_id:
+        if not statement or not is_canonical_l1_fact_id(fact_id):
             continue
         facts.append(fact)
 
@@ -297,7 +341,7 @@ def _typed_l1_fact_evidence(
             if str(value).strip()
         )
     }
-    spatial_kinds = {"spatial_observation", "gis_observation", "kg_canonical_fact"}
+    spatial_kinds = SPATIAL_L1_FACT_KINDS
 
     # Prefer identity-bearing spatial facts, then configured upstream facts.
     # This is a stable typed ordering, not a text score.
@@ -331,49 +375,103 @@ def _typed_l1_fact_evidence(
     return (
         "【已审计 L1 planning facts】\n"
         "这些记录是当前 L1 快照的权威结构化事实。非空间 claim 可引用对应 fact_id；"
-        "空间 claim 的 source_fact_refs 只能逐字引用 fact_kind=spatial_observation/gis_observation 的记录；"
+        "空间 claim 的 source_fact_refs 只能逐字引用当前候选中的空间 fact_kind 记录；"
         "source_feature_ids 只用于说明可由后续 EvidenceGraph 继续连接，不能在 L3 直接当作几何。\n"
         + json.dumps(rows, ensure_ascii=False, indent=2)
     )
 
 
+def _l3_candidate_context(
+    state: Dict[str, Any],
+    dimension_key: str,
+    source_dimensions: Iterable[str],
+) -> str:
+    """Render the small, current candidate space used by the claims pass."""
+
+    try:
+        from app.domain.validation.l1_fact_catalog import SPATIAL_L1_FACT_KINDS
+        from app.domain.program.target_projection.relation_catalog import relation_options
+
+        catalog = _l3_fact_catalog(state, dimension_key, source_dimensions)
+        usable_candidates = (
+            list(catalog.candidates) if catalog.is_unambiguous else []
+        )
+        source_options = [item.candidate_id for item in usable_candidates]
+        spatial_source_options = [
+            item.candidate_id
+            for item in usable_candidates
+            if item.metadata.get("fact_kind") in SPATIAL_L1_FACT_KINDS
+        ]
+        relation_candidates = {
+            kind: [item.template for item in relation_options(kind)]
+            for kind in ("facility", "road", "linear", "axis", "site_area", "zone")
+        }
+        spatial_ids = set(spatial_source_options)
+        source_catalog = [
+            {
+                "fact_id": item.candidate_id,
+                "fact_kind": item.metadata.get("fact_kind", item.kind),
+                "label": item.label,
+                "spatial_claim_allowed": item.candidate_id in spatial_ids,
+            }
+            for item in usable_candidates
+        ]
+        payload = {
+            "source_fact_options": source_options,
+            "spatial_source_fact_options": spatial_source_options,
+            "source_fact_catalog": source_catalog,
+            "source_fact_catalog_digest": catalog.digest,
+            "source_fact_catalog_status": (
+                "usable" if catalog.is_unambiguous else "ambiguous"
+            ),
+            "relation_options_by_subject_kind": relation_candidates,
+            "source_dimensions": sorted(str(item) for item in source_dimensions if str(item).strip()),
+        }
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        return json.dumps({
+            "source_fact_options": [],
+            "spatial_source_fact_options": [],
+            "source_fact_catalog": [],
+            "source_fact_catalog_digest": "",
+            "source_fact_catalog_status": "unavailable",
+            "relation_options_by_subject_kind": {},
+            "source_dimensions": sorted(str(item) for item in source_dimensions if str(item).strip()),
+        }, ensure_ascii=False, sort_keys=True)
+
+
 def _spatial_claim_evidence_errors(
     state: Dict[str, Any],
     claim_set: PlanningClaimSet,
+    *,
+    source_dimensions: Iterable[str] | None = None,
 ) -> list[str]:
-    """Reject spatial claims that cite foreign L1 fact identities.
+    """Return exact closed-set violations for emitted L1 fact identities.
 
     This is an exact identity check, not a name/regex matcher. A spatial claim
     without source_fact_refs is a valid semantic candidate and must continue
     to GROUND, where EvidenceGraph resolves its location. If the model does
-    provide source_fact_refs, every id must exist in the hydrated L1 context;
-    a foreign id enters the bounded repair loop. Whether a location hint
-    semantically matches a fact remains an LLM/EvidenceGraph responsibility.
+    provide source_fact_refs, every id must exist in the bounded candidate set
+    rendered in the prompt. Spatial claims may only cite the spatial subset.
+    This function never rewrites an emitted id.
     """
     spatial_kinds = {"parcel", "polygon", "point", "line"}
     claims = list(getattr(claim_set, "claims", []) or [])
-    if not any(
-        getattr(claim, "suggested_output_kind", "") in spatial_kinds
-        for claim in claims
-    ):
+    if not claims:
         return []
     try:
-        from app.infrastructure.context.planning_context_factory import get_cached_context
-
-        context = get_cached_context(str(state.get("session_id", "")))
+        catalog = _l3_fact_catalog(
+            state,
+            str(getattr(claim_set, "dimension_key", "") or "").strip(),
+            source_dimensions or (),
+        )
     except Exception:
-        context = None
-    fact_ids = {
-        str(getattr(fact, "fact_id", "") or "")
-        for fact in (getattr(context, "l1_fact_records", []) or [])
-        if str(getattr(fact, "fact_id", "") or "")
-        and str(getattr(fact, "fact_kind", "") or "")
-        in {"spatial_observation", "gis_observation", "kg_canonical_fact"}
-    }
+        from app.domain.validation.l1_fact_catalog import empty_l1_fact_catalog
+
+        catalog = empty_l1_fact_catalog()
+    spatial_fact_ids = set(catalog.usable_spatial_fact_ids)
     errors: list[str] = []
     for claim in claims:
-        if getattr(claim, "suggested_output_kind", "") not in spatial_kinds:
-            continue
         claim_id = str(getattr(claim, "claim_id", "") or "claim")
         refs = [
             str(ref).strip()
@@ -382,12 +480,27 @@ def _spatial_claim_evidence_errors(
         ]
         if not refs:
             continue
-        unknown = sorted(set(refs) - fact_ids)
+        from app.domain.validation.l1_fact_catalog import validate_l1_fact_references
+
+        membership = validate_l1_fact_references(refs, catalog=catalog)
+        unknown = sorted(set(membership.extra_ids))
         if unknown:
             errors.append(
-                f"ERROR[spatial_claim_unknown_fact] {claim_id}: "
-                f"source_fact_refs are not present in the hydrated L1 snapshot: {unknown}"
+                f"ERROR[claim_unknown_source_fact] {claim_id}: "
+                f"source_fact_refs are not in the current L1 candidate set: {unknown}"
             )
+        if membership.duplicate_ids:
+            errors.append(
+                f"ERROR[claim_duplicate_source_fact] {claim_id}: "
+                f"source_fact_refs contain duplicates: {list(membership.duplicate_ids)}"
+            )
+        if getattr(claim, "suggested_output_kind", "") in spatial_kinds:
+            non_spatial = sorted(set(refs) - spatial_fact_ids)
+            if non_spatial:
+                errors.append(
+                    f"ERROR[spatial_claim_non_spatial_fact] {claim_id}: "
+                    f"spatial claims may cite only spatial L1 candidates: {non_spatial}"
+                )
     return list(dict.fromkeys(errors))
 
 
@@ -430,75 +543,27 @@ def _resolvable_places(session_id: str) -> str:
         return ""
 
 
-def _structural_repair_prompt(dimension_key: str, error: Any) -> str:
-    """Bounded repair prompt for a claim set that fails schema validation.
-
-    The provider's structured output sometimes violates a closed-set literal
-    (e.g. facility action ``upgrade``).  Instead of hard-failing the dimension,
-    the exact validation error is fed back so the provider can repair it.
-    """
-    return (
-        "你是 L3 Claim 结构修复器。上一轮结构化输出未通过 schema 校验。"
-        "按下列校验错误只修复整个 claims 数组，不返回 report_body，"
-        "不得新增 claim 或改写 claim_id，不得创建坐标/BSM/地块/几何；"
-        "枚举字段必须使用声明值。\n"
-        f"dimension={dimension_key}\n"
-        f"validation_error={str(error)[:3000]}"
-    )
-
-
-async def _normalize_with_structural_repair(
-    claim_generator: Any,
+def _normalize_claim_components(
     *,
-    session_id: str,
     dimension_key: str,
     output: Any,
 ) -> tuple[Any, PlanningClaimSet]:
-    """Normalize a claim set, retrying with feedback on schema validation errors.
-
-    A structurally invalid provider response (closed-set literal violation) is
-    re-requested up to ``L3_STRUCTURAL_COMPILE_RETRIES`` times with the exact
-    error; only after the budget is exhausted does the exception propagate to
-    the caller's fatal-error path.  Single-candidate deterministic, no geometry
-    or BSM is ever created here.
-    """
-    from pydantic import ValidationError
+    """Convert validated provider components once into the strict claim contract."""
 
     from app.domain.program.claim_draft import (
         PlanningClaimDraftSet,
+        component_to_planning_claim_draft,
         normalize_claim_draft_set,
     )
 
-    structural_retries = max(
-        0,
-        int(os.getenv("L3_STRUCTURAL_COMPILE_RETRIES", "0")),
+    draft_set = PlanningClaimDraftSet(
+        dimension_key=dimension_key,
+        claims=[
+            component_to_planning_claim_draft(item, dimension_key=dimension_key)
+            for item in output.claims
+        ],
     )
-    current_output = output
-    for attempt in range(structural_retries + 1):
-        try:
-            draft_set = PlanningClaimDraftSet(
-                dimension_key=dimension_key,
-                claims=list(current_output.claims),
-            )
-            claim_set = normalize_claim_draft_set(draft_set, dimension_key=dimension_key)
-            return draft_set, claim_set
-        except (ValidationError, TypeError, ValueError) as exc:
-            if attempt >= structural_retries:
-                raise
-            logger.warning(
-                "[analyze_l3_dimension] %s: structural repair round %d: %s",
-                dimension_key,
-                attempt + 1,
-                str(exc)[:600],
-            )
-            current_output = await _cached_claim_only_generation(
-                claim_generator,
-                session_id=session_id,
-                dimension_key=dimension_key,
-                prompt=_structural_repair_prompt(dimension_key, exc),
-                validation_feedback=[str(exc)],
-            )
-    raise RuntimeError("unreachable: structural repair budget exhausted")
+    return draft_set, normalize_claim_draft_set(draft_set, dimension_key=dimension_key)
 
 
 def _build_l3_report_synthesis_prompt(
@@ -628,18 +693,14 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # 6. 流式 LLM + SSE
     from app.domain.program.claim_draft import (
         PlanningClaimDraftSet,
-        claim_draft_semantic_errors,
-        claim_set_semantic_errors,
-        merge_repaired_claim_drafts,
+        component_to_planning_claim_draft,
         normalize_claim_draft_set,
-        semantic_error_claim_ids,
     )
     from app.infrastructure.llm import get_planning_claim_generator
 
     claim_generator = get_planning_claim_generator()
     if provider_failure_open(session_id):
         return {
-            "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
             "provider_failures": [{
                 "stage": f"L{dim_layer}", "dimension": dim_key,
@@ -662,111 +723,37 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             dimension_key=dim_key,
             prompt=prompt,
         )
-        draft_set, claim_set = await _normalize_with_structural_repair(
-            claim_generator,
-            session_id=session_id,
+        draft_set, claim_set = _normalize_claim_components(
             dimension_key=dim_key,
             output=output,
         )
-        # Flash unit repair: unknown units (hm, ??, count-units-as-area) are
-        # cheap to fix with a flash LLM - no full re-generation needed.
-        try:
-            from app.domain.program.flash_unit_repair import flash_repair_units
-
-            repaired = await flash_repair_units(draft_set, session_id)
-            if repaired is not None and repaired is not draft_set:
-                draft_set = repaired
-            from app.domain.program.claim_draft import normalize_claim_draft_set
-
-            claim_set = normalize_claim_draft_set(draft_set, dimension_key=dim_key)
-        except Exception as exc:  # noqa: BLE001 - flash repair must never break L3
-            logger.warning("[analyze_l3_dimension] %s: flash unit repair failed: %s", dim_key, exc)
-        semantic_feedback = [
-            *claim_draft_semantic_errors(draft_set),
-            *claim_set_semantic_errors(claim_set),
-            *_spatial_claim_evidence_errors(state, claim_set),
-        ]
-        semantic_retry_count = max(
-            0,
-            int(os.getenv("L3_SEMANTIC_COMPILE_RETRIES", "1")),
+        semantic_feedback = _spatial_claim_evidence_errors(
+            state,
+            claim_set,
+            source_dimensions=_l3_source_dimensions(cfg, dim_key),
         )
-        for semantic_attempt in range(semantic_retry_count):
-            if not semantic_feedback:
-                break
-            rejected_ids = semantic_error_claim_ids(semantic_feedback)
-            rejected = [
-                item.model_dump(mode="json")
-                for item in draft_set.claims
-                if item.claim_id in set(rejected_ids)
-            ]
-            normalization_diagnostics = [
-                str(item)
-                for item in claim_set.diagnostics
-                if any(f" {claim_id}:" in str(item) for claim_id in rejected_ids)
-            ]
-            if not rejected:
-                break
-            logger.warning(
-                "[analyze_l3_dimension] %s: local semantic repair round %d claims=%s errors=%s",
-                dim_key,
-                semantic_attempt + 1,
-                rejected_ids,
-                semantic_feedback[:8],
-            )
-            repair_evidence = _typed_l1_fact_evidence(
-                state,
-                dim_key,
-                source_dimensions=_l3_source_dimensions(cfg, dim_key),
-            )
-            repair_prompt = (
-                "你是 L3 Claim 局部语义编译修复器。只返回下列失败 claim 的完整"
-                "claims 数组，不得返回 report_body、不得返回已通过 claim，不得新增、删除或改写 claim_id。"
-                "不得创建坐标、BSM、地块或几何。严格按对象参数 schema 修复。"
-                "category/output/phase、各对象 action、axis_type、materialization_role "
-                "必须从工具 schema 的 enum 中选择；不得发明同义词。"
-                "跨字段必须同时满足：sewer/water_supply/stormwater/power/communication/"
-                "drainage_channel/revetment 使用 road+line+linear_parameters，asset_kind=road "
-                "使用 road+line+road_parameters；action+line+sewer 是非法组合，不能把线性 claim "
-                "降级为 action。"
-                "只修改 validator_errors 明确指出的字段，其余字段保持原值。\n"
-                f"dimension={dim_key}\n"
-                f"validator_errors={json.dumps(semantic_feedback, ensure_ascii=False)}\n"
-                f"normalization_diagnostics={json.dumps(normalization_diagnostics, ensure_ascii=False)}\n"
-                f"rejected_claims={json.dumps(rejected, ensure_ascii=False)}\n"
-                "可使用的已审计 L1 spatial facts（source_fact_refs 只能逐字复制其中的 fact_id；"
-                "若没有 L1 fact，保留语义 location_hints 并交给 GROUND 检索，不得编造 fact_id）：\n"
-                f"{repair_evidence}"
-            )
-            repair_output = await _cached_claim_only_generation(
+        if semantic_feedback:
+            output = await _cached_claim_only_generation(
                 claim_generator,
                 session_id=session_id,
                 dimension_key=dim_key,
-                prompt=repair_prompt,
+                prompt=prompt,
                 validation_feedback=semantic_feedback,
             )
-            draft_set = merge_repaired_claim_drafts(
-                draft_set,
-                PlanningClaimDraftSet(
-                    dimension_key=dim_key,
-                    claims=list(repair_output.claims),
-                ),
-                rejected_ids,
-            )
-            claim_set = normalize_claim_draft_set(
-                draft_set,
+            draft_set, claim_set = _normalize_claim_components(
                 dimension_key=dim_key,
+                output=output,
             )
-            semantic_feedback = [
-                *claim_draft_semantic_errors(draft_set),
-                *claim_set_semantic_errors(claim_set),
-                *_spatial_claim_evidence_errors(state, claim_set),
-            ]
-        if claim_set is not None and semantic_feedback:
-            claim_set.diagnostics.append(
-                "ERROR[semantic_compile_exhausted] "
-                f"{dim_key}: bounded local repair exhausted; "
-                + "; ".join(semantic_feedback[:20])
+            semantic_feedback = _spatial_claim_evidence_errors(
+                state,
+                claim_set,
+                source_dimensions=_l3_source_dimensions(cfg, dim_key),
             )
+            if semantic_feedback:
+                raise ValueError(
+                    "L3_SOURCE_FACT_CLOSED_SET_FAILED: "
+                    + "; ".join(semantic_feedback[:20])
+                )
         if claim_set is None:
             raise ValueError("L3 claim projection returned no validated claim set")
         report_output = await _cached_report_generation(
@@ -1103,6 +1090,11 @@ def _build_prompt(
         location_only=True,
         source_dimensions=source_dimensions,
     )
+    candidate_context = _l3_candidate_context(
+        state,
+        dim_key,
+        source_dimensions,
+    )
     semantic_contract = render_dimension_semantic_contract(
         dim_key,
         3,
@@ -1143,6 +1135,7 @@ def _build_prompt(
                 "已审计 L1 spatial location facts",
             )
         ),
+        candidate_context=candidate_context,
         dimension_plans=_compact_prompt_background(same_layer_contexts, 2200, "同层规划背景"),
     )
 
