@@ -105,6 +105,41 @@ async def _invoke_extraction(session_id: str, layer: int, state: Dict[str, Any])
         await _maybe_extract_bindings(session_id, layer, state)
 
 
+async def _flush_pending_reports(
+    store: Any,
+    reports: list[dict[str, Any]],
+) -> tuple[bool, list[str], str]:
+    """Persist pending reports and return the exact failed dimensions."""
+    unique: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for report in reports:
+        if not isinstance(report, dict):
+            continue
+        key = (
+            str(report.get("session_id") or ""),
+            str(report.get("dimension_key") or ""),
+            str(report.get("version") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(report)
+    if not unique:
+        return True, [], ""
+    try:
+        await store.bulk_save(unique)
+    except Exception as exc:  # noqa: BLE001 - expose storage failure explicitly
+        dimensions = list(dict.fromkeys(
+            str(report.get("dimension_key") or "").strip()
+            for report in unique
+            if str(report.get("dimension_key") or "").strip()
+        ))
+        if not dimensions:
+            dimensions = ["report_store"]
+        return False, dimensions, f"{type(exc).__name__}: {exc}"
+    return True, [], ""
+
+
 async def layer_completion_check(
     state: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -154,22 +189,35 @@ async def layer_completion_check(
         if pending_reports:
             store = ReportStore.get_instance()
             all_dims_set = set(all_dims)
-            revision_reports = [r for r in pending_reports if r.get("dimension_key") in all_dims_set]
-            # 按 report_id 去重
-            seen_report_ids = set()
-            unique_reports = []
-            for r in revision_reports:
-                rid = r.get("report_id")
-                if rid not in seen_report_ids:
-                    seen_report_ids.add(rid)
-                    unique_reports.append(r)
-            if unique_reports:
-                # bulk_save 内部按 version 去重，已保存的会跳过
-                await store.bulk_save(unique_reports)
-                logger.info(
-                    "[layer_completion_check] Revision: saved %d reports to DB (deduped from %d)",
-                    len(unique_reports), len(revision_reports),
+            revision_reports = [
+                report for report in pending_reports
+                if report.get("dimension_key") in all_dims_set
+            ]
+            persisted, failed_dimensions, persist_error = await _flush_pending_reports(
+                store,
+                revision_reports,
+            )
+            if not persisted:
+                logger.error(
+                    "[layer_completion_check] Revision report persistence failed: %s",
+                    persist_error,
                 )
+                return {
+                    "layer_just_completed": None,
+                    "dimension_failures": [{
+                        "stage": "L3",
+                        "dimension": dimension,
+                        "code": "report_persistence_failed",
+                        "message": (
+                            "revision report persistence failed: "
+                            + persist_error
+                        ),
+                    } for dimension in failed_dimensions],
+                }
+            logger.info(
+                "[layer_completion_check] Revision: persisted %d reports",
+                len(revision_reports),
+            )
 
         if set(all_completed) == set(all_dims):
             logger.info(
@@ -311,6 +359,24 @@ async def layer_completion_check(
         )
 
         if action == "approve":
+            persisted, failed_dimensions, persist_error = await _flush_pending_reports(
+                ReportStore.get_instance(),
+                list(state.get("pending_reports", [])),
+            )
+            if not persisted:
+                logger.error(
+                    "[layer_completion_check] Approved layer report persistence failed: %s",
+                    persist_error,
+                )
+                return {
+                    "layer_just_completed": None,
+                    "dimension_failures": [{
+                        "stage": f"L{layer}",
+                        "dimension": dimension,
+                        "code": "report_persistence_failed",
+                        "message": "approved layer report persistence failed: " + persist_error,
+                    } for dimension in failed_dimensions],
+                }
             # Now safe to send SSE events — this code only runs after resume
             SSEPublisher.send_layer_complete(
                 session_id=session_id,
@@ -359,6 +425,27 @@ async def layer_completion_check(
                 "revision_images": resume_data.get("images", []),
                 "pending_reports": [],
             }
+
+    # Auto mode: ensure the durable report write succeeds before exposing
+    # layer completion.  Pending state is retained when storage fails.
+    persisted, failed_dimensions, persist_error = await _flush_pending_reports(
+        ReportStore.get_instance(),
+        list(pending_reports),
+    )
+    if not persisted:
+        logger.error(
+            "[layer_completion_check] Auto layer report persistence failed: %s",
+            persist_error,
+        )
+        return {
+            "layer_just_completed": None,
+            "dimension_failures": [{
+                "stage": f"L{layer}",
+                "dimension": dimension,
+                "code": "report_persistence_failed",
+                "message": "layer report persistence failed: " + persist_error,
+            } for dimension in failed_dimensions],
+        }
 
     # Auto mode: record completion; the layer gate owns phase advancement.
     SSEPublisher.send_layer_complete(

@@ -323,11 +323,13 @@ def _build_cognitive(checkpointer) -> StateGraph:
 
     builder.add_node("cognitive_entry", rg.adapt_node(cognitive_entry))
     if rg._HAS_RETRY_POLICY:
-        # Provider transport failures that escape the audited worker are
-        # retried at the LangGraph node boundary.  The retry is scoped to the
-        # failed dimension Send task; completed dimensions and checkpoints are
-        # not replayed.  Failures converted by the worker into the typed
-        # provider_failures channel still use the explicit HUMAN retry path.
+        # Provider transport failures that escape the audited worker may use
+        # the explicitly configured LangGraph retry budget.  The default is
+        # zero, so a failed Send task goes through the exact-dimension resume
+        # path instead of multiplying graph retries with provider retries.
+        # Completed dimensions and checkpoints are not replayed.  Failures
+        # converted by the worker into provider_failures still use the
+        # explicit HUMAN/resume path.
         builder.add_node(
             "l1_worker",
             rg.adapt_node(rg.audited_l1_worker, worker=True),

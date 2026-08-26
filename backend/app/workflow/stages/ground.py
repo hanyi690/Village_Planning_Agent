@@ -144,6 +144,64 @@ def _packet_ref_key(ref: Any) -> str:
     ).strip()
 
 
+def _ground_fact_reference_errors(
+    request: Any,
+    *,
+    fact_catalog: Any,
+) -> list[str]:
+    """Validate every L1 fact reference before it enters formal GROUND.
+
+    TARGET_PROJECTION receives a closed set per L3 dimension, while GROUND
+    receives the complete immutable L1 snapshot.  This is the second, stage
+    boundary check: it verifies that a replayed or hand-assembled projection
+    still points at the current snapshot and never turns a stale ID into
+    geometry lineage.
+    """
+    from app.domain.validation.l1_fact_catalog import validate_l1_fact_references
+
+    errors: list[str] = []
+    for field_name, values in (
+        (
+            "semantic_spec.l1_fact_refs",
+            list(getattr(getattr(request, "semantic_spec", None), "l1_fact_refs", None) or []),
+        ),
+        (
+            "component_fact_refs",
+            list(getattr(request, "component_fact_refs", None) or []),
+        ),
+    ):
+        result = validate_l1_fact_references(values, catalog=fact_catalog)
+        if result.accepted:
+            continue
+        details: list[str] = []
+        if result.extra_ids:
+            details.append("unknown=" + ",".join(result.extra_ids))
+        if result.duplicate_ids:
+            details.append("duplicate=" + ",".join(result.duplicate_ids))
+        if not details:
+            details.append("catalog_unusable")
+        errors.append(f"{field_name}:" + ";".join(details))
+    return errors
+
+
+def _park_grounding_request(request: Any, reasons: list[str]) -> Any:
+    """Rebuild one request as pending without retaining a stale fingerprint."""
+    from app.contracts.planning.p1_closure import GroundingRequest
+
+    payload = (
+        request.model_dump(mode="python")
+        if hasattr(request, "model_dump")
+        else dict(request)
+    )
+    payload.update({
+        "request_id": "",
+        "status": "pending",
+        "defer_reason": ";".join(dict.fromkeys(reasons)),
+        "request_fingerprint": "",
+    })
+    return GroundingRequest.model_validate(payload)
+
+
 def _merge_ground_evidence_packets(packets: list[Any], *, next_offset: int | None = None) -> Any:
     """Merge retrieval pages without dropping semantic or topology evidence."""
     if not packets:
@@ -511,7 +569,19 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         for request in (getattr(compilation, "grounding_requests", None) or [])
         if str(getattr(request, "target_ref", "") or "").strip()
     }
+    from app.domain.validation.l1_fact_catalog import build_l1_fact_catalog
+
+    # ``_require_context`` hydrates this list from the exact L1 snapshot
+    # referenced by the checkpoint.  GROUND validates against the complete
+    # snapshot (not a dimension-local prompt catalog), because a physical
+    # project may carry lineage from several L3 dimensions.
+    fact_catalog = build_l1_fact_catalog(
+        getattr(context, "l1_fact_records", None) or []
+    )
     grounding_specs = []
+    admitted_requests = []
+    parked_fact_requests = []
+    fact_reference_issues: list[tuple[str, list[str]]] = []
     for spec in specs:
         request = requests_by_target.get(str(getattr(spec, "target_id", "") or ""))
         if request is None or getattr(request, "status", "pending") != "ready":
@@ -532,7 +602,31 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 getattr(spec, "target_id", ""),
             )
             continue
+        fact_errors = _ground_fact_reference_errors(
+            request,
+            fact_catalog=fact_catalog,
+        )
+        if fact_errors:
+            target_ref = str(
+                getattr(request, "target_ref", "")
+                or getattr(spec, "target_id", "")
+                or ""
+            ).strip()
+            parked_fact_requests.append(
+                _park_grounding_request(request, [
+                    "l1_fact_reference_not_in_current_snapshot",
+                    *fact_errors,
+                ])
+            )
+            fact_reference_issues.append((target_ref, fact_errors))
+            logger.warning(
+                "[workflow:ground] stale/invalid L1 fact reference; parking target=%s errors=%s",
+                target_ref,
+                fact_errors,
+            )
+            continue
         grounding_specs.append(spec)
+        admitted_requests.append(request)
     # Pending requests remain audit/HUMAN work and never enter formal GROUND
     # resolution, so they cannot call ground_aggregate or create candidates.
     if getattr(compilation, "pending_grounding_requests", None):
@@ -626,12 +720,6 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         from app.contracts.spatial.grounding_contracts import GroundingResult
 
         result = GroundingResult()
-    result.grounding_requests = list(
-        getattr(compilation, "grounding_requests", None) or []
-    )
-    result.pending_grounding_requests = list(
-        getattr(compilation, "pending_grounding_requests", None) or []
-    )
     if packet_diagnostics:
         from app.contracts.spatial.grounding_contracts import SpatialQueryEvidence
 
@@ -682,6 +770,31 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 result = re_result
     except Exception as exc:  # noqa: BLE001 - enhancement must never break GROUND
         logger.warning("[workflow:ground] flash mention enhancement failed: %s", exc)
+
+    # Reattach request lineage after optional mention enhancement.  The
+    # enhanced aggregate is a new GroundingResult instance and must not be
+    # allowed to drop the formal/pending request boundary.
+    result.grounding_requests = list(admitted_requests)
+    result.pending_grounding_requests = [
+        *list(getattr(compilation, "pending_grounding_requests", None) or []),
+        *parked_fact_requests,
+    ]
+    if fact_reference_issues:
+        from app.contracts.artifacts.contract_meta import StageIssue
+
+        result.unresolved.extend(
+            StageIssue(
+                stage="ground",
+                severity="error",
+                code="L1_FACT_REFERENCE_NOT_IN_CURRENT_SNAPSHOT",
+                message=(
+                    "GROUND rejected L3 lineage outside the current canonical L1 snapshot"
+                ),
+                detail="; ".join(errors),
+                related_artifact_id=target_ref or None,
+            )
+            for target_ref, errors in fact_reference_issues
+        )
 
     if evidence and hasattr(result, "spatial_query_evidence"):
         result.spatial_query_evidence.extend(evidence)

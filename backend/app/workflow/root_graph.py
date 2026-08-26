@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 from typing import Any, Callable, Dict, List
 from langgraph.graph import StateGraph, END, START
 from langchain_core.messages import HumanMessage
@@ -138,12 +139,22 @@ async def execute_tools_node(state: Dict[str, Any]) -> Dict[str, Any]:
     return await _execute_tools_node(state)
 
 
-# TimeoutPolicy + error_handler for node-level fault tolerance (LangGraph v1.2)
+# TimeoutPolicy + error_handler for node-level fault tolerance (LangGraph v1.2).
+# Provider calls already own their explicit bounded retry budget.  Keep graph
+# retries opt-in so a transport failure cannot multiply with dimension resume.
 try:
     from langgraph.types import RetryPolicy
+
+    try:
+        _NODE_TRANSIENT_RETRIES = min(
+            1,
+            max(0, int(os.getenv("LLM_NODE_TRANSIENT_RETRIES", "0"))),
+        )
+    except (TypeError, ValueError):
+        _NODE_TRANSIENT_RETRIES = 0
     _HAS_RETRY_POLICY = True
     _TRANSIENT_RETRY_POLICY = RetryPolicy(
-        max_attempts=3,
+        max_attempts=1 + _NODE_TRANSIENT_RETRIES,
         retry_on=(TimeoutError, OSError, ConnectionError),
     )
 except ImportError:
@@ -192,6 +203,34 @@ async def _audited_dimension_worker(worker, state: Dict[str, Any]) -> Dict[str, 
                 "dimension": dimension,
                 "code": "llm_stream_timeout",
                 "message": f"dimension worker exceeded hard timeout ({timeout}s)",
+            }],
+        }
+    except (OSError, ConnectionError) as exc:
+        from app.infrastructure.llm.dimension_runtime import (
+            dimension_failure_attempt,
+            trip_provider_failure,
+        )
+
+        phase = str(state.get("phase") or "layer1")
+        layer = phase.removeprefix("layer") or phase
+        session_id = str(state.get("session_id") or "")
+        trip_provider_failure(session_id)
+        logger.error(
+            "[dimension_worker] provider transport error: dimension=%s phase=%s error=%s",
+            dimension,
+            phase,
+            type(exc).__name__,
+        )
+        return {
+            "dimension_retry_counts": dimension_failure_attempt(state, dimension),
+            "provider_failures": [{
+                "stage": f"L{layer}",
+                "dimension": dimension,
+                "code": "llm_provider_error",
+                "message": (
+                    "dimension worker provider transport error "
+                    f"({type(exc).__name__})"
+                ),
             }],
         }
     if isinstance(patch, dict) and isinstance(patch.get("fatal_error"), dict):

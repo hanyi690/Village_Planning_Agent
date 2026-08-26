@@ -174,12 +174,30 @@ class ReportStore:
                     )
                     existing_report = existing.scalar_one_or_none()
 
+                    # ``report_id`` is the replay idempotency key for current
+                    # L3 writes.  Also match the natural identity so a
+                    # checkpoint created before that key was introduced does
+                    # not leave a second row for the same logical version.
+                    if existing_report is None:
+                        natural_key = await db.execute(
+                            select(DimensionReport)
+                            .where(
+                                DimensionReport.session_id == report_data["session_id"],
+                                DimensionReport.dimension_key == report_data["dimension_key"],
+                                DimensionReport.version == report_data["version"],
+                            )
+                            .order_by(DimensionReport.id)
+                            .limit(1)
+                        )
+                        existing_report = natural_key.scalar_one_or_none()
+
                     if existing_report:
                         # Update existing report
                         existing_report.session_id = report_data["session_id"]
                         existing_report.dimension_key = report_data["dimension_key"]
                         existing_report.layer = report_data["layer"]
                         existing_report.version = report_data["version"]
+                        existing_report.report_id = report_data["report_id"]
                         existing_report.content = report_data["content"]
                         existing_report.instruction = report_data.get("instruction")
                         existing_report.summary = report_data.get("summary", "")
