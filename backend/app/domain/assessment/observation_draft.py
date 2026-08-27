@@ -630,6 +630,52 @@ def _provider_locator(value: Any) -> dict[str, Any]:
     }
 
 
+def _provider_scope_mentions(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    candidate = value
+    if isinstance(candidate, str):
+        try:
+            candidate = _decode_json_container(candidate)
+        except Exception:
+            return []
+    if isinstance(candidate, dict):
+        candidate = [candidate]
+    if not isinstance(candidate, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for raw in candidate:
+        if isinstance(raw, str):
+            raw = {"name": raw}
+        if not isinstance(raw, dict):
+            continue
+        name = _provider_string(raw.get("name") or raw.get("normalized_name"))
+        if not name:
+            continue
+        raw_role = _provider_string(raw.get("role")).casefold().replace("-", "_")
+        role = _SPATIAL_SCOPE_ROLE_ALIASES.get(raw_role, raw_role or "unknown")
+        result.append({
+            "name": name,
+            "normalized_name": _provider_string(raw.get("normalized_name") or name),
+            "role": role,
+            "relation_to_target": _provider_string(
+                raw.get("relation_to_target") or raw.get("relation")
+            ) or "located_in",
+            "aliases": _provider_string_list(raw.get("aliases")),
+            "source_quote": _provider_string(raw.get("source_quote")),
+            "source_refs": _provider_string_list(raw.get("source_refs")),
+            "source_segment_ids": _provider_string_list(
+                raw.get("source_segment_ids")
+            ),
+            "confidence": (
+                float(raw.get("confidence"))
+                if isinstance(raw.get("confidence"), (int, float))
+                else 0.0
+            ),
+        })
+    return result
+
+
 def _provider_spatial_mentions(value: Any) -> list[dict[str, Any]]:
     if value is None:
         return []
@@ -667,8 +713,17 @@ def _provider_spatial_mentions(value: Any) -> list[dict[str, Any]]:
             "needs_retrieval",
         )
         item["aliases"] = _provider_string_list(item.get("aliases"))
-        item["village_scopes"] = _provider_string_list(item.get("village_scopes"))
-        item["place_scopes"] = _provider_string_list(item.get("place_scopes"))
+        scope_mentions = item.get("scope_mentions")
+        if scope_mentions is None:
+            scope_mentions = [
+                {"name": value, "role": "natural_village"}
+                for value in _provider_string_list(item.pop("village_scopes", None))
+            ]
+            scope_mentions.extend(
+                {"name": value, "role": "place"}
+                for value in _provider_string_list(item.pop("place_scopes", None))
+            )
+        item["scope_mentions"] = _provider_scope_mentions(scope_mentions)
         item["source_feature_ids"] = _provider_string_list(item.get("source_feature_ids"))
         provenance = item.get("provenance")
         if not isinstance(provenance, dict):

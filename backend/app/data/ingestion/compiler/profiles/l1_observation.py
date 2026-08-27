@@ -14,7 +14,8 @@ from app.contracts.artifacts.classification_ref import ClassificationRef
 from app.contracts.evidence.evidence_contracts import EvidenceSource
 from app.contracts.domain.l1_contracts import (
     EvidenceGap,
-    L1LocationFact,
+    LocationMention,
+    LocationScopeMention,
     L1SpatialProvenance,
     L1Snapshot,
 )
@@ -67,24 +68,23 @@ def _clean_model_text(text: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _dedup_location_facts_local(facts: list[L1LocationFact]) -> list[L1LocationFact]:
-    result: list[L1LocationFact] = []
+def _dedup_location_mentions_local(
+    mentions: list[LocationMention],
+) -> list[LocationMention]:
+    result: list[LocationMention] = []
     seen: set[
         tuple[str, str, str, tuple[str, ...], str, tuple[str, ...]]
     ] = set()
-    for fact in facts:
+    for fact in mentions:
         key = (
             fact.normalized_name.strip(),
             fact.role.strip(),
             fact.dimension_key.strip(),
             tuple(sorted({
-                str(value).strip()
-                for values in (
-                    getattr(fact, "village_scopes", None) or [],
-                    getattr(fact, "place_scopes", None) or [],
-                )
-                for value in values
-                if str(value).strip()
+                f"{scope.role}:{scope.normalized_name or scope.name}:"
+                f"{scope.relation_to_target}"
+                for scope in fact.scopes
+                if (scope.normalized_name or scope.name).strip()
             })),
             str(getattr(fact, "instance_label", "") or "").strip(),
             tuple(sorted({
@@ -100,6 +100,14 @@ def _dedup_location_facts_local(facts: list[L1LocationFact]) -> list[L1LocationF
         seen.add(key)
         result.append(fact)
     return result
+
+
+def _dedup_location_facts_local(
+    facts: list[LocationMention],
+) -> list[LocationMention]:
+    """Compatibility wrapper for callers still using the retired helper name."""
+
+    return _dedup_location_mentions_local(facts)
 
 
 def _iter_chapters(content: str) -> list[tuple[str, str]]:
@@ -150,8 +158,8 @@ _OBSERVATION_TYPE_ROLES = {
     "项目": "project",
     "现状分区": "area",
     "分区": "area",
-    "自然村": "village",
-    "村庄": "village",
+    "自然村": "natural_village",
+    "村庄": "natural_village",
     "道路": "road",
     "水系": "water",
     "水体": "water",
@@ -169,9 +177,27 @@ def _observation_role(entity_type: str, name: str, location: str, description: s
     for key, role in _OBSERVATION_TYPE_ROLES.items():
         if key in text:
             return role
-    if name.endswith("村"):
-        return "village"
     return "unknown"
+
+
+_SCOPE_ROLE_ALIASES = {
+    "natural_village": "natural_village",
+    "village": "natural_village",
+    "natural village": "natural_village",
+    "自然村": "natural_village",
+    "村庄": "natural_village",
+    "administrative_village": "administrative_village",
+    "行政村": "administrative_village",
+    "place": "place",
+    "地点": "place",
+    "area": "area",
+    "区域": "area",
+}
+
+
+def _scope_role(value: Any, *, default: str = "unknown") -> str:
+    raw = str(value or "").strip().casefold().replace("-", "_")
+    return _SCOPE_ROLE_ALIASES.get(raw, raw or default)
 
 
 _DESCRIPTIVE_MARKERS = (
