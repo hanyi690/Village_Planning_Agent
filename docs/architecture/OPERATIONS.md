@@ -1,11 +1,11 @@
 # Operations
 
 > Status: CURRENT
-> Authority: Current local startup, configuration categories, health/degradation behavior and verification entry points.
+> Authority: Current local startup, configuration categories, degraded-operation expectations, and verification entry points.
 
-## 1. Local startup
+## 1. Local startup path
 
-仓库根 README 给出的当前最短启动方式是：
+The shortest documented local startup remains:
 
 ```powershell
 pip install -r requirements.txt
@@ -13,78 +13,82 @@ cd backend
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-前端从 `frontend/` 使用其 package manifest 安装依赖并运行 `npm run dev`。后端就绪检查使用 `/health` 和 `/api/health`；真实返回字段以 OpenAPI/代码为准。
+The frontend is started from `frontend/` via its package manifest. Health endpoints remain `/health` and `/api/health`, with exact response fields defined by code and generated schema rather than by this document.
 
-启动时 FastAPI lifespan 初始化 composition、runtime graph、artifact/event 依赖和其他资源。初始化证据见 [`backend/app/bootstrap/lifespan.py`](../../backend/app/bootstrap/lifespan.py) 与 [`composition.py`](../../backend/app/bootstrap/composition.py)。
+FastAPI startup wiring is owned by [`backend/app/bootstrap/lifespan.py`](../../backend/app/bootstrap/lifespan.py) and [`backend/app/bootstrap/composition.py`](../../backend/app/bootstrap/composition.py).
 
-## 2. Configuration categories
+## 2. Configuration categories actually in play
 
-运维配置按责任分组，不在本文复制 secret 或完整环境变量表：
+Current configuration responsibilities are split across:
 
-- application/API：host、port、CORS、logging；
-- persistence：database、checkpoint、artifact/event stores；
-- LLM providers：provider、model、endpoint、credentials、timeouts/rate limits；
-- professional RAG/embedding：corpus/cache、provider/model、opt-in 和连接参数；
-- evidence/external search：允许的来源、预算、timeout；
-- spatial/KG：数据快照、CRS、KG/bundle 构建和查询 adapter；
-- workflow：重试、HITL、validation/replay budgets。
+- application/API settings
+- persistence and checkpoint stores
+- LLM provider settings
+- dense RAG/embedding settings
+- evidence and external-search settings
+- spatial/KG/data-snapshot settings
+- workflow retry, HITL, validation, and replay budgets
 
-配置读取以 `backend/app/core/settings.py`、`backend/app/config/` 和 composition code 为准。文档不得包含真实 key。
+The source of truth is the current settings and composition code, primarily [`backend/app/core/settings.py`](../../backend/app/core/settings.py), `backend/app/config/`, and the bootstrap layer. This document intentionally does not duplicate secret names or complete env-var inventories.
 
-## 3. RAG and embedding health
+## 3. Degraded operation that the current runtime is expected to handle
 
-professional RAG 当前通过 [`backend/app/infrastructure/rag/service.py`](../../backend/app/infrastructure/rag/service.py) 和 [`vector_store.py`](../../backend/app/infrastructure/rag/vector_store.py) 使用外部 embedding；provider 未配置、额度到期或显式未 opt-in 时 dense recall 不可用。RAG retriever 会记录可用性日志。
+Current behavior should distinguish channel-specific degradation rather than collapsing the whole workflow:
 
-这不应关闭整个检索系统。当前独立的 local text、report、KG、bundle、artifact/history retrievers 位于 [`backend/app/evidence/retrieval/`](../../backend/app/evidence/retrieval/)。运行日志和诊断必须区分：
+| Failure | Current expected behavior |
+|---|---|
+| embedding or professional RAG unavailable | continue local text, report, KG, bundle, artifact, and history retrieval where available; expose the missing dense channel honestly |
+| external search unavailable | keep local/project evidence paths and surface the missing external coverage |
+| KG unavailable | keep bundle- and artifact-backed retrieval where possible; do not invent geometry or identity from names alone |
+| bundle or snapshot unavailable | stop executable grounding rather than deriving geometry from reports |
+| solver timeout or bounded failure | return bounded diagnostic output, not a fake optimal decision |
+| worker failure | abort formal commit and preserve diagnostics |
+| validation failure | route back to the responsible stage or human review instead of mutating the validated result in place |
 
-```text
-professional_rag_available
-embedding_available
-local_text_available
-kg_available
-bundle_available
-external_search_available
-```
+Current dense-RAG ownership is in [`backend/app/infrastructure/rag/service.py`](../../backend/app/infrastructure/rag/service.py) and [`vector_store.py`](../../backend/app/infrastructure/rag/vector_store.py). Current retrieval fallbacks live under [`backend/app/evidence/retrieval/`](../../backend/app/evidence/retrieval/).
 
-如果 embedding 暂时失效，允许继续结构化、词法、本地报告、KG 和空间证据路径；结果必须标注 dense 通道缺失，不得声称与全通道同等召回。不得用外部 web 静默替代项目内 authoritative geometry。
+## 4. LLM failure handling now worth monitoring
 
-## 4. Degraded operation
+The runtime still needs to distinguish structured-call failures such as:
 
-| Failure | Allowed behavior | Forbidden behavior |
-|---|---|---|
-| embedding/RAG unavailable | 继续 local/report/KG/bundle/artifact；记录 coverage 风险 | 把整个 evidence 写成空，或假称完整 |
-| external search unavailable | 使用本地来源并报告 external requirement unavailable | 伪造最新政策或缓存日期 |
-| KG unavailable | 使用显式 bundle IDs/attributes；保留语义歧义 | 从名称直接创造 geometry |
-| bundle/snapshot unavailable | 停止可执行 grounding | 用报告文字或 RAG 生成坐标 |
-| solver timeout | 返回 bounded/timeout certificate 和已有可行方案 | 把当前最好值宣称 optimal |
-| worker failure | 中止正式原子提交，保留诊断 | 部分提交后继续正式交付 |
-| validation failure | 路由到责任阶段或人工门 | 由 validator 静默修复 |
+- context overflow
+- output truncation
+- missing tool call
+- schema invalid
+- timeout
 
-LLM structured-output 诊断必须区分 context overflow、output truncation、missing tool call、schema invalid 和 timeout。MiniMax M2.7 OpenAI-compatible 调用不得把“没有 tool call”解释为 token 超限；structured path 使用 `reasoning_split=true`，只有明确 `finish_reason=length` 才允许一次有界扩容。日志、SSE 和 workflow failure 只记录稳定错误码与异常类型，不记录 provider 正文或 reasoning。
+The current worktree keeps those as typed diagnostics and avoids storing raw provider prompt/response text in logs, SSE, or workflow state. The normative boundary for what LLM calls may see belongs in [`../adr/008-final-llm-context-evidence-boundary.md`](../adr/008-final-llm-context-evidence-boundary.md); the current migration status of that boundary belongs in [`../design/05_MIGRATION.md`](../design/05_MIGRATION.md).
 
-## 5. Tests and diagnostics
+## 5. Verification commands used in practice
 
-快速契约/核心检查：
+Quick contract/core verification:
 
 ```powershell
 python -m pytest backend/tests/contracts backend/tests/core -q
 ```
 
-端到端检查：
+Focused documentation convergence check:
 
 ```powershell
-python -m pytest backend/tests/e2e -q
+python -m pytest backend/tests/contracts/test_documentation_convergence.py -q
 ```
 
-针对文档收敛：
+Patch hygiene:
 
 ```powershell
-cd backend
-pytest -q -o addopts='' tests/contracts/test_documentation_convergence.py
+git diff --check
 ```
 
-测试通过只证明对应范围。涉及地图、resume、RAG 退化、solver 或正式交付时，还需要固定 snapshot 的 integration/e2e artifact 和目标 benchmark 指标。
+Passing these checks proves only their own scope. Release-level target acceptance stays defined in [`../design/04_EVALUATION_AND_ACCEPTANCE.md`](../design/04_EVALUATION_AND_ACCEPTANCE.md).
 
-## 6. Operational release gate
+## 6. Operational release reminder
 
-发布前至少核验：配置无 secret 泄漏；OpenAPI/SSE schema 与代码一致；embedding-off 路径可诊断；checkpoint/resume 幂等；artifact lineage 可查询；失败不会生成正式 delivery；目标链新增契约均有 migration/compatibility test。完整质量门见 [`04_EVALUATION_AND_ACCEPTANCE.md`](../design/04_EVALUATION_AND_ACCEPTANCE.md)。
+Before treating a build as operationally ready, verify at least:
+
+- generated API contracts still match code
+- degraded retrieval paths fail honestly
+- checkpoint and resume remain usable
+- artifact lineage remains queryable
+- execution failures do not produce formal delivery
+
+This file stays intentionally operational. Design intent and target acceptance criteria live in the canonical design set, not here.

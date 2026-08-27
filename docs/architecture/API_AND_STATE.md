@@ -1,49 +1,83 @@
 # API and State
 
 > Status: CURRENT
-> Authority: Current HTTP/SSE/state ownership map. Generated schemas and Pydantic models are the field-level contract.
+> Authority: Current HTTP, SSE, and workflow-state ownership map. Field-level contracts live in generated schema and Pydantic models.
 
-## 1. Contract sources
+## 1. External contract owners
 
-HTTP 字段和路径以 [`docs/contracts/openapi-v1.json`](../contracts/openapi-v1.json) 为准；SSE 的稳定外部 schema 以 [`docs/contracts/sse-events-v1.schema.json`](../contracts/sse-events-v1.schema.json) 为准。本文不复制 endpoint 或事件字段清单。
+The current field-level API contracts are:
 
-FastAPI router 由 [`backend/app/api/routes.py`](../../backend/app/api/routes.py) 和 [`backend/app/api/v1/routes/__init__.py`](../../backend/app/api/v1/routes/__init__.py) 聚合。当前资源类别包括 session、state、events、human review、delivery、map/source layers、artifacts、dependency graph、evidence、history 和 trace；实际路径以生成 OpenAPI 为准。
+- OpenAPI: [`docs/contracts/openapi-v1.json`](../contracts/openapi-v1.json)
+- SSE schema: [`docs/contracts/sse-events-v1.schema.json`](../contracts/sse-events-v1.schema.json)
 
-## 2. Application boundary
+FastAPI route aggregation lives in [`backend/app/api/routes.py`](../../backend/app/api/routes.py) and [`backend/app/api/v1/routes/__init__.py`](../../backend/app/api/v1/routes/__init__.py). This document does not duplicate endpoint tables; it points to the generated contract and the owning route modules.
 
-API route 通过 `backend/app/application/commands/` 执行 create/resume/human decision，通过 `backend/app/application/queries/` 读取 state、checkpoint、artifacts、delivery、evidence、events 和 layers，通过 `backend/app/application/projections/` 形成外部视图。运行时调用集中在 [`PlanningRuntimeService`](../../backend/app/infrastructure/runtime/planning_runtime_service.py)。
+## 2. Application boundary in the current code
 
-route 不应直接解释领域 artifact 或重跑规划；projection 不是新的事实源。目标新增契约在实现后先进入 Pydantic，再更新生成 schema，禁止手工编辑 OpenAPI。
+Current API routes fan into three application layers:
 
-## 3. SSE ownership
+- `backend/app/application/commands/` for create, resume, and human-decision writes
+- `backend/app/application/queries/` for state, artifacts, delivery, evidence, history, and layers
+- `backend/app/application/projections/` for response shaping
 
-内部事件词汇定义在 [`backend/app/contracts/events.py`](../../backend/app/contracts/events.py)，事件持久化和在线发布分别位于 [`backend/app/infrastructure/events/repository.py`](../../backend/app/infrastructure/events/repository.py) 与 [`sse_publisher.py`](../../backend/app/infrastructure/events/sse_publisher.py)。API events route 只负责连接和投影。
+[`PlanningRuntimeService`](../../backend/app/infrastructure/runtime/planning_runtime_service.py) remains the runtime entry for session execution and resume.
 
-外部 envelope 与内部丰富事件词汇必须区分：新增内部事件不自动等于稳定外部 API 变更。断线恢复以持久事件/checkpoint 为事实，不能只依赖进程内连接 hub。事件需要关联 session/run/stage/artifact；SSE 文本不得替代 artifact payload。
+For target ownership rules and projection invariants, use:
 
-## 4. WorkflowState ownership
+- [`../design/01_CONTRACTS_AND_INVARIANTS.md`](../design/01_CONTRACTS_AND_INVARIANTS.md)
+- [`../design/02_EVIDENCE_AND_GROUNDING.md`](../design/02_EVIDENCE_AND_GROUNDING.md)
+- [`../design/03_PLANNING_EXECUTION.md`](../design/03_PLANNING_EXECUTION.md)
 
-[`backend/app/workflow/state.py`](../../backend/app/workflow/state.py) 的 `WorkflowState` 是 LangGraph 控制面：阶段、路由、checkpoint、轻量 runtime projection、artifact refs、gate/interrupt/terminal refs 和诊断事件。完整业务结果应存为 typed artifact，由 `ArtifactRef` 定位；state 中的自由 dict 不应成为第二套业务数据库。
+## 3. SSE and persisted event ownership
 
-当前 reducers 对 artifact refs、控制字段和失败事件有专门合并规则。`scoped_grounding_problem`、`ScenarioSet`、`ApprovedExecutionInput` 和 `ValidationCertificate` 已作为 typed artifact ref 接入；scoped problem 通过 parent fingerprint 和 deferred target IDs 保持问题收敛 lineage。仍需保持单一 producer，不得把完整方案数组或二进制地图塞入 state。
+Internal event vocabulary is declared in [`backend/app/contracts/events.py`](../../backend/app/contracts/events.py). Current persistence and publication are separated:
 
-## 5. Resume and human review
+- repository: [`backend/app/infrastructure/events/repository.py`](../../backend/app/infrastructure/events/repository.py)
+- live SSE publisher: [`backend/app/infrastructure/events/sse_publisher.py`](../../backend/app/infrastructure/events/sse_publisher.py)
 
-人工暂停由 hitl segment 和 typed interrupt artifacts 表达。应用 command 在 `backend/app/application/commands/` 中提交 decision，`PlanningRuntimeService.resume_from_interrupt` 校验 expected event 并使用 LangGraph `Command(resume=...)`。重复消费、过期 interrupt 和内容漂移应返回冲突，而不是重启整条工作流。
+The route layer projects those events outward; it is not the source of truth for event semantics.
 
-当前完整 ScenarioSet recommendation 可由 SELECT 产生自动批准输入；SELECT 的 HUMAN approve/resume 会先把显式延期目标写入 `DeferralLedger`，再回到 SELECT 生成 scoped problem/set，并在新 problem/scenario lineage 上生成 human-approved `ApprovedExecutionInput`。其他阶段的 HITL 路径仍在迁移中。普通 resume payload 不能自行拼装或篡改它。批准后的 problem/scenario/baseline fingerprint 变化必须使执行输入失效。
+## 4. Workflow state versus typed artifacts
 
-## 6. Delivery projection
+[`backend/app/workflow/state.py`](../../backend/app/workflow/state.py) defines `WorkflowState` as control-plane state. It currently carries:
 
-delivery、map layers 和 export 是 typed artifacts 的外部投影。当前 query/projection 位于 `backend/app/application/queries/` 和 `backend/app/application/projections/delivery.py`，manifest 契约位于 [`backend/app/contracts/artifacts/delivery_manifest_contracts.py`](../../backend/app/contracts/artifacts/delivery_manifest_contracts.py)。
+- stage and routing fields
+- interrupt and terminal references
+- lightweight runtime projections such as `delivery_status`
+- typed `artifact_refs`
+- diagnostics and reducer-managed control metadata
 
-正式交付目标要求 projection 只读取同一 run-root、相同 snapshot lineage 且已通过证书的 artifacts。当前 DELIVER 已读取 `ValidationCertificate` 并将其状态写入诊断摘要；正式 scenario 缺失证书或证书不可对账时强制 `END_DIAGNOSTIC`，带明确延期且证书为 partial 时才允许 partial manifest。EXECUTE 已有 `ExecutionStaging` 与 L4 快照回滚，但 one-worker-fails/replay、统一入口证书生成和完整 lineage replay 仍为 `PARTIAL`，不能从 API 返回成功就推断目标交付已完成。
+Current business artifacts should stay out of free-form state and be persisted by ref. In the current worktree that already includes `scoped_grounding_problem`, `ScenarioSet`, `approved_execution_input`, `execution_plan`, and `validation_certificate`.
 
-## 7. Verification
+The semantic owner and lifecycle rules for those artifacts are defined in the canonical design docs, especially [`../design/03_PLANNING_EXECUTION.md`](../design/03_PLANNING_EXECUTION.md) and [`../design/05_MIGRATION.md`](../design/05_MIGRATION.md).
+
+## 5. Resume and human-review operations
+
+Human review remains a first-class runtime path:
+
+- commands are issued from `backend/app/application/commands/`
+- interrupt expectations are checked in [`PlanningRuntimeService.resume_from_interrupt`](../../backend/app/infrastructure/runtime/planning_runtime_service.py)
+- HITL routing is compiled into the `hitl` segment in the workflow graph
+
+Current SELECT-scoped deferral and approval flow uses `DeferralLedger`, scoped problem regeneration, fresh `ScenarioSet` derivation, and new approval artifacts rather than mutating an old approved input in place.
+
+## 6. Delivery and layer projections
+
+Current outward delivery/layer views are shaped from typed artifacts in:
+
+- [`backend/app/application/projections/delivery.py`](../../backend/app/application/projections/delivery.py)
+- [`backend/app/api/v1/routes/map_layers.py`](../../backend/app/api/v1/routes/map_layers.py)
+- [`backend/app/api/v1/routes/source_layers.py`](../../backend/app/api/v1/routes/source_layers.py)
+
+The runtime exposes `delivery_status` and `statutory_complete` through API contracts. `/map-layers` is the current session delivery projection. `/source-layers` is a read-only source-context projection and is not a planning-result endpoint.
+
+## 7. Verification entry points
+
+Useful current checks are:
 
 ```powershell
 rg -n "include_router" backend/app/api backend/app/main.py -g '*.py'
-pytest -q -o addopts='' backend/tests/contracts backend/tests/core
+python -m pytest backend/tests/contracts/test_documentation_convergence.py -q
 ```
 
-OpenAPI 变化应由应用重新生成并比较，不得手工修改 `docs/contracts/openapi-v1.json`。
+When the API shape changes, regenerate and compare the schema; do not hand-edit `docs/contracts/openapi-v1.json`.

@@ -1,240 +1,128 @@
-opencode
-
-
 # Village Planning Agent System Design
 
 > Status: TARGET
-> Authority: Normative target architecture; implementation claims belong in `../architecture/CURRENT_RUNTIME.md`.
+> Authority: Normative global architecture and efficiency principles. Observed implementation belongs in `../architecture/CURRENT_RUNTIME.md`; target-to-current status belongs only in `05_MIGRATION.md`.
 
-## 1. Product outcome and non-goals
+## 1. Outcome and boundary
 
-系统的产品结果不是一段“看起来合理”的规划文本，而是一组可以从需求、证据、空间对象、候选方案一直追溯到地图和导出物的规划成果。系统必须：
+系统交付的不是一段看似合理的规划文字，而是一组可从事实、决策、目标、空间问题、方案、审批、执行状态、验证证书追溯到交付物的成果。每个正式结果必须有唯一语义所有者、稳定引用、确定性 lineage 和明确失败状态。
 
-- 将自然语言需求编译为可检查的规划问题；
-- 为每项规划主张绑定可定位的证据，显式报告冲突和缺口；
-- 将语义地点绑定到有身份、快照、坐标参考系和来源的空间对象；
-- 生成多个可行方案、Pareto 方案和有理由的推荐方案；
-- 只执行经过批准且内容冻结的方案；
-- 独立验证执行结果，并对规划意图、求解、物化和交付做跨阶段对账；
-- 在证据不足、问题不可行或执行不完整时给出可诊断结果，而不是伪造成功。
+本设计不承诺开放世界的绝对完整，不允许模型以叙述替代身份、几何、指标、状态或证书，也不把局部测试、报告生成成功或历史 live run 当作当前能力已完成的证明。
 
-非目标：
+## 2. Single canonical semantic chain
 
-- 不承诺开放世界中的“所有相关证据”，只承诺在声明的来源、查询计划、预算和停止原因内实现 **bounded completeness**；
-- 不允许 LLM 创造坐标、GIS 成员身份或硬约束通过结论；LLM 方案原型和推荐必须受闭集引用、确定性工具 observation、critic 和审批约束，不能直接成为正式方案；
-- 不把单一加权最高分、单一向量相似结果或现状图复制视为完整规划；
-- 不让检索、GROUND、EXECUTE、VALIDATE 或 DELIVER 越权重新做方案选择；
-- 不以文档存在、模型输出成功或局部单元测试替代端到端验收。
+全局只有一条语义权威链：
 
-## 2. Bounded completeness
-
-系统对完整性的承诺必须带边界。每次运行都要记录：
-
-- 需要回答的 `EvidenceRequirement` 集合；
-- 检索过的来源族、查询变体、过滤条件和时间范围；
-- 实际召回并采用的证据标识及定位；
-- 候选生成范围、数据快照和排除原因；
-- 未解决、冲突、不可用和需要人工裁决的项目；
-- 停止原因：`sufficient`、`source_exhausted`、`human_required` 或 `budget_exhausted`。
-
-“完整”只能表示：在上述声明边界内，必需证据覆盖、候选域、硬约束和 lineage 达到验收条件。系统不得声称已经穷尽互联网、所有数据库或现实世界全部可能地点。
-
-向量嵌入只是 dense recall 的可选增强。嵌入服务失效时，结构化查询、词法检索、报告定位、KG/entity resolution 和空间查询必须继续工作，并显式记录 dense 通道不可用及其召回风险。
-
-## 3. Three-plane architecture
-
-系统分为三个职责平面。平面是能力边界，不等同于 LangGraph 节点或代码目录。
-
-### Evidence plane
-
-Evidence plane: requirements, retrieval, provenance, contradiction, sufficiency
-
-它把自然语言问题编译为证据要求，按来源族检索，保留页码、段落、feature ID、artifact ref 等定位，构造 claim-evidence 关系，并判断每项要求为 `supported`、`contradicted`、`ambiguous` 或 `unavailable`。`EXPLORE` 是该平面的横向能力，可被 L1/L2/L3、TARGET_PROJECTION、GROUND 和诊断流程调用，但不能直接选择方案或写入最终几何。
-
-### Decision plane
-
-Decision plane: grounded candidates, hard/soft constraints, alternatives, optimization
-
-它把 L3 规划意图投影为类型化目标，由 GROUND 绑定真实实体、候选域、几何、网络和约束因子，再由 `PlanningDeliberationGraph` 通过 LLM framing/方案原型/tool planning/critic 与确定性 solver、GIS、network evaluator 的 observation-driven 循环生成多个可行方案、Pareto 前沿、推荐方案和 SolverCertificate。GROUND 负责召回和绑定；SELECT 负责受约束的方案综合与审议；确定性工具负责计算和证明。
-
-### Execution plane
-
-Execution plane: approval, immutable scenario, materialization, validation, reconciliation
-
-它将被批准方案及其 `ApprovedOutcomeEnvelope` 冻结为 `ApprovedExecutionInput`。`ConstrainedMaterializationGraph` 可以在包络内让 LLM 选择注册 recipe、诊断 observation 和提出等价恢复，但所有恢复都必须经确定性 equivalence checker 验证；随后在临时状态中原子物化、独立验证并通过 RECONCILE 对账 lineage。
-
-## 4. End-to-end planning loop
-
-```mermaid
-flowchart TD
-    Input["用户需求 / 项目资料 / 空间快照"] --> L1["L1 OBSERVE：事实与问题"]
-    L1 --> L2["L2 STRATEGIZE：策略与目标"]
-    L2 --> L3["L3 PLAN：PlanningProgram"]
-    Explore["EXPLORE：横向证据控制器"] -. "证据、定位、缺口" .-> L1
-    Explore -. "依据与反证" .-> L2
-    Explore -. "约束依据" .-> L3
-    Explore -. "实体与来源证据" .-> Ground
-    L3 --> Projection["TARGET_PROJECTION：类型化目标编译"]
-    Projection --> Ground["GROUND：实体、候选、几何与约束绑定"]
-    Ground --> Problem["GroundedPlanningProblem"]
-    Problem --> Optimizer["PlanningDeliberationGraph：LLM 审议 + 确定性工具"]
-    Optimizer --> Set["ScenarioSet：可行方案 / Pareto / 推荐 / SolverCertificate"]
-    Set --> Approval["策略门 / 人工审批"]
-    Approval --> Approved["ApprovedExecutionInput"]
-    Approved --> Execute["Constrained EXECUTE：包络内智能物化与等价恢复"]
-    Execute --> Staging["ExecutionStaging：staged / committed / aborted"]
-    Staging --> State["committed PlannedState / ChangeSet"]
-    State --> Validate["VALIDATE：独立测量与硬门控"]
-    Validate --> Certificate["ValidationCertificate"]
-    Certificate --> Reconcile["RECONCILE：跨阶段完整性对账"]
-    Reconcile --> Deliver["DELIVER：地图 / 报告 / 导出"]
+```text
+L1SemanticSnapshot
+  → L2DecisionSet
+  → PlanningClaimSet
+  → AdmittedTargetSet
+  → GroundedPlanningProblem
+  → ScenarioSet
+  → ApprovedExecutionInput
+  → PlannedState
+  → ValidationCertificate
+  → DeliveryManifest
 ```
 
-正常主链是：
+每个箭头表示一次有名字、有生产者和消费者的最小投影，不表示把完整上游对象复制到下游。下游保存稳定 ref/digest；需要展开时，只在消费者边界按允许字段展开。报告、事件、trace、cursor 和 API view 是该链的投影或控制面，不是第二条事实链。
+
+链中名称是目标语义名称。当前代码仍有命名或承载差异，例如 `L1Snapshot` 同时带 `fact_records` 和 display projection，TARGET_PROJECTION 当前产出 `IntentCompilationResult` 等 artifact。它们是否已收敛到目标名称和边界，只由 [CURRENT_RUNTIME](../architecture/CURRENT_RUNTIME.md) 与 [05_MIGRATION](05_MIGRATION.md) 判定。
+
+## 3. Generation and deterministic derivation
+
+LLM 只允许产生四类临时或语义输出：draft、decision、proposal、summary。现有 `L1Observation` 属于 observation draft，不是已确认事实。模型可以解释、提出和排序闭集引用，但不能建立最终身份或证明计算结果。
+
+以下内容必须由应用、契约校验器、检索器、GIS/solver、artifact store 或 gate 确定性产生或确认：
+
+- identity、ID、artifact ref、digest、fingerprint；
+- snapshot、scope、revision、lineage、candidate membership；
+- coordinates、CRS、geometry、topology、network relation；
+- measured metrics、hard-constraint result、lifecycle status；
+- solver、validation、reconciliation 和 delivery certificates/manifests。
+
+模型返回的同名字段最多是待验证主张。未通过确定性编译、闭集成员校验和来源校验前，不得进入权威链。
+
+### 3.1 L1/L2/L3 的模型事务边界
+
+结构化输出只约束一次 provider 事务的 wire shape，不代表应把一个阶段的完整内部对象交给模型一次生成。模型事务必须按单一认知目的拆分，且失败原子不能大于可独立验证和重试的最小语义单元。
+
+- L1 observation transaction：从一个 bounded source page 提取 observation drafts；每条 draft 独立校验、独立隔离，应用再确定性编译 `L1Fact`、`LocationMention` 与 `EvidenceGap`。
+- L2 decision transaction：从 named L1 projection 形成一组高度抽象、可闭集引用的 decision proposals；目标、指标、策略、优先级、冲突和空间结构意图不得因为内部 `L2DecisionSet` 可承载而被强制一次全部生成。
+- L3 claim transaction：只形成粗粒度、非可执行 planning claim drafts；不生成项目组件拆分、target identity、package identity、空间关系、候选成员、几何参数或执行参数。
+- display transaction：不得与 semantic transaction 混合。报告若需要模型润色，必须只消费已经验证的 semantic refs/projection，并且不能创建新的语义。
+
+一个数组中的单项无效时，系统必须保留其余已验证项并返回 typed rejection；禁止因单项错误重试或丢弃整个维度。schema retry、semantic repair 和 workflow retry 是三个不同预算，不得隐式嵌套或互相覆盖。
+
+## 4. Minimal projections and data classes
+
+阶段边界默认拒绝 complete upstream dump。每个允许的 projection 必须记录名称、生产者、消费者、选择规则、大小预算、来源 refs/digest、生命周期 owner 和明确排除项。
+
+数据必须按职责分离：
+
+- **semantic**：链上的事实、决策、主张、目标、问题、方案和正式状态；
+- **display**：report body、summary、map/API view，只解释或展示 semantic refs；
+- **control**：gap、requirement、gate、cursor、retry、interrupt、pagination 和 routing status；
+- **audit**：provenance、trace、call record、diagnostic、query/solver/reconciliation detail；
+- **transport**：provider envelope、retrieval bundle/packet、event 和 consumer projection。
+
+display、control、audit、transport 都不能替代 semantic authority。semantic artifact 也不得通过内嵌完整报告、raw retrieval、完整 trace 或控制状态来复制其他职责。
+
+## 5. Evidence and bounded completeness
+
+证据缺口统一表达为 `EvidenceGap`，可执行检索需要统一表达为 `EvidenceRequirement`；检索结果必须说明来源范围、覆盖、冲突、未解决项和停止原因。证据检索与 GROUND 的主规范在 [02_EVIDENCE_AND_GROUNDING.md](02_EVIDENCE_AND_GROUNDING.md)，本文件只规定其全局边界。
+
+“完整”只表示在已声明的来源、查询计划、候选域、预算和停止原因内满足 gate。嵌入服务失效时，dense recall 可以降级，但结构化、词法、KG、bundle 和空间通道必须独立工作并暴露缺口；不得把 embedding 可用性变成事实或几何权威。
+
+## 6. Stage responsibilities
+
+- L1：从 session-owned 原始输入生成 observation drafts，再确定性编译可追溯事实、位置 work items 和证据缺口；原文与报告不下传。
+- L2：在 named L1 fact projection 上形成高度抽象的目标、方向、约束、偏好、优先级和策略决策；不展开项目组件，不创造测量事实或几何。
+- L3：把相关 L2 decisions、去重后的 canonical L1 facts 与定向 evidence 投影为粗粒度、非可执行 `PlanningClaimSet`；只有确定性 admission 可产生 `AdmittedTargetSet`。L3 不是详细空间规划生成器。
+- TARGET_PROJECTION / GROUND：把 admitted targets 绑定到闭集身份、snapshot、候选、几何、关系和可测约束；GROUND 不选最终方案。
+- SELECT：在闭集问题上提出或评议方案，由确定性工具建立可行性、指标和证书，最终只提交一个 `ScenarioSet`。
+- Approval / EXECUTE：冻结 `ApprovedExecutionInput`；EXECUTE 只物化获批 outcome，不重新选址、寻路或改变 candidate membership。
+- VALIDATE / RECONCILE / DELIVER：独立测量、跨阶段对账，并从同一 run-root 与 snapshot lineage 生成证书和交付清单。
+
+为保持现有规划链的代码导航和 convergence 测试可追溯性，下面保留编排阶段关键词；它是语义链的执行映射，不是第二条语义权威链。正常主链是：
 
 ```text
 L1 / L2 / L3
 → TARGET_PROJECTION
 → GROUND
 → GroundedPlanningProblem
-→ PlanningDeliberationGraph（LLM framing / prototype / tool / critic loop）
+→ PlanningDeliberationGraph
 → ScenarioSet
 → Approval Gate
 → ApprovedExecutionInput
-→ ConstrainedMaterializationGraph → Atomic Commit
-→ ExecutionStaging → committed PlannedState
+→ ConstrainedMaterializationGraph
+→ Atomic Commit
+→ committed PlannedState
 → VALIDATE
 → ValidationCertificate
 → RECONCILE
 → DELIVER
 ```
 
-当 SELECT/HUMAN 明确延期一个或多个目标时，主链不直接沿用旧方案进入 EXECUTE：
-`DeferralLedger → scoped GroundedPlanningProblem → ScenarioOptimizer → fresh ScenarioSet`
-，随后重新生成 `ApprovedExecutionInput`。scoped problem 必须保存父问题 fingerprint、延期
-目标 IDs、scope reason 和 source refs；只有新 ScenarioSet 中的可行推荐才可进入执行。
+`PlanningDeliberationGraph` 是 SELECT 的决策门面；`ConstrainedMaterializationGraph` 是 EXECUTE 的目标设计门面。二者在当前实现中的状态不得从本设计推断：`05_MIGRATION.md` 当前仍将相关能力区分为 `CURRENT`、`PARTIAL` 或 `GAP`。`GroundedPlanningProblem`、`ScenarioSet`、`ApprovedExecutionInput`、`PlannedState` 和 `ValidationCertificate` 是阶段间契约，不要求各自成为新的顶层图节点。
 
-`GroundedPlanningProblem`、`ScenarioSet`、`ApprovedExecutionInput` 和 `ValidationCertificate` 是阶段间权威契约，不要求各自成为新的顶层图节点。失败必须返回最早负责阶段：证据缺口回 EXPLORE，意图缺失回 L3，实体或候选缺失回 GROUND，不可行或目标冲突回 SELECT/L3，物化偏差回 EXECUTE，跨阶段遗漏由 RECONCILE 定位。
+### 6.1 报告生成时点
 
-## 5. Stage responsibilities
+`PlanningClaimSet` 只足以支撑可选的意图、依据、不确定性和证据缺口摘要；该摘要不得称为“详细规划报告”，也不得描述已选目标、地块、道路、空间关系、几何、容量、指标或实施结果。
 
-| 阶段              | 权威职责                                                                                                                                | 主要产物                                                                                    | 明确禁止                                                                    |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| L1                | 唯一读取并分析原始输入；在每个维度内通过有界 observe→validate→report 循环建立带 source span 的 typed facts、问题和不确定性            | `L1Snapshot`（含 `L1SourceIndex`、typed facts、pass diagnostics）                       | 把推测写成空间事实，或让 L2/L3/Project Bank/GROUND 重新解析`village_data` |
-| L2                | 形成策略、偏好、目标方向及其依据                                                                                                        | strategy/objective view                                                                     | 直接选地点或创建约束计算结果                                                |
-| L3                | 将事实、指标、约束、目标、方案原型和项目包分层，定义“规划什么、为何规划、什么算好”                                                    | `PlanningProgram` / `PlanningProblemSpec` / project packages                            | 把每条规划主张自动变成空间任务，或决定最终候选成员/坐标                     |
-| TARGET_PROJECTION | 只将通过执行准入的空间干预编译为原子、类型化、可接地目标                                                                                | admitted typed target specs /`IntentCompilationResult`                                    | 把证据陈述、指标、目标或非空间行动机械投影为空间目标                        |
-| EXPLORE           | 按证据要求检索、定位、融合和报告缺口                                                                                                    | evidence claims/coverage                                                                    | 生成最终候选、几何或方案                                                    |
-| GROUND            | 解析实体，绑定数据快照、候选域、几何、网络和约束因子                                                                                    | `GroundedPlanningProblem`                                                                 | 最终选择方案或用评分替代求解                                                |
-| SELECT            | 通过 LLM-native deliberation subgraph 形成方案原型、规划确定性工具、依据 observation 修订并 critic，再生成可行替代、Pareto 和推荐       | `ScenarioSet` + deliberation audit + `SolverCertificate[]`；必要时 typed return request | 创造坐标/来源成员、让模型自证硬约束、隐藏不可行或沿用旧问题/审批            |
-| Approval          | 冻结被批准方案、问题、baseline 和审批身份                                                                                               | `ApprovedExecutionInput`                                                                  | 批准后静默换方案或换快照                                                    |
-| EXECUTE           | 在`ApprovedOutcomeEnvelope` 内由 LLM 规划注册 recipe、诊断 observation、提出等价恢复，并由确定性 worker/checker 在 staging 中原子物化 | materialization audit +`ExecutionStaging` → `PlannedState` / `ChangeSet`             | 重新选址/寻路/布局、执行不等价恢复、放松硬约束或部分正式提交                |
-| VALIDATE          | 独立重算硬约束、覆盖和 lineage                                                                                                          | `ValidationReport` + `ValidationCertificate`                                            | 自动修改方案来让检查通过                                                    |
-| RECONCILE         | 对账意图、问题、方案、执行、验证和交付覆盖                                                                                              | `ReconciliationReport`                                                                    | 吞掉遗漏或用人工审批抹去事实错误                                            |
-| DELIVER           | 从同一 run-root 和 snapshot lineage 生成成果视图                                                                                        | `DeliveryManifest`                                                                        | 再检索、再规划或替换方案                                                    |
+详细规划报告必须等待空间链路至少完成 `TARGET_PROJECTION → GROUND → SELECT → ScenarioSet`，并只引用闭集 targets/candidates、problem fingerprint、formal scenario membership 与确定性测量结果。面向正式交付的最终报告还必须等待 approval、materialization、VALIDATE 与 RECONCILE，绑定 `ApprovedExecutionInput`、`PlannedState`、`ValidationCertificate` 和同一 run-root。报告是这些 artifact 的 display projection，不是 L3 的第二语义输出。
 
-目标向量由 L2/L3 定义方向和优先级，TARGET_PROJECTION 编译指标，GROUND 绑定可测量数据，ScenarioOptimizer 计算各方案实际值。求解器不能自行发明目标或权重。
+## 7. Gates and fail-closed behavior
 
-`SolverCertificate` 只证明给定形式化问题的求解状态，不证明 L3 已完整理解人类意图，也不证明 GROUND 召回了开放世界全部候选。`ValidationCertificate` 只证明执行状态与获批方案、硬约束及 lineage 一致。RECONCILE 负责发现阶段转换中的遗漏、替换和串版。
+任何边界缺少必需证据、身份、snapshot、scope、几何、闭集成员、硬约束输入、审批 digest 或 lineage 时，都必须产生 typed diagnostic、deferred/human-required 或失败结果；不得补猜并继续正式链。
 
-### Planning content hierarchy and target admission
+阶段只能修改自己拥有的语义：证据缺口回 evidence requester，意图/准入缺口回 L3，候选或几何缺口回 GROUND，不可行或方案冲突回 SELECT/L3，物化偏差回 EXECUTE，验证失败回最早责任阶段。人工可以选择政策和降级路径，但不能改写已经测量出的事实。
 
-一个村庄可以有大量事实、政策条款、问题和建议，但这些内容不等于同等数量的可执行空间目标。L3 必须保留以下层级，而不是把每条非行动 claim 一对一转换成空间干预：
+正式执行是 all-or-nothing：staged、partial 或 diagnostic 不能提升为 committed `PlannedState`。`ValidationCertificate` 只证明获批输入与物化状态的一致性；`DeliveryManifest` 只引用通过验证且 lineage 一致的成果。
 
-```text
-PlanningProgram
-├── evidence statements / current-state facts
-├── indicators
-├── constraints
-├── objectives
-├── scenario archetypes
-├── project packages
-│   ├── spatial interventions
-│   └── non-spatial actions
-└── executable target candidates
-```
+## 8. Efficiency completion rule
 
-只有明确属于项目包中的空间干预，并且具有规划语义、来源依据、位置要求或候选生成规则、预期物化类型和可验证完成条件时，才可以通过 target admission。指标、目标、证据陈述、约束文本和非空间行动继续作为上游依据或下游检查项，不得因其看起来具有行动性就自动创建几何任务。
+系统设计只有在 [01_CONTRACTS_AND_INVARIANTS.md](01_CONTRACTS_AND_INVARIANTS.md) 的 `EFF-01` 至 `EFF-08` 和 [04_EVALUATION_AND_ACCEPTANCE.md](04_EVALUATION_AND_ACCEPTANCE.md) 的量化 gate 均有可重复证据时，才能被称为收敛。至少必须证明：每阶段一个 canonical semantic output、每个消费者只收到 named minimal projection、无 report/audit/raw leakage、refs/digests 可稳定复用，并且 contract/prompt/duplicate/unused-field 预算受控。
 
-### Raw input ownership
-
-`village_data` 和显式上传原始文档在输入层保持不透明，只保存内容、来源和 digest；任务描述与约束属于控制上下文，不是 L1 事实源。L1 是唯一允许读取并结构化其中表格/段落的阶段。L1 worker 先建立 source index，再由各维度通过有界结构化调用确认本维度直接支持的 typed facts；模型不能覆盖 source index 的 `source_ref` 或 `source_span`。最终输出 `L1SourceIndex`、typed observations、pass cursor 和检索 trace。后续阶段只能消费 `L1Snapshot.fact_records` 与 typed observations；Project Bank/RAG 可以检索这些 facts，TARGET_PROJECTION/GROUND 只能使用其来源引用，前端只展示 L1 facts。任何下游重新扫描原文、从人口总数猜 demand point、从叙述恢复数量或位置，都属于越权并必须 fail-closed。旧 `current_status` 键不再是第二个事实源；若旧状态仍携带它，L1 source index 只记录忽略诊断而不进入 prompt 或 source segments。结构化调用的 schema 合法不等于来源语义正确，缺失/冲突必须通过 deterministic validator 和有界 repair 记录为诊断。
-
-### Algorithm and worker ownership
-
-`PlanningDeliberationGraph` 是 SELECT 的决策门面；`ScenarioOptimizer` 降为确定性 tool facade。LLM 根据案件结构提出方案原型、规划工具并解释 observation，solver portfolio 负责可重放计算和证明，最终统一封装为 `ScenarioSet`：
-
-| 任务类型           | GROUND                            | SELECT / solver portfolio                                                                                | EXECUTE                    |
-| ------------------ | --------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------- |
-| 单设施选址         | 生成并测量候选                    | 硬过滤、排序、Pareto 比较                                                                                | 物化获批候选               |
-| 多设施覆盖         | 候选、需求点、距离/容量矩阵       | facility-location / CP-SAT                                                                               | 物化获批设施集合           |
-| 用地组合           | 地块、兼容性、面积和政策因子      | MILP / CP-SAT / bounded enumeration；当前已接入`parcel_assignment_bounded` 处理闭合的共享 BSM 容量组合 | 写入获批地块组合及属性     |
-| 道路连通           | 网络、端点、禁入区、成本          | 图搜索、最短路、Steiner/network heuristic                                                                | 物化获批 route geometry    |
-| 分区布局           | 可用面、邻接关系和拓扑因子        | adjacency/topology constraint solver                                                                     | 物化获批分区几何           |
-| 生态避让           | 生态图层和 hard exclusion overlay | 可行域裁剪及方案比较                                                                                     | 物化获批且已裁剪的结果     |
-| 线性走廊           | 网络/栅格成本面和端点             | network/corridor algorithm                                                                               | 物化获批走廊               |
-| 小规模人工候选比较 | 候选及指标                        | 确定性 Pareto                                                                                            | 物化人工批准项             |
-| 开放性空间构思     | 真实底图和约束上下文              | LLM 生成方案原型，随后重新 grounding 和确定性检查                                                        | 只物化通过检查并获批的原型 |
-
-边界判定规则是：只要一个动作会比较替代、改变候选成员、选择路线或改变规划结果，它就属于批准之前的 GROUND/SELECT。EXECUTE 中的 LLM 只能选择获批包络内的注册物化 recipe、解释工具 observation 和提出等价恢复；worker 只执行确定性转换、切片、拓扑修复、序列化和写入，equivalence checker 对任何恢复拥有否决权。
-
-### Parcel availability, sub-parcel allocation, and adjacency
-
-地块可用性必须区分“源地块本身不可用”和“本次只分配源地块的一部分”，不能用单一 `available` 布尔值替代面积与几何分割：
-
-- `fully_unavailable`：`eligible_area_ha=0`，不得生成正式候选、ScenarioSet 成员或 EXECUTE task；
-- `partially_available`：只有一部分源地块通过硬约束，候选必须携带裁切后的 eligible geometry、`excluded_area_ha`、排除依据和同一 `source_bsms`；
-- `fully_available`：源地块整体可用，但 `coverage_ratio<1` 仍可能表示本次项目只分配一个 footprint。EXECUTE 必须生成获批 footprint 与同源 preserve/remainder，不能把整个源 BSM 改写成规划用地；
-- `unknown`：面积、几何或排除原因无法闭合时 fail-closed，不得降级成普通单点选址。
-
-大地块的候选切割属于 GROUND/SELECT 的候选与方案语义；EXECUTE 只能按已批准的 candidate geometry 和面积预算确定性物化。候选必须保留精确 suitability source area，避免用粗粒度合并面积覆盖精确 BSM 面积。邻接地块默认只是证据和上下文，不因“相邻”自动合并或写入周围地块；只有 typed adjacency/topology relation、明确的邻地成员/几何、对应 evidence refs 和获批的额外 worker task 同时存在时，EXECUTE 才能联动处理周围地块。
-
-## 6. Human authority and fail-closed behavior
-
-以下情况必须进入人工裁决或产生显式的不完整结果：
-
-- 必需来源互相矛盾且规则无法决定权威性；
-- 语义地点只能得到多个高风险实体或推断几何；
-- 候选域为空，或所有方案均违反硬约束；
-- Pareto 方案之间涉及未编码的政策、伦理或社区偏好；
-- 获批后问题、方案、baseline 或数据快照 fingerprint 发生变化；
-- 原子物化、独立验证或 lineage 对账失败。
-
-人工可以：澄清目标、批准降级证据、选择 Pareto 方案、调整软偏好、明确修改硬约束或放弃任务。人工批准不能把缺失几何、错误身份、违反硬约束或串版结果变成技术上有效。
-
-系统必须 fail closed：未通过 `ValidationCertificate` 和 `ReconciliationReport` 的运行只能产生诊断性成果，不得标记为正式规划交付。
-
-## 7. Completion definition
-
-完成状态是逐级门控，不是一个模糊的 `success`：
-
-| 状态                            | 最低条件                                                                              |
-| ------------------------------- | ------------------------------------------------------------------------------------- |
-| `evidence_sufficient`         | 所有必需 EvidenceRequirement 已支持或获明确降级批准；范围和缺口已记录                 |
-| `candidate_complete`          | 每个可执行目标都有闭合集、身份、几何、快照、CRS 和排除记录；无未批准的关键 unresolved |
-| `scenario_feasible`           | 至少一个方案满足全部硬约束，或以冲突解释正式返回 infeasible                           |
-| `scenario_optimal_or_bounded` | 已给出最优、可证明界限、Pareto 前沿或明确的预算终止状态                               |
-| `execution_complete`          | 获批方案全部物化、无意外对象、原子提交成功                                            |
-| `validation_passed`           | 硬约束违规为零，selected-to-materialized coverage 为 100%，快照 lineage 一致          |
-| `delivery_complete`           | 同一 run-root/snapshot 的地图、报告、导出和证书都进入`DeliveryManifest`             |
-
-如果规划问题被证明不可行，系统可以完成“诊断任务”，但不能把它标记为 `scenario_feasible` 或正式交付。有效的 infeasible 结果必须携带冲突约束、涉及目标、证据引用和可供人工选择的最小放宽建议。
-
-## 8. Explicitly retired designs
-
-以下设计不再具有规范权威：
-
-- 以单次向量检索或单一 top-k 文本集合代表完整证据；
-- 将 professional RAG 与 session 本地报告检索混成一个隐式 fallback；
-- 让 LLM、KG 模糊命中或报告文字直接产生坐标和 GIS 几何；
-- 把 GROUND 的候选评分当作最终选址；
-- 同时以 `SiteSelectionDecision`、聚合选择和 `PlanningScenario` 作为多个权威选择结果；
-- 只生成一个加权 winner，且不报告可行替代、Pareto 或不可行原因；
-- 把每条非行动 claim 一对一投影为可执行空间目标；
-- 让 EXECUTE worker 或诊断 LLM 执行候选比较、设施选址、道路寻路或分区布局等规划决策；
-- 允许 EXECUTE 在运行时重选地点或部分提交正式状态；
-- 以 ValidationReport 中零散 findings 代替可门控的 `ValidationCertificate`；
-- 用日期状态页、实施台账或模块蓝图重新定义总体主链；
-- 把 clone-only、旧 snapshot 或现状复制结果描述为默认 live 完成。
-
-历史材料保存在 `../_archive/`，只用于追溯。目标与当前实现差距统一记录在 `05_MIGRATION.md`。
+目标能力、当前行为和迁移状态严格分开：本文件定义目标；[CURRENT_RUNTIME.md](../architecture/CURRENT_RUNTIME.md) 记录观察到的代码与 live 证据；[05_MIGRATION.md](05_MIGRATION.md) 是唯一 target-to-current ledger。
