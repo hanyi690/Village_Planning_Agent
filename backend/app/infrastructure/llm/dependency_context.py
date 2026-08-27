@@ -5,7 +5,7 @@ from collections.abc import Collection
 import json
 from typing import Any
 
-from app.infrastructure.llm.context_manager import render_dependency_table
+from app.infrastructure.llm.context_manager import render_dependency_table, render_table
 from app.infrastructure.reports.report_store import ReportStore
 
 

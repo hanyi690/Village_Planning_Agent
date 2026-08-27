@@ -111,7 +111,11 @@ def _records_from_context(context: Any) -> list[dict[str, str]]:
             ))
 
     snapshot_ref = _text(getattr(context, "l1_snapshot_ref", "")) or "snapshot"
-    for index, fact in enumerate(list(getattr(context, "location_facts", []) or [])[:48]):
+    for index, fact in enumerate(list(
+        getattr(context, "location_mentions", None)
+        or getattr(context, "location_facts", None)
+        or []
+    )[:48]):
         mention = _text(getattr(fact, "mention", ""))
         span = _text(getattr(fact, "source_span", ""))
         spatial_hint = _text(getattr(fact, "spatial_hint", ""))

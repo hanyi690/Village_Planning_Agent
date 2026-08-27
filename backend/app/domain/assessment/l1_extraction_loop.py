@@ -10,11 +10,20 @@ from typing import Any, Awaitable, Callable
 
 from pydantic import TypeAdapter
 
-from app.contracts.domain.l1_contracts import L1DimensionPassState, L1SourceIndex
+from app.contracts.domain.l1_contracts import (
+    L1DimensionInput,
+    L1DimensionPassState,
+    L1InputContext,
+    L1SourceIndex,
+)
 from app.domain.assessment.source_index import render_l1_source_index
 from app.domain.assessment.observation_draft import (
     L1PlanningFactDraft,
+    L1DimensionCheckpoint,
+    L1DimensionOutput,
+    L1DisplayProjection,
     L1ReportOutput,
+    L1SemanticOutput,
     l1_observation_provider_model_for_dimension,
     normalize_l1_observation_provider_output,
 )
@@ -34,6 +43,8 @@ class L1DimensionRunResult:
     diagnostics: list[str] = field(default_factory=list)
     cursor: L1DimensionPassState | None = None
     retrieval_trace: list[dict[str, Any]] = field(default_factory=list)
+    input_context: L1InputContext | None = None
+    output: L1DimensionOutput | None = None
 
 
 def _unique(values: list[str]) -> list[str]:
@@ -68,6 +79,61 @@ def _source_pages(
     if current:
         pages.append(source_index.model_copy(update={"source_segments": current}))
     return pages or [source_index]
+
+
+def build_l1_input_context(
+    *,
+    dimension_key: str,
+    source_index: L1SourceIndex | None,
+    session_id: str = "",
+    source_index_ref: Any = "",
+    allowed_fact_types: tuple[str, ...] | list[str] | None = None,
+) -> L1InputContext:
+    """Build the single dimension-level context shared by L1 input/output."""
+
+    if allowed_fact_types is None:
+        from app.domain.assessment.dimension_contracts import (
+            get_dimension_semantic_contract,
+        )
+
+        allowed_fact_types = tuple(
+            get_dimension_semantic_contract(dimension_key, 1).get(
+                "l1_fact_types", []
+            )
+            or []
+        )
+    if isinstance(source_index_ref, dict):
+        source_index_ref = source_index_ref.get("descriptor_digest") or source_index_ref.get(
+            "digest"
+        ) or ""
+    pages = _source_pages(source_index)
+    return L1InputContext(
+        session_id=str(session_id or ""),
+        dimension_key=dimension_key,
+        source_index_ref=str(source_index_ref or ""),
+        source_digest=str(getattr(source_index, "source_digest", "") or ""),
+        source_page_count=len(pages),
+        allowed_fact_types=tuple(allowed_fact_types or ()),
+    )
+
+
+def _page_input(
+    context: L1InputContext,
+    page_index: int,
+    source_page: L1SourceIndex | None,
+) -> L1DimensionInput:
+    """Create and validate one source-page projection from the shared context."""
+
+    segment_ids = tuple(
+        segment.segment_id
+        for segment in (getattr(source_page, "source_segments", []) or [])
+    )
+    return L1DimensionInput(
+        context=context,
+        page_index=page_index,
+        page_segment_ids=segment_ids,
+        source_page=source_page,
+    )
 
 
 def _observation_key(observation: Any) -> str:
@@ -110,7 +176,7 @@ def _observation_label(observation: Any) -> str:
 def _validate_observation_sources(
     observations: list[Any],
     source_index: L1SourceIndex | None,
-) -> tuple[list[Any], list[str]]:
+) -> tuple[list[Any], list[str], int]:
     """Verify fact evidence locators against generic source segments."""
 
     segments = {
@@ -118,9 +184,10 @@ def _validate_observation_sources(
         for segment in (getattr(source_index, "source_segments", []) or [])
     }
     if not observations:
-        return observations, []
+        return observations, [], 0
     diagnostics: list[str] = []
     validated: list[Any] = []
+    rejected_count = 0
     for item in observations:
         try:
             observation = (
@@ -130,6 +197,7 @@ def _validate_observation_sources(
             )
         except Exception:
             diagnostics.append("observation_source_invalid")
+            rejected_count += 1
             continue
         ids = [
             str(value).strip()
@@ -150,6 +218,7 @@ def _validate_observation_sources(
         if not evidence_ok:
             name = _observation_label(observation)
             diagnostics.append(f"observation_source_quarantined:{name}")
+            rejected_count += 1
             continue
         else:
             canonical_refs = list(
@@ -162,7 +231,7 @@ def _validate_observation_sources(
             )
             observation = observation.model_copy(update={"source_refs": canonical_refs})
         validated.append(observation)
-    return validated, diagnostics
+    return validated, diagnostics, rejected_count
 
 
 def _dimension_mismatch_diagnostics(
@@ -202,17 +271,39 @@ async def _write_checkpoint(
     observations: list[Any],
     diagnostics: list[str],
     cursor: L1DimensionPassState,
+    input_context: L1InputContext,
+    rejected_count: int,
 ) -> None:
     if writer is None:
         return
+    semantic = L1SemanticOutput(
+        context=input_context,
+        observations=observations,
+        diagnostics=_unique(diagnostics),
+        accepted_count=len(observations),
+        rejected_count=max(0, int(rejected_count)),
+        status=(
+            cursor.status
+            if cursor.status in {"running", "complete", "diagnostic"}
+            else "diagnostic"
+        ),
+    )
+    output = L1DimensionOutput(
+        semantic=semantic,
+        display=L1DisplayProjection(
+            report_body=report_body,
+            input_digest=input_context.input_digest,
+            source_observation_count=len(observations),
+        ),
+    )
+    checkpoint = L1DimensionCheckpoint(
+        context=input_context,
+        output=output,
+        cursor=cursor,
+    )
     payload = {
+        "l1_checkpoint": checkpoint.model_dump(mode="json"),
         "pass": pass_name,
-        "report_body": report_body,
-        "observations": [
-            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
-            for item in observations
-        ],
-        "diagnostics": _unique(diagnostics),
         "cursor": cursor.model_dump(mode="json"),
     }
     result = writer(payload)
@@ -220,11 +311,41 @@ async def _write_checkpoint(
         await result
 
 
+def _build_l1_output(
+    *,
+    input_context: L1InputContext,
+    report_body: str,
+    observations: list[Any],
+    diagnostics: list[str],
+    rejected_count: int,
+    status: str,
+) -> L1DimensionOutput:
+    """Build the only L1 output envelope exposed beyond the loop."""
+
+    normalized_status = status if status in {"running", "complete", "diagnostic"} else "diagnostic"
+    return L1DimensionOutput(
+        semantic=L1SemanticOutput(
+            context=input_context,
+            observations=observations,
+            diagnostics=_unique(diagnostics),
+            accepted_count=len(observations),
+            rejected_count=max(0, int(rejected_count)),
+            status=normalized_status,
+        ),
+        display=L1DisplayProjection(
+            report_body=report_body,
+            input_digest=input_context.input_digest,
+            source_observation_count=len(observations),
+        ),
+    )
+
+
 async def run_l1_dimension_loop(
     *,
     dimension_key: str,
-    prompt: str,
     source_index: L1SourceIndex | None,
+    input_context: L1InputContext | None = None,
+    prompt: str = "",
     runner_kwargs: dict[str, Any] | None = None,
     checkpoint_writer: CheckpointWriter | None = None,
     resume_payload: dict[str, Any] | None = None,
@@ -244,8 +365,58 @@ async def run_l1_dimension_loop(
         render_dimension_semantic_contract,
     )
 
+    semantic_contract = get_dimension_semantic_contract(dimension_key, 1)
+    allowed_fact_types = tuple(semantic_contract.get("l1_fact_types", []) or [])
     source_digest = str(getattr(source_index, "source_digest", "") or "")
-    resume_payload = resume_payload or {}
+    source_pages = _source_pages(source_index)
+    source_page_count = len(source_pages)
+    if input_context is None:
+        input_context = build_l1_input_context(
+            dimension_key=dimension_key,
+            source_index=source_index,
+            allowed_fact_types=allowed_fact_types,
+        )
+    else:
+        if input_context.dimension_key != dimension_key:
+            raise ValueError("L1 input context dimension does not match the run")
+        if (
+            input_context.source_digest
+            and source_digest
+            and input_context.source_digest != source_digest
+        ):
+            raise ValueError("L1 input context source digest does not match the run")
+        if input_context.allowed_fact_types and tuple(
+            input_context.allowed_fact_types
+        ) != allowed_fact_types:
+            raise ValueError("L1 input context fact types do not match the run")
+        input_context = L1InputContext.model_validate({
+            **input_context.model_dump(mode="python"),
+            "source_digest": source_digest,
+            "source_page_count": source_page_count,
+            "allowed_fact_types": allowed_fact_types,
+            "input_digest": "",
+        })
+
+    resume_payload = dict(resume_payload or {})
+    checkpoint_payload = resume_payload.get("l1_checkpoint") or resume_payload.get(
+        "checkpoint"
+    )
+    if checkpoint_payload:
+        try:
+            checkpoint = L1DimensionCheckpoint.model_validate(checkpoint_payload)
+            if checkpoint.context.input_digest != input_context.input_digest:
+                resume_payload = {}
+            else:
+                resume_payload = {
+                    "report_body": checkpoint.output.display.report_body,
+                    "observations": checkpoint.output.semantic.observations,
+                    "diagnostics": checkpoint.output.semantic.diagnostics,
+                    "rejected_count": checkpoint.output.semantic.rejected_count,
+                    "cursor": checkpoint.cursor.model_dump(mode="json"),
+                }
+        except Exception:
+            resume_payload = {}
+
     if previous_cursor is None and isinstance(resume_payload.get("cursor"), dict):
         try:
             previous_cursor = L1DimensionPassState.model_validate(
@@ -262,6 +433,10 @@ async def run_l1_dimension_loop(
             and previous_cursor.source_digest
             and previous_cursor.source_digest != source_digest
         )
+        or (
+            previous_cursor.input_digest
+            and previous_cursor.input_digest != input_context.input_digest
+        )
     ):
         previous_cursor = None
         resume_payload = {}
@@ -270,9 +445,12 @@ async def run_l1_dimension_loop(
     cursor = previous_cursor or L1DimensionPassState(
         dimension_key=dimension_key,
         source_digest=source_digest,
+        input_digest=input_context.input_digest,
         max_attempts=max_attempts,
         max_calls=max_calls,
     )
+    if cursor.input_digest != input_context.input_digest:
+        cursor = cursor.model_copy(update={"input_digest": input_context.input_digest})
     diagnostics = [
         *resume_diagnostics,
         *list(cursor.diagnostics),
@@ -281,10 +459,12 @@ async def run_l1_dimension_loop(
     retrieval_trace: list[dict[str, Any]] = []
     report_body = str(resume_payload.get("report_body") or "").strip()
     observations: list[Any] = list(resume_payload.get("observations") or [])
-    observations, source_diagnostics = _validate_observation_sources(
+    rejected_count = max(0, int(resume_payload.get("rejected_count") or 0))
+    observations, source_diagnostics, source_rejected_count = _validate_observation_sources(
         observations,
         source_index,
     )
+    rejected_count += source_rejected_count
     diagnostics.extend(source_diagnostics)
     diagnostics.extend(
         _dimension_mismatch_diagnostics(
@@ -294,12 +474,22 @@ async def run_l1_dimension_loop(
     )
 
     if cursor.status == "complete" and report_body:
+        output = _build_l1_output(
+            input_context=input_context,
+            report_body=report_body,
+            observations=observations,
+            diagnostics=diagnostics,
+            rejected_count=rejected_count,
+            status="complete",
+        )
         return L1DimensionRunResult(
             report_body=report_body,
             observations=observations,
             diagnostics=_unique(diagnostics),
             cursor=cursor,
             retrieval_trace=retrieval_trace,
+            input_context=input_context,
+            output=output,
         )
     if cursor.status == "complete":
         cursor = cursor.model_copy(update={"pass_name": "report", "status": "running"})
@@ -337,13 +527,9 @@ async def run_l1_dimension_loop(
                 base_kwargs.get("timeout_includes_queue", False)
             ),
         )
-    semantic_contract = get_dimension_semantic_contract(dimension_key, 1)
-    allowed_fact_types = tuple(semantic_contract.get("l1_fact_types", []) or [])
     allowed_fact_types_json = json.dumps(
         list(allowed_fact_types), ensure_ascii=False, separators=(",", ":")
     )
-    source_pages = _source_pages(source_index)
-    source_page_count = len(source_pages)
     if cursor.source_page_count != source_page_count:
         cursor = cursor.model_copy(
             update={"source_page_count": source_page_count}
@@ -381,8 +567,25 @@ async def run_l1_dimension_loop(
                 diagnostics.append("l1_observe_page_budget_exhausted")
                 break
             page_index = min(cursor.source_page_index, source_page_count - 1)
+            page_input = _page_input(
+                input_context,
+                page_index,
+                source_pages[page_index],
+            )
+            page_context_json = json.dumps(
+                {
+                    "context": page_input.context.model_dump(mode="json"),
+                    "page_index": page_input.page_index,
+                    "page_segment_ids": list(page_input.page_segment_ids),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
             page_system = (
                 observe_system
+                + "【L1DimensionInput context】\n"
+                + page_context_json
+                + "\n"
                 + f"【L1 source page {page_index + 1}/{source_page_count}】\n"
                 "本次只处理这一页中的 source_segment；没有出现在本页的来源不得引用。"
                 "若本页没有本维度事实，返回空 observations 数组。\n\n"
@@ -398,7 +601,10 @@ async def run_l1_dimension_loop(
                 ),
                 [
                     {"role": "system", "content": page_system},
-                    {"role": "user", "content": prompt},
+                    {
+                        "role": "user",
+                        "content": "请仅依据 system 中声明的 L1DimensionInput 输出 typed observations。",
+                    },
                 ],
             )
             output = normalize_l1_observation_provider_output(
@@ -412,10 +618,12 @@ async def run_l1_dimension_loop(
                 for value in (getattr(output, "diagnostics", []) or [])
                 if str(value).strip()
             )
-            page_observations, source_diagnostics = _validate_observation_sources(
+            rejected_count += len(getattr(output, "quarantined_observations", []) or [])
+            page_observations, source_diagnostics, page_rejected_count = _validate_observation_sources(
                 list(output.observations or []),
                 source_pages[page_index],
             )
+            rejected_count += page_rejected_count
             diagnostics.extend(source_diagnostics)
             diagnostics.extend(
                 _dimension_mismatch_diagnostics(
@@ -443,6 +651,8 @@ async def run_l1_dimension_loop(
                 observations=observations,
                 diagnostics=diagnostics,
                 cursor=cursor,
+                input_context=input_context,
+                rejected_count=rejected_count,
             )
             if page_complete:
                 break
@@ -483,6 +693,13 @@ async def run_l1_dimension_loop(
             report_material = "\n".join(report_rows)
             report_system = (
                 f"【L1 report synthesis pass; dimension_key={dimension_key}】\n"
+                "【L1 input context】\n"
+                + json.dumps(
+                    input_context.model_dump(mode="json"),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                + "\n\n"
                 "只生成面向规划人员的现状分析正文 report_body。"
                 "正文只能解释下面已经通过结构和来源校验的 observations；"
                 "不得新增事实、数量、位置、需求点、关系或规划建议。"
@@ -538,6 +755,16 @@ async def run_l1_dimension_loop(
         observations=observations,
         diagnostics=diagnostics,
         cursor=cursor,
+        input_context=input_context,
+        rejected_count=rejected_count,
+    )
+    output = _build_l1_output(
+        input_context=input_context,
+        report_body=report_body,
+        observations=observations,
+        diagnostics=diagnostics,
+        rejected_count=rejected_count,
+        status=final_status,
     )
     return L1DimensionRunResult(
         report_body=report_body,
@@ -545,7 +772,13 @@ async def run_l1_dimension_loop(
         diagnostics=_unique(diagnostics),
         cursor=cursor,
         retrieval_trace=retrieval_trace,
+        input_context=input_context,
+        output=output,
     )
 
 
-__all__ = ["L1DimensionRunResult", "run_l1_dimension_loop"]
+__all__ = [
+    "L1DimensionRunResult",
+    "build_l1_input_context",
+    "run_l1_dimension_loop",
+]

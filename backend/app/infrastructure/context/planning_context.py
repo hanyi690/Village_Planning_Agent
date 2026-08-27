@@ -57,8 +57,8 @@ class PlanningContext:
             refs; the current-road snapshot is built when the layer is present.
         demands: Typed demand snapshots keyed by explicit demand refs. An empty
             mapping is intentional until a producer supplies real demand points.
-        location_facts: Typed L1 place mentions used by EvidenceGraph; these
-            are not final candidate selections.
+        location_mentions: Typed L1 place mentions used by EvidenceGraph;
+            these are not final candidate selections.
         evidence_graph: Session-scoped join boundary for L1, KG and bundle
             identity (may be None while context hydration is incomplete).
         external_search_port: Lifecycle-owned optional text evidence provider;
@@ -88,6 +88,9 @@ class PlanningContext:
     report_summary_index: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     l1_snapshot_ref: str = ""
     l1_fact_records: List[Any] = field(default_factory=list)
+    location_mentions: List[Any] = field(default_factory=list)
+    # Read compatibility for persisted callers created before the contract
+    # rename. New code should use location_mentions.
     location_facts: List[Any] = field(default_factory=list)
     source_semantic_decisions: Dict[str, Any] = field(default_factory=dict)
     source_semantic_fingerprint: str = ""
@@ -104,6 +107,10 @@ class PlanningContext:
     _content_inputs: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.location_mentions:
+            self.location_facts = self.location_mentions
+        elif self.location_facts:
+            self.location_mentions = self.location_facts
         if not self.capabilities:
             self._record_capabilities()
         if not self.content_hash:
@@ -196,7 +203,7 @@ class PlanningContext:
             "evidence_graph_key": self.evidence_graph_key,
             "report_count": len(self.reports),
             "reports_loaded": self.reports_loaded,
-            "location_fact_count": len(self.location_facts),
+            "location_mention_count": len(self.location_mentions),
             "l1_fact_record_count": len(self.l1_fact_records),
             "source_semantic_decision_count": len(self.source_semantic_decisions),
             "source_semantic_fingerprint": self.source_semantic_fingerprint,

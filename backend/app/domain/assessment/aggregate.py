@@ -54,10 +54,10 @@ def _dedup_sources(sources: list[EvidenceSource]) -> list[EvidenceSource]:
     return result
 
 
-def _dedup_location_facts(facts: list[Any]) -> list[Any]:
+def _dedup_location_mentions(mentions: list[Any]) -> list[Any]:
     seen: set[tuple[str, str, str, str]] = set()
     result: list[Any] = []
-    for fact in facts:
+    for fact in mentions:
         key = (
             str(getattr(fact, "normalized_name", "")),
             str(getattr(fact, "role", "")),
@@ -69,6 +69,12 @@ def _dedup_location_facts(facts: list[Any]) -> list[Any]:
         seen.add(key)
         result.append(fact)
     return result
+
+
+def _dedup_location_facts(facts: list[Any]) -> list[Any]:
+    """Compatibility wrapper for the retired location-fact helper name."""
+
+    return _dedup_location_mentions(facts)
 
 
 def _dedup_fact_records(records: list[L1Fact]) -> list[L1Fact]:
@@ -190,7 +196,7 @@ def merge_l1_snapshots(
     opportunities: list[str] = []
     evidence_gaps: list[EvidenceGap] = []
     classification_refs: list[ClassificationRef] = []
-    location_facts: list[Any] = []
+    location_mentions: list[Any] = []
     dimension_provenance: list[Provenance] = []
     source_refs: list[str] = []
     facts_by_dimension: dict[str, list[str]] = {}
@@ -206,7 +212,7 @@ def merge_l1_snapshots(
         opportunities.extend(partial.opportunities)
         evidence_gaps.extend(partial.evidence_gaps)
         classification_refs.extend(partial.classification_refs)
-        location_facts.extend(partial.location_facts)
+        location_mentions.extend(partial.location_mentions)
         for dimension, values in partial.facts_by_dimension.items():
             facts_by_dimension.setdefault(dimension, []).extend(values)
         for dimension, values in partial.spatial_facts_by_dimension.items():
@@ -228,7 +234,7 @@ def merge_l1_snapshots(
             dimension: _dedup(values)
             for dimension, values in facts_by_dimension.items()
         },
-        location_facts=_dedup_location_facts(location_facts),
+        location_mentions=_dedup_location_mentions(location_mentions),
         constraints=_dedup(constraints),
         issues=issues,
         opportunities=_dedup(opportunities),
@@ -464,7 +470,7 @@ async def l1_aggregate(
                 "fact_record_count": len(snapshot.fact_records),
                 "facts_produced": snapshot.facts,
                 "facts_by_dimension": snapshot.facts_by_dimension,
-                "location_facts": [fact.model_dump(mode="json") for fact in snapshot.location_facts],
+                "location_mentions": [fact.model_dump(mode="json") for fact in snapshot.location_mentions],
                 "kg_evidence_produced": {
                     "fact_count": kg_fact_count,
                     "fact_statements": kg_facts,

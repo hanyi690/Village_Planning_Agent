@@ -7,6 +7,7 @@ import hashlib
 import json
 
 from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
+from app.contracts.domain.l1_contracts import LocationScopeMention
 from app.contracts.evidence.identity_contracts import (
     EvidenceObservation,
     EvidenceObservationSnapshot,
@@ -57,8 +58,34 @@ class ObservationStore:
         return list(snapshot.observations)
 
     @staticmethod
-    def from_location_facts(facts: list[object]) -> list[EvidenceObservation]:
-        """Convert existing L1 facts without inventing missing source fields."""
+    def _scope_mentions(fact: object) -> list[LocationScopeMention]:
+        raw = getattr(fact, "scope_mentions", None)
+        if raw in (None, "", []):
+            raw = getattr(fact, "scopes", None)
+        if raw in (None, "", []):
+            raw = [
+                {"name": value, "role": "natural_village"}
+                for value in (getattr(fact, "village_scopes", None) or [])
+            ]
+            raw.extend(
+                {"name": value, "role": "place"}
+                for value in (getattr(fact, "place_scopes", None) or [])
+            )
+        if isinstance(raw, str):
+            return []
+        result: list[LocationScopeMention] = []
+        for item in raw or []:
+            try:
+                scope = item if isinstance(item, LocationScopeMention) else LocationScopeMention.model_validate(item)
+            except Exception:
+                continue
+            if scope.name.strip():
+                result.append(scope)
+        return result
+
+    @staticmethod
+    def from_location_mentions(facts: list[object]) -> list[EvidenceObservation]:
+        """Convert canonical L1 location mentions without inventing fields."""
 
         observations: list[EvidenceObservation] = []
         for index, fact in enumerate(facts or []):
@@ -76,6 +103,7 @@ class ObservationStore:
             evidence_refs = [
                 str(item) for item in (getattr(fact, "evidence_refs", None) or []) if item
             ]
+            scope_mentions = ObservationStore._scope_mentions(fact)
             identity_payload = {
                 "index": index,
                 "name": name,
@@ -87,6 +115,9 @@ class ObservationStore:
                 "source_refs": source_refs,
                 "evidence_refs": evidence_refs,
                 "geometry_ref": str(getattr(fact, "geometry_ref", "") or ""),
+                "scope_mentions": [
+                    scope.model_dump(mode="json") for scope in scope_mentions
+                ],
             }
             digest = hashlib.sha256(
                 json.dumps(identity_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -107,6 +138,7 @@ class ObservationStore:
                     relation_mentions=list(
                         getattr(fact, "related_mentions", None) or []
                     ),
+                    scope_mentions=scope_mentions,
                     source_span=str(getattr(fact, "source_span", "") or ""),
                     report_section=str(getattr(fact, "dimension_key", "") or ""),
                     source_document_ref=str(
@@ -116,11 +148,17 @@ class ObservationStore:
                     source_refs=source_refs,
                     evidence_refs=evidence_refs,
                     confidence=float(getattr(fact, "confidence", 0.0) or 0.0),
-                    extraction_method="l1_location_fact",
+                    extraction_method="l1_location_mention",
                     geometry_ref=getattr(fact, "geometry_ref", None),
                 )
             )
         return observations
+
+    @staticmethod
+    def from_location_facts(facts: list[object]) -> list[EvidenceObservation]:
+        """Compatibility alias for callers that still use the old field name."""
+
+        return ObservationStore.from_location_mentions(facts)
 
 
 __all__ = ["ObservationStore"]

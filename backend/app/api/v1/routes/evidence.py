@@ -30,7 +30,7 @@ async def query_session_evidence(
     geometry remains bundle-authoritative and is returned only as a feature
     reference inside ``EvidencePacket``.
     """
-    from app.application.queries.evidence import prepare_evidence_context
+    from app.evidence.retrieval.context_hydration import prepare_evidence_context
     from app.evidence.retrieval.evidence_service import retrieve_evidence
 
     external_port = None
@@ -74,10 +74,8 @@ async def query_session_evidence(
         external_port = None
         external_policy = None
         if request.include_external:
-            from app.application.queries.evidence import (
-                build_external_evidence_policy,
-                get_configured_external_provider,
-            )
+            from app.infrastructure.search.provider_registry import get_configured_external_provider
+            from app.evidence.retrieval.context_hydration import build_external_evidence_policy
 
             app_state = getattr(
                 getattr(transport_request, "app", None),

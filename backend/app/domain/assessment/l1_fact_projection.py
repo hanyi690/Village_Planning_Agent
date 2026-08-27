@@ -7,7 +7,7 @@ import json
 import re
 from typing import Any, Iterable
 
-from app.contracts.domain.l1_contracts import L1Fact, L1LocationFact
+from app.contracts.domain.l1_contracts import L1Fact, LocationMention
 
 
 def _text(value: Any) -> str:
@@ -96,8 +96,8 @@ def make_l1_fact(
     )
 
 
-def location_fact_to_l1_fact(
-    fact: L1LocationFact,
+def location_mention_to_l1_fact(
+    fact: LocationMention,
     *,
     snapshot_ref: str = "",
 ) -> L1Fact | None:
@@ -106,8 +106,14 @@ def location_fact_to_l1_fact(
     statement = f"L1空间事实：{mention}（角色={role}）"
     if _text(fact.spatial_hint):
         statement += f"，空间提示={_text(fact.spatial_hint)}"
-    if fact.related_mentions:
-        statement += f"，关联={'、'.join(_refs(fact.related_mentions)[:6])}"
+    scope_names = [
+        _text(scope.normalized_name or scope.name)
+        for scope in fact.scopes
+        if _text(scope.normalized_name or scope.name)
+    ]
+    related_mentions = _refs([*fact.related_mentions, *scope_names])
+    if related_mentions:
+        statement += f"，关联={'、'.join(related_mentions[:6])}"
     refs = [
         _text(fact.source_report_ref),
         *_refs(fact.evidence_refs),
@@ -125,11 +131,34 @@ def location_fact_to_l1_fact(
             "normalized_name": _text(fact.normalized_name),
             "role": role,
             "spatial_hint": _text(fact.spatial_hint),
+            "scopes": json.dumps(
+                [
+                    {
+                        "name": scope.name,
+                        "normalized_name": scope.normalized_name,
+                        "role": scope.role,
+                        "relation_to_target": scope.relation_to_target,
+                    }
+                    for scope in fact.scopes
+                ],
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
         },
         source_refs=refs,
         source_span=fact.source_span,
         source_snapshot_ref=snapshot_ref,
     )
+
+
+def location_fact_to_l1_fact(
+    fact: LocationMention,
+    *,
+    snapshot_ref: str = "",
+) -> L1Fact | None:
+    """Compatibility wrapper for the retired function name."""
+
+    return location_mention_to_l1_fact(fact, snapshot_ref=snapshot_ref)
 
 
 def evidence_fact_to_l1_fact(

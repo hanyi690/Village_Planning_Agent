@@ -134,7 +134,8 @@ def _fallback_l3_intent_summary(
     ]
     if not statements:
         return f"{dimension_key}：已形成 {len(claim_set.claims)} 条待接地规划意图。"
-    return f"{dimension_key}：已形成 {len(claim_set.claims)} 条待接地规划意图。" + "；".join(statements)
+    summary = f"{dimension_key}：已形成 {len(claim_set.claims)} 条待接地规划意图。" + "；".join(statements)
+    return summary[:2400]
 
 
 def _projection_cache_path(
@@ -1373,6 +1374,8 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             "claims_with_evidence": sum(
                 _claim_lineage_present(claim) for claim in claim_set.claims
             ),
+            "summary_status": summary_status,
+            "summary_source": "l3_intent_summary",
             "intent_summary_status": summary_status,
         },
         ensure_ascii=False,

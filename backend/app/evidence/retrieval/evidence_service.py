@@ -200,7 +200,11 @@ def _context_evidence_digest(session_id: str) -> str:
         "source_semantic_decisions": _typed_dump(
             getattr(context, "source_semantic_decisions", {}) or {}
         ),
-        "location_facts": _typed_dump(getattr(context, "location_facts", []) or []),
+        "location_mentions": _typed_dump(
+            getattr(context, "location_mentions", None)
+            or getattr(context, "location_facts", [])
+            or []
+        ),
         "l1_fact_records": _typed_dump(getattr(context, "l1_fact_records", []) or []),
     }
     raw = json.dumps(
@@ -773,7 +777,7 @@ async def retrieve_evidence(
 
         cached_context = get_cached_context(session_id)
         if cached_context is not None:
-            from app.application.queries.evidence import (
+            from app.evidence.retrieval.context_hydration import (
                 hydrate_source_semantic_context,
             )
 
@@ -1698,7 +1702,7 @@ async def retrieve_evidence_for_gate(
     ).strip().lower() in {"1", "true", "yes", "on"}
     if external_enabled:
         try:
-            from app.application.queries.evidence import (
+            from app.infrastructure.search.provider_registry import (
                 get_active_external_provider,
                 get_configured_external_provider,
             )
@@ -1738,9 +1742,7 @@ async def retrieve_evidence_for_gate(
             try:
                 external_policy = None
                 if external_port is not None:
-                    from app.application.queries.evidence import (
-                        build_external_evidence_policy,
-                    )
+                    from app.evidence.retrieval.context_hydration import build_external_evidence_policy
 
                     external_policy = build_external_evidence_policy(
                         request.dimension_key

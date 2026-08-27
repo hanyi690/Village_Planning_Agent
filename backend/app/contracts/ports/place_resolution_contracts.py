@@ -15,6 +15,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from app.contracts.artifacts.contract_meta import ContractMeta
+from app.contracts.spatial.spatial_reference_contracts import SearchScopeRef
 
 
 class PlaceResolutionCandidate(BaseModel):
@@ -98,6 +99,7 @@ class PlaceResolutionResult(ContractMeta):
     evidence_refs: list[str] = []
     query_trace: list[dict[str, Any]] = []
     unresolved_reason: str | None = None
+    search_scope: SearchScopeRef | None = None
 
 
 class PlaceEvidenceEntry(BaseModel):

@@ -384,14 +384,79 @@ def _extract_location_mentions_from_observations(
                 normalized_name = str(
                     mention.get("normalized_name") or target_name
                 ).strip()
-                mention_role = str(mention.get("role") or "").strip()
-                mention_role = mention_role or base_role
-                scopes = list(mention.get("scopes") or [])
-                if not scopes:
-                    scopes = _split_explicit_places(location)
-                if not scopes:
-                    scopes = [""]
+                mention_role = _scope_role(
+                    mention.get("role"),
+                    default=base_role,
+                )
                 mention_relation = str(mention.get("relation") or relation).strip()
+                raw_scope_mentions = list(mention.get("scope_mentions") or [])
+                if not raw_scope_mentions:
+                    raw_scope_mentions = [
+                        {
+                            "name": scope,
+                            "normalized_name": scope,
+                            "role": "unknown",
+                            "relation_to_target": mention_relation or "located_in",
+                        }
+                        for scope in _split_explicit_places(location)
+                    ]
+                scope_mentions: list[LocationScopeMention] = []
+                for raw_scope in raw_scope_mentions:
+                    if isinstance(raw_scope, str):
+                        raw_scope = {"name": raw_scope}
+                    if not isinstance(raw_scope, dict):
+                        continue
+                    scope_name = str(
+                        raw_scope.get("name")
+                        or raw_scope.get("normalized_name")
+                        or ""
+                    ).strip()
+                    if not scope_name:
+                        continue
+                    scope_mentions.append(LocationScopeMention(
+                        name=scope_name,
+                        normalized_name=str(
+                            raw_scope.get("normalized_name") or scope_name
+                        ).strip(),
+                        role=_scope_role(raw_scope.get("role")),
+                        relation_to_target=str(
+                            raw_scope.get("relation_to_target")
+                            or raw_scope.get("relation")
+                            or mention_relation
+                            or "located_in"
+                        ).strip(),
+                        aliases=list(dict.fromkeys(
+                            str(value).strip()
+                            for value in (raw_scope.get("aliases") or [])
+                            if str(value).strip()
+                        )),
+                        source_quote=str(
+                            raw_scope.get("source_quote") or source_quote
+                        ).strip(),
+                        source_refs=list(dict.fromkeys([
+                            *observation_source_refs,
+                            *[
+                                str(value).strip()
+                                for value in (raw_scope.get("source_refs") or [])
+                                if str(value).strip()
+                            ],
+                        ])),
+                        source_segment_ids=list(dict.fromkeys([
+                            *source_segment_ids,
+                            *[
+                                str(value).strip()
+                                for value in (
+                                    raw_scope.get("source_segment_ids") or []
+                                )
+                                if str(value).strip()
+                            ],
+                        ])),
+                        confidence=(
+                            float(raw_scope.get("confidence"))
+                            if isinstance(raw_scope.get("confidence"), (int, float))
+                            else 0.0
+                        ),
+                    ))
                 aliases = list(dict.fromkeys([
                     *[
                         str(value).strip()
@@ -428,44 +493,43 @@ def _extract_location_mentions_from_observations(
                         str(mention.get("observation_id") or "").strip()
                     ),
                 )
-                for scope in scopes:
-                    scope_hint = " ".join(
-                        value for value in (scope, mention_relation) if value
-                    )
-                    village_scopes = [
-                        scope
-                    ] if scope.endswith(("村", "自然村")) else []
-                    facts.append(L1LocationFact(
-                        mention=target_name,
-                        normalized_name=normalized_name,
-                        target_name=target_name,
-                        role=mention_role,
-                        aliases=aliases,
-                        spatial_hint=scope_hint,
-                        related_mentions=[scope] if scope else [],
-                        village_scopes=village_scopes,
-                        place_scopes=[scope] if scope and not village_scopes else [],
-                        instance_label=str(
-                            mention.get("instance_label") or ""
-                        ).strip(),
-                        instance_count=str(
-                            mention.get("instance_count")
-                            or obs.get("scale")
-                            or ""
-                        ).strip(),
-                        resolution_state=resolution_state,
-                        provenance=provenance,
-                        source_report_ref=report_id,
-                        dimension_key=dimension_key,
-                        source_span=source_span,
-                        evidence_refs=evidence_refs,
-                        source_feature_ids=mention_feature_ids,
-                        confidence=(
-                            float(raw_confidence)
-                            if isinstance(raw_confidence, (int, float))
-                            else 0.8
-                        ),
-                    ))
+                scope_names = [scope.name for scope in scope_mentions]
+                scope_hint = " ".join(
+                    value for value in (
+                        "、".join(scope_names),
+                        mention_relation,
+                    ) if value
+                )
+                mentions.append(LocationMention(
+                    mention=target_name,
+                    normalized_name=normalized_name,
+                    target_name=target_name,
+                    role=mention_role,
+                    aliases=aliases,
+                    spatial_hint=scope_hint,
+                    related_mentions=scope_names,
+                    scopes=scope_mentions,
+                    instance_label=str(
+                        mention.get("instance_label") or ""
+                    ).strip(),
+                    instance_count=str(
+                        mention.get("instance_count")
+                        or obs.get("scale")
+                        or ""
+                    ).strip(),
+                    resolution_state=resolution_state,
+                    provenance=provenance,
+                    source_report_ref=report_id,
+                    dimension_key=dimension_key,
+                    source_span=source_span,
+                    evidence_refs=evidence_refs,
+                    source_feature_ids=mention_feature_ids,
+                    confidence=(
+                        float(raw_confidence)
+                        if isinstance(raw_confidence, (int, float))
+                        else 0.8
+                    ),
+                ))
             # Explicit work items are authoritative for the location index;
             # do not add a second generic target by mining the description.
             continue
@@ -481,11 +545,7 @@ def _extract_location_mentions_from_observations(
         for location_part in location_parts:
             if not location_part or not _is_place_like(location_part):
                 continue
-            part_role = (
-                "village"
-                if location_part.endswith(("村", "自然村"))
-                else role
-            )
+            part_role = role
             parts_to_emit.append((location_part, part_role, location_part))
         for normalized, part_role, spatial_hint in parts_to_emit:
             aliases = list(dict.fromkeys(x for x in (name, normalized) if x))
@@ -493,13 +553,14 @@ def _extract_location_mentions_from_observations(
             if key in seen:
                 continue
             seen.add(key)
-            facts.append(L1LocationFact(
+            mentions.append(LocationMention(
                 mention=name or normalized,
                 normalized_name=normalized,
                 role=part_role,
                 target_name=name or normalized,
                 aliases=aliases,
                 spatial_hint=spatial_hint,
+                scopes=[],
                 source_report_ref=report_id,
                 dimension_key=dimension_key,
                 source_span=source_span,
@@ -524,7 +585,7 @@ def _extract_location_mentions_from_observations(
                     else (0.95 if normalized in location_parts else 0.8)
                 ),
             ))
-    return facts
+    return mentions
 
 
 def _spatial_facts_from_observations(instruction: str) -> list[str]:
@@ -596,7 +657,7 @@ def _instruction_diagnostics(
 
 
 def _scope_conflict_diagnostics(
-    facts: list[L1LocationFact],
+    mentions: list[LocationMention],
     *,
     dimension_key: str,
 ) -> list[ParseDiagnostic]:
@@ -604,12 +665,9 @@ def _scope_conflict_diagnostics(
 
     scopes = sorted({
         str(value).strip()
-        for fact in facts
-        for values in (
-            getattr(fact, "village_scopes", None) or [],
-            getattr(fact, "place_scopes", None) or [],
-        )
-        for value in values
+        for mention in mentions
+        for scope in mention.scopes
+        for value in (scope.normalized_name or scope.name,)
         if str(value).strip()
     })
     diagnostics: list[ParseDiagnostic] = []
@@ -632,7 +690,7 @@ def _scope_conflict_diagnostics(
                     f"空间范围出现近似但不相同的名称：{left} / {right}；"
                     "保留两者并交由证据或 HUMAN 确认，不自动归一化。"
                 ),
-                field_path="location_facts.village_scopes",
+                field_path="location_mentions.scopes",
                 source_text_loc=f"{left}|{right}",
             ))
     return diagnostics
@@ -818,7 +876,7 @@ def compile_l1_observation(
     evidence_gaps: list[EvidenceGap] = []
     classification_refs: list[ClassificationRef] = []
     spatial_facts: list[str] = []
-    location_facts = _extract_location_facts_from_observations(
+    location_mentions = _extract_location_mentions_from_observations(
         instr,
         dimension_key=dimension_key,
         report_id=report_id,
@@ -826,7 +884,7 @@ def compile_l1_observation(
     # Location facts cross the PARSE boundary only through the model's
     # structured observations JSON; a malformed L1 response yields zero facts
     # and GROUND never consumes facts the model did not actually produce.
-    location_facts = _dedup_location_facts_local(location_facts)
+    location_mentions = _dedup_location_mentions_local(location_mentions)
     typed_observation_facts = _compile_typed_observation_facts(
         instr,
         dimension_key=dimension_key,
@@ -904,7 +962,7 @@ def compile_l1_observation(
     )
     diagnostics.extend(
         _scope_conflict_diagnostics(
-            location_facts,
+            location_mentions,
             dimension_key=dimension_key,
         )
     )
@@ -923,7 +981,7 @@ def compile_l1_observation(
         fact_records=fact_records,
         facts=facts,
         facts_by_dimension={dimension_key: list(facts)},
-        location_facts=location_facts,
+        location_mentions=location_mentions,
         constraints=constraints,
         evidence_gaps=evidence_gaps,
         classification_refs=classification_refs,

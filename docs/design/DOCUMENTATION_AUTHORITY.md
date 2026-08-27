@@ -12,10 +12,12 @@ This file resolves documentation conflicts before any rewrite or cleanup work. W
 | Documentation governance | `design/DOCUMENTATION_AUTHORITY.md` | Defines which documents are authoritative, supporting, historical, or cleanup-only. |
 | Cleanup and retention decisions | `design/DOCUMENT_CLEANUP_MANIFEST.md` | Exact path inventory for `KEEP` / `UPDATE` / `ARCHIVE` / `DELETE-CANDIDATE`. |
 | Overall target architecture and efficiency principles | `design/00_SYSTEM_DESIGN.md` | Target architecture, main chain, efficiency principles, and completion framing. |
-| Canonical contracts and cross-stage invariants | `design/01_CONTRACTS_AND_INVARIANTS.md` | Ownership, invariants, stage boundaries, and contract classes. |
-| Evidence retrieval and grounding design | `design/02_EVIDENCE_AND_GROUNDING.md` | Primary normative retrieval and grounding design. |
-| Planning and execution design | `design/03_PLANNING_EXECUTION.md` | Target planning, approval, execution, and delivery flow. |
-| Acceptance and efficiency gates | `design/04_EVALUATION_AND_ACCEPTANCE.md` | Acceptance criteria, evaluation gates, and regression expectations. |
+| L1 fact construction | `design/01_CONTRACTS_AND_INVARIANTS.md` | L1 facts, source lineage, fact types, and structured-output boundaries. |
+| L2 planning cognition | `design/02_PLANNING_COGNITION.md` | Problems, objectives, demand, suitability, strategy, and L2 output. |
+| L3 planning intent | `design/03_PLANNING_INTENT.md` | Claims, PlanningProgram, lineage, and pre-grounding boundaries. |
+| Evidence | `design/04_EVIDENCE.md` | Retrieval, KG/Bundle fusion, evidence reasoning, coverage, and gap closure. |
+| Projection and grounding | `design/05_PROJECTION_AND_GROUND.md` | Target compilation and iterative spatial grounding. |
+| Select, execute, and code architecture | `design/06_SELECT_EXECUTE_AND_CODE.md` | Scenario selection, approved execution, post-processing, and target code tree. |
 | Migration ledger | `design/05_MIGRATION.md` | Only target-to-current migration ledger. |
 | Observed current implementation | `architecture/CURRENT_RUNTIME.md` | Current code paths, runtime evidence, and known `PARTIAL` / `GAP` boundaries. |
 | Current API/state projection | `architecture/API_AND_STATE.md` | Current HTTP/SSE/state ownership and external projections. |
@@ -35,7 +37,7 @@ This file resolves documentation conflicts before any rewrite or cleanup work. W
 
 ## Operating rules
 
-1. `docs/design/00` through `docs/design/05` are the only target-design authority set.
+1. `docs/design/00` through `docs/design/06` are the only target-design authority set; their primary reading order is the business flow.
 2. `docs/architecture/` documents only observed current behavior. Target claims do not belong there.
 3. `docs/design/05_MIGRATION.md` is the only migration/status ledger between target and current implementation.
 4. `docs/superpowers/`, `docs/reports-weekly/`, and future `docs/_archive/` entries are historical or process evidence only. Active navigation may link to them only as historical context.

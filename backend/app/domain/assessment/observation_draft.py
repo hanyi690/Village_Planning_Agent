@@ -25,7 +25,11 @@ from pydantic import (
 )
 
 from app.contracts.json_container import decode_json_container
-from app.contracts.domain.l1_contracts import LocationMentionDraft
+from app.contracts.domain.l1_contracts import (
+    L1DimensionPassState,
+    L1InputContext,
+    LocationMentionDraft,
+)
 
 
 class L1SourceEvidence(BaseModel):
@@ -1086,6 +1090,137 @@ class L1ReportOutput(BaseModel):
     report_body: str = Field(min_length=1)
 
 
+class L1SemanticOutput(BaseModel):
+    """Canonical semantic result of one L1 dimension run.
+
+    This envelope is application-owned.  The provider wire response remains
+    the smaller ``L1ObservationProviderOutput``; only observations that have
+    crossed local schema and source validation enter this semantic envelope.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    context: L1InputContext
+    observations: list[L1PlanningFactDraft] = Field(default_factory=list)
+    diagnostics: list[str] = Field(default_factory=list)
+    accepted_count: int = Field(default=0, ge=0)
+    rejected_count: int = Field(default=0, ge=0)
+    status: Literal["running", "complete", "diagnostic"] = "complete"
+    output_digest: str = ""
+
+    @model_validator(mode="after")
+    def canonicalize_output_digest(self) -> "L1SemanticOutput":
+        if self.accepted_count != len(self.observations):
+            raise ValueError("L1 accepted_count must equal validated observations")
+        identity = self.model_dump(mode="json", exclude={"output_digest"})
+        expected = "sha256:" + _payload_digest(identity)
+        if self.output_digest and self.output_digest != expected:
+            raise ValueError("L1 output_digest does not match semantic output")
+        self.output_digest = expected
+        self.diagnostics = list(dict.fromkeys(
+            str(value).strip()
+            for value in self.diagnostics
+            if str(value).strip()
+        ))
+        return self
+
+
+class L1DisplayProjection(BaseModel):
+    """Human-readable L1 report kept outside the semantic output chain."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    report_body: str = ""
+    input_digest: str = ""
+    source_observation_count: int = Field(default=0, ge=0)
+    report_digest: str = ""
+
+    @model_validator(mode="after")
+    def canonicalize_report_digest(self) -> "L1DisplayProjection":
+        identity = self.model_dump(mode="json", exclude={"report_digest"})
+        expected = "sha256:" + _payload_digest(identity)
+        if self.report_digest and self.report_digest != expected:
+            raise ValueError("L1 report_digest does not match display projection")
+        self.report_digest = expected
+        return self
+
+
+class L1DimensionOutput(BaseModel):
+    """Unified application output with separate semantic and display ports."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    semantic: L1SemanticOutput
+    display: L1DisplayProjection = Field(default_factory=L1DisplayProjection)
+
+    @model_validator(mode="before")
+    @classmethod
+    def bind_display_to_semantic_context(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        semantic = payload.get("semantic")
+        if hasattr(semantic, "model_dump"):
+            semantic = semantic.model_dump(mode="python")
+        display = payload.get("display")
+        if hasattr(display, "model_dump"):
+            display = display.model_dump(mode="python")
+        semantic = semantic if isinstance(semantic, dict) else {}
+        context = semantic.get("context")
+        if hasattr(context, "model_dump"):
+            context = context.model_dump(mode="python")
+        context = context if isinstance(context, dict) else {}
+        display = dict(display) if isinstance(display, dict) else {}
+        if not display.get("input_digest"):
+            display["input_digest"] = context.get("input_digest", "")
+        if "source_observation_count" not in display:
+            display["source_observation_count"] = len(
+                semantic.get("observations") or []
+            )
+        if display.get("input_digest") != context.get("input_digest", ""):
+            display["report_digest"] = ""
+        payload["display"] = display
+        return payload
+
+    @model_validator(mode="after")
+    def validate_boundary_alignment(self) -> "L1DimensionOutput":
+        if self.display.input_digest != self.semantic.context.input_digest:
+            raise ValueError("L1 display projection is bound to another input")
+        if self.display.source_observation_count != len(self.semantic.observations):
+            raise ValueError("L1 display count does not match semantic output")
+        return self
+
+    @property
+    def context(self) -> L1InputContext:
+        """Convenience view of the single context shared by both output ports."""
+
+        return self.semantic.context
+
+
+class L1DimensionCheckpoint(BaseModel):
+    """Durable L1 checkpoint carrying one context, output, and cursor."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    checkpoint_version: str = "l1.checkpoint.v1"
+    context: L1InputContext
+    output: L1DimensionOutput
+    cursor: L1DimensionPassState
+
+    @model_validator(mode="after")
+    def validate_checkpoint_alignment(self) -> "L1DimensionCheckpoint":
+        output_context = self.output.context
+        if output_context.input_digest != self.context.input_digest:
+            raise ValueError("L1 checkpoint output is bound to another input")
+        if output_context.dimension_key != self.context.dimension_key:
+            raise ValueError("L1 checkpoint dimension does not match context")
+        if self.cursor.dimension_key != self.context.dimension_key:
+            raise ValueError("L1 checkpoint cursor does not match context")
+        if self.cursor.input_digest and self.cursor.input_digest != self.context.input_digest:
+            raise ValueError("L1 checkpoint cursor is bound to another input")
+        return self
+
+
 __all__ = [
     "L1SourceEvidence",
     "L1SpatialLocator",
@@ -1109,4 +1244,8 @@ __all__ = [
     "L1ObservationProviderOutput",
     "QuarantinedObservation",
     "L1ReportOutput",
+    "L1SemanticOutput",
+    "L1DisplayProjection",
+    "L1DimensionOutput",
+    "L1DimensionCheckpoint",
 ]

@@ -28,6 +28,31 @@ logger = get_logger(__name__)
 
 _RESOLVED_THRESHOLD = 0.8
 _AMBIGUOUS_GAP = 0.15
+_SCOPE_ROLES = frozenset({
+    "scope",
+    "village",
+    "natural_village",
+    "administrative_village",
+    "settlement",
+    "place",
+    "area",
+    "行政村",
+    "自然村",
+    "村庄",
+    "聚落",
+    "地点",
+    "区域",
+})
+_DYNAMIC_SCOPE_SOURCES = frozenset({
+    "amap",
+    "amap_map",
+    "bundle_annotation",
+    "external_anchors",
+    "tencent",
+    "tencent_map",
+    "tianditu",
+    "uploaded_annotation",
+})
 
 # A role supplied by the caller is a retrieval boundary, not merely a score
 # bonus.  Without this filter a village mention such as ``园寨村`` also
@@ -36,8 +61,13 @@ _AMBIGUOUS_GAP = 0.15
 # into ``ambiguous``.  Unknown-role queries intentionally keep all roles so
 # EvidenceGraph can return the cross-layer evidence set to its LLM selector.
 _ROLE_COMPATIBILITY: dict[str, frozenset[str]] = {
-    "village": frozenset({"village", "natural_village"}),
-    "natural_village": frozenset({"village", "natural_village"}),
+    "scope": _SCOPE_ROLES,
+    "village": _SCOPE_ROLES,
+    "natural_village": _SCOPE_ROLES,
+    "administrative_village": _SCOPE_ROLES,
+    "settlement": _SCOPE_ROLES,
+    "place": _SCOPE_ROLES,
+    "area": _SCOPE_ROLES,
     "facility": frozenset({"facility", "landmark"}),
     "landmark": frozenset({"landmark", "facility"}),
     "road": frozenset({"road", "axis"}),
@@ -56,6 +86,86 @@ def _role_compatible(entry: PlaceEvidenceEntry, role: str) -> bool:
     allowed = _ROLE_COMPATIBILITY.get(expected, frozenset({expected}))
     actual = str(getattr(entry, "role", "") or "").strip().lower()
     return actual in allowed
+
+
+def _is_scope_role(value: Any) -> bool:
+    return str(value or "").strip().casefold() in _SCOPE_ROLES
+
+
+def _scope_mentions_for_fact(fact: Any) -> list[Any]:
+    """Read only the typed L1 scope objects at the retrieval boundary."""
+
+    raw = getattr(fact, "scopes", None)
+    if raw in (None, "", []):
+        raw = getattr(fact, "scope_mentions", None)
+    if raw in (None, "", []):
+        raw = [
+            {"name": value, "role": "natural_village"}
+            for value in (getattr(fact, "village_scopes", None) or [])
+        ]
+        raw.extend(
+            {"name": value, "role": "place"}
+            for value in (getattr(fact, "place_scopes", None) or [])
+        )
+    if isinstance(raw, str):
+        return []
+    return list(raw or [])
+
+
+def _scope_value(scope: Any, field: str, default: str = "") -> str:
+    if isinstance(scope, dict):
+        return str(scope.get(field, default) or "").strip()
+    return str(getattr(scope, field, default) or "").strip()
+
+
+def _fact_scope_names(fact: Any) -> list[str]:
+    return list(dict.fromkeys(
+        _scope_value(scope, "normalized_name") or _scope_value(scope, "name")
+        for scope in _scope_mentions_for_fact(fact)
+        if _scope_value(scope, "normalized_name") or _scope_value(scope, "name")
+    ))
+
+
+def _is_dynamic_gazetteer_scope(entry: Any) -> bool:
+    """Allow only source-backed uploaded/external scope anchors.
+
+    KG clusters, persisted gazetteer rows, and L1 enrichment rows are legacy
+    scope materializations.  They must not re-enter retrieval as a natural
+    village identity; the typed L1 mention is the semantic source of truth.
+    """
+
+    source = str(getattr(entry, "source", "") or "").strip().casefold()
+    entity_uri = str(getattr(entry, "entity_uri", "") or "").strip().casefold()
+    return (
+        source in _DYNAMIC_SCOPE_SOURCES
+        or entity_uri.startswith("pln:external_")
+        or "external_natural_village" in entity_uri
+    )
+
+
+def _context_l1_items(context: Any) -> list[Any]:
+    """Combine canonical L1 mentions and typed records without duplicates."""
+
+    collections = [
+        getattr(context, "location_mentions", None)
+        or getattr(context, "location_facts", None)
+        or [],
+        getattr(context, "l1_fact_records", None) or [],
+    ]
+    result: list[Any] = []
+    seen_objects: set[int] = set()
+    seen_fact_ids: set[str] = set()
+    for collection in collections:
+        for item in collection:
+            object_id = id(item)
+            fact_id = str(getattr(item, "fact_id", "") or "").strip()
+            if object_id in seen_objects or (fact_id and fact_id in seen_fact_ids):
+                continue
+            seen_objects.add(object_id)
+            if fact_id:
+                seen_fact_ids.add(fact_id)
+            result.append(item)
+    return result
 
 
 class PlaceEvidenceIndex:
@@ -140,27 +250,20 @@ class PlaceEvidenceIndex:
 
         centroid_cache = build_parcel_centroid_cache(parcels)
         index._parcel_spatial_index = build_parcel_spatial_index(parcels)
-        for fact in getattr(context, "location_facts", []) or []:
-            index._register_from_l1_fact(
-                fact, parcels, centroid_cache, index._parcel_spatial_index
-            )
-        for fact in getattr(context, "l1_fact_records", []) or []:
+        l1_items = _context_l1_items(context)
+        semantic_scope_items = list(
+            getattr(context, "l1_fact_records", None) or []
+        ) or l1_items
+        for fact in l1_items:
+            index._register_l1_scope_mentions(fact)
             index._register_from_l1_fact(
                 fact, parcels, centroid_cache, index._parcel_spatial_index
             )
         try:
             from app.evidence.retrieval.l1_scope import build_l1_semantic_scopes
 
-            typed_facts = list(getattr(context, "l1_fact_records", []) or [])
-            location_facts = list(getattr(context, "location_facts", []) or [])
-            # Typed L1 records are the authoritative semantic-to-place input.
-            # The location projection is retained for contexts produced before
-            # typed records existed, but must not shadow them when both are
-            # hydrated; otherwise the scope can silently lose fact IDs and
-            # source provenance at the retrieval boundary.
-            scope_facts = typed_facts or location_facts
             index.semantic_scopes = build_l1_semantic_scopes(
-                scope_facts,
+                semantic_scope_items,
                 session_id=str(getattr(context, "session_id", "") or ""),
                 l1_snapshot_ref=str(getattr(context, "l1_snapshot_ref", "") or ""),
             )
@@ -402,6 +505,8 @@ class PlaceEvidenceIndex:
         geometry_ref = None
         aliases = [str(a) for a in (getattr(entry, "aliases", None) or []) if a]
         role, entity_types = self._gazetteer_role(entry)
+        if role in _SCOPE_ROLES and not _is_dynamic_gazetteer_scope(entry):
+            return
         self._add_entry(
             PlaceEvidenceEntry(
                 canonical_name=name,
@@ -411,7 +516,10 @@ class PlaceEvidenceIndex:
                 role=role,
                 source_bsms=bsms,
                 geometry_ref=geometry_ref,
-                provenance=["gazetteer"],
+                provenance=[
+                    "gazetteer",
+                    f"gazetteer_source:{str(getattr(entry, 'source', '') or 'unknown').strip()}",
+                ],
                 confidence=float(getattr(entry, "confidence", 0.0) or 0.0),
             )
         )
@@ -434,13 +542,112 @@ class PlaceEvidenceIndex:
             return "facility", ["facility"]
         if source == "water_cluster_map":
             return "water", ["water"]
+        if source in _DYNAMIC_SCOPE_SOURCES or entity_uri.startswith("pln:external_"):
+            return "scope", ["scope"]
         if source == "l1_instruction":
             uri = str(getattr(entry, "entity_uri", "") or "")
             for kind in ("facility", "project", "zone", "landmark"):
                 if f"anchor_{kind}_" in uri:
                     return kind, [kind]
-            return "village", ["village"]
-        return "village", ["village"]
+            return "scope", ["scope"]
+        return "scope", ["scope"]
+
+    def _register_l1_scope_mentions(self, fact: Any) -> None:
+        """Index typed scope names as semantic evidence without geometry."""
+
+        fact_id = str(getattr(fact, "fact_id", "") or "").strip()
+        source_refs = [
+            str(value).strip()
+            for value in (getattr(fact, "source_refs", None) or [])
+            if str(value).strip()
+        ]
+        l1_fact_refs = self._filter_l1_fact_refs([fact_id, *source_refs])
+        l1_snapshot_ref = str(getattr(self.context, "l1_snapshot_ref", "") or "")
+        bundle_digest = str(
+            getattr(getattr(self.context, "data_snapshot", None), "digest", "")
+            or ""
+        )
+        for scope in _scope_mentions_for_fact(fact):
+            name = _scope_value(scope, "normalized_name") or _scope_value(scope, "name")
+            if not name:
+                continue
+            role = _scope_value(scope, "role", "unknown").casefold()
+            if role in {"", "unknown", "target"}:
+                role = "scope"
+            aliases = [
+                _scope_value(scope, "name"),
+                *(
+                    [str(value).strip() for value in getattr(scope, "aliases", []) if str(value).strip()]
+                    if not isinstance(scope, dict)
+                    else [str(value).strip() for value in (scope.get("aliases") or []) if str(value).strip()]
+                ),
+            ]
+            aliases = list(dict.fromkeys(value for value in aliases if value))
+            scope_refs = [
+                *(
+                    [str(value).strip() for value in getattr(scope, "source_refs", []) if str(value).strip()]
+                    if not isinstance(scope, dict)
+                    else [str(value).strip() for value in (scope.get("source_refs") or []) if str(value).strip()]
+                ),
+                *(
+                    [str(value).strip() for value in getattr(scope, "source_segment_ids", []) if str(value).strip()]
+                    if not isinstance(scope, dict)
+                    else [str(value).strip() for value in (scope.get("source_segment_ids") or []) if str(value).strip()]
+                ),
+            ]
+            relation = _scope_value(scope, "relation_to_target", "located_in") or "located_in"
+            provenance = [
+                "l1_scope",
+                f"l1_scope_relation:{relation}",
+                *(f"l1_scope_source:{value}" for value in scope_refs),
+            ]
+            self._add_entry(
+                PlaceEvidenceEntry(
+                    canonical_name=name,
+                    aliases=aliases,
+                    entity_types=[role],
+                    role=role,
+                    provenance=list(dict.fromkeys(provenance)),
+                    l1_fact_refs=l1_fact_refs,
+                    l1_snapshot_ref=l1_snapshot_ref,
+                    bundle_snapshot_digest=bundle_digest,
+                    confidence=float(_scope_value(scope, "confidence") or 0.0),
+                )
+            )
+
+    def scope_bsms_for_names(self, names: list[str] | tuple[str, ...]) -> set[str]:
+        """Return BSMs from explicit L1/external scope evidence only."""
+
+        keys = {
+            _normalize(value)
+            for value in names
+            if _normalize(value)
+        }
+        if not keys:
+            return set()
+        bsms: set[str] = set()
+        for entry in self.entries:
+            if not any(
+                _normalize(value) in keys
+                for value in (
+                    getattr(entry, "canonical_name", ""),
+                    *(getattr(entry, "aliases", None) or []),
+                )
+            ):
+                continue
+            provenance = {str(value) for value in (getattr(entry, "provenance", None) or [])}
+            if "l1_scope" not in provenance and not any(
+                value.startswith("gazetteer_source:")
+                and value.split(":", 1)[1] in _DYNAMIC_SCOPE_SOURCES
+                for value in provenance
+            ):
+                continue
+            bsms.update(
+                str(value).strip()
+                for value in (getattr(entry, "source_bsms", None) or [])
+                if str(value).strip()
+            )
+        return bsms
 
     def _register_from_l1_fact(
         self,
@@ -482,6 +689,17 @@ class PlaceEvidenceIndex:
             "zone",
             "village",
             "natural_village",
+            "administrative_village",
+            "scope",
+            "settlement",
+            "place",
+            "area",
+            "行政村",
+            "自然村",
+            "村庄",
+            "聚落",
+            "地点",
+            "区域",
             "unknown",
         } and not any(
             str(attributes.get(key, "") or "").strip()
@@ -533,9 +751,6 @@ class PlaceEvidenceIndex:
         self._bind_l1_fact_bsms(
             fact, entry, parcels, centroid_cache, spatial_index
         )
-        # 实体级绑定（设施点/地标点 + 同坐标地块）优先；村锚点同时作为
-        # 独立语义证据保留，即使实体级几何已经命中。
-        self._bind_village_anchor_bsms(fact, entry)
         # Register only after all deterministic L1 bindings are complete so
         # the normal same-coordinate/entity merge can see the final geometry.
         self._add_entry(entry)
@@ -675,7 +890,6 @@ class PlaceEvidenceIndex:
                 f"l1_source_feature_unresolved:{source_id}"
                 for source_id in source_ids
             )
-            self._bind_village_anchor_bsms(fact, entry)
             self._add_entry(entry)
             return True
 
@@ -696,7 +910,6 @@ class PlaceEvidenceIndex:
                 f"l1_source_feature_unresolved:{item}"
                 for item in unresolved_ids
             )
-            self._bind_village_anchor_bsms(fact, bound)
             self._add_entry(bound)
         return True
 
@@ -762,33 +975,12 @@ class PlaceEvidenceIndex:
                 )
             except Exception:
                 continue
-        from app.spatial.grounding.coordinate_identity import point_xy
         from app.spatial.grounding.grounding import query_parcels_near_entity
-        from app.spatial.grounding.topology import hint_tokens
 
-        # 村 hint（如 社前村）：用于在多个同名/同类设施点里按空间拓扑消歧
-        village_bsms: set = set()
-        village_centroid = None
-        hint_text = str(
-            getattr(fact, "spatial_hint", "")
-            or attributes.get("spatial_hint", "")
-            or attributes.get("location", "")
-            or attributes.get("village", "")
-            or getattr(fact, "source_span", "")
-            or ""
-        )
-        gazetteer = getattr(self.context, "gazetteer", None)
-        if gazetteer is not None:
-            for token in hint_tokens(hint_text):
-                entry_g = gazetteer.resolve(token, fuzzy=False) or gazetteer.resolve(token, fuzzy=True)
-                if entry_g is None or not (entry_g.bsms or entry_g.centroid):
-                    continue
-                village_bsms.update(str(b) for b in (entry_g.bsms or []) if b)
-                if village_centroid is None and entry_g.centroid:
-                    village_centroid = tuple(float(x) for x in entry_g.centroid[:2])
-                break
+        scope_names = _fact_scope_names(fact)
+        scope_bsms = self.scope_bsms_for_names(scope_names)
 
-        # 收集所有匹配设施点 → (坐标, 邻近地块, 到村质心距离, feature_bsm)
+        # 收集所有匹配设施点 → (坐标, 邻近地块, feature_bsm, layer)
         matches: List[tuple] = []
         for pt, point_source_layer in points:
             geom = getattr(pt, "geometry", None) or {}
@@ -839,32 +1031,29 @@ class PlaceEvidenceIndex:
                 geometry_cache=self._parcel_geometry_cache,
                 spatial_index=spatial_index,
             )
-            dist = float("inf")
-            if village_centroid is not None:
-                dist = ((lon - village_centroid[0]) ** 2 + (lat - village_centroid[1]) ** 2) ** 0.5
             point_bsm = str(getattr(pt, "bsm", "") or "").strip() or None
-            matches.append(((lon, lat), list(near), dist, point_bsm, point_source_layer))
+            matches.append(((lon, lat), list(near), point_bsm, point_source_layer))
 
         if not matches:
             return
-        # 消歧：优先与 hint 村庄地块重叠的点，其次离村质心最近（同坐标=同实体）
-        if village_bsms:
-            matches.sort(
-                key=lambda m: (
-                    -len(set(m[1]) & village_bsms),
-                    m[2],
-                    m[0][0],
-                )
-            )
+        # 多个同名点只有在显式 scope BSM 能唯一筛出一个时才绑定。
+        if len(matches) > 1:
+            if not scope_bsms:
+                return
+            matches.sort(key=lambda m: (-len(set(m[1]) & scope_bsms), m[0][0], m[0][1]))
+            best_overlap = len(set(matches[0][1]) & scope_bsms)
+            next_overlap = len(set(matches[1][1]) & scope_bsms)
+            if best_overlap <= 0 or best_overlap == next_overlap:
+                return
         best = matches[0]
         hit = list(best[1])
         if len(matches) > 1:
-            overlap = len(set(best[1]) & village_bsms) if village_bsms else 0
+            overlap = len(set(best[1]) & scope_bsms)
             entry.provenance.append(
                 f"facility_point_disambiguated:{len(matches)}pts:overlap={overlap}"
             )
-        point_bsm = best[3]
-        point_source_layer = best[4]
+        point_bsm = best[2]
+        point_source_layer = best[3]
         if point_bsm:
             entry.feature_bsm = point_bsm
             entry.source_bsm = point_bsm
@@ -896,6 +1085,7 @@ class PlaceEvidenceIndex:
         names and BSMs both come from report+KG; nothing is fabricated, and a
         fact that is itself a village role is never self-anchored.
         """
+        return
         role = str(getattr(fact, "role", "") or "")
         if role == "village":
             return
@@ -1086,6 +1276,16 @@ class PlaceEvidenceIndex:
                 self._source_semantic_overlay(source_feature_id, text)
             )
             canonical_name = semantic_label or text
+            annotation_kind = str(
+                raw.get("分类") or raw.get("category") or category or ""
+            ).strip()
+            layer_type = str(
+                getattr(p, "layer_type", "") or raw.get("layer_type") or ""
+            ).strip()
+            is_scope_annotation = (
+                annotation_kind in {"村名", "自然村"}
+                or layer_type == "external_natural_village"
+            )
             geometry_ref = f"bundle://feature/{feature_bsm}" if feature_bsm else None
             role = (
                 "hazard"
@@ -1105,6 +1305,34 @@ class PlaceEvidenceIndex:
                 self._parcel_geometry_cache,
                 spatial_index,
             )
+
+            if is_scope_annotation:
+                self._add_entry(
+                    PlaceEvidenceEntry(
+                        canonical_name=canonical_name,
+                        aliases=list(dict.fromkeys([*source_aliases, *semantic_aliases])),
+                        entity_refs=[f"scope:{source_feature_id or canonical_name}"],
+                        entity_types=["scope"],
+                        role="scope",
+                        related_parcel_bsms=list(source_bsms),
+                        source_bsms=list(source_bsms),
+                        provenance=[
+                            "external_scope",
+                            f"bundle:{source_layer}",
+                            *( ["source_semantic:accepted"] if semantic_label else [] ),
+                        ],
+                        l1_fact_refs=semantic_fact_refs,
+                        l1_snapshot_ref=str(
+                            getattr(self.context, "l1_snapshot_ref", "") or ""
+                        ),
+                        bundle_snapshot_digest=str(
+                            getattr(getattr(self.context, "data_snapshot", None), "digest", "")
+                            or ""
+                        ),
+                        confidence=0.9 if semantic_label or source_feature_id else 0.8,
+                    )
+                )
+                continue
 
             # General entity resolution: a POI with the same bundle feature
             # identity as an existing entity is the same real-world place.
@@ -1224,7 +1452,6 @@ class PlaceEvidenceIndex:
         "water_body": ("water", ("water_body", "water")),
         "road": ("road", ("road",)),
         "administrative_village": ("village", ("village", "administrative_village")),
-        "residential_cluster": ("village", ("village", "residential_cluster")),
         "place_ref": ("landmark", ("place_ref", "landmark")),
         "zone": ("zone", ("zone",)),
     }
@@ -1619,8 +1846,7 @@ class PlaceEvidenceIndex:
     def _name_merge_target(
         self, entry: PlaceEvidenceEntry
     ) -> Optional[PlaceEvidenceEntry]:
-        """同角色 + 规范名/别名重叠 = 同一实体（例如 L1 fact「园寨」与
-        gazetteer「园寨村」(别名 园寨) 合并，BSM/几何流入同一条目）。"""
+        """Merge only when the source explicitly shares a name or alias."""
         keys = {
             _normalize(entry.canonical_name),
             *(_normalize(str(a)) for a in entry.aliases if a),
@@ -1714,12 +1940,9 @@ class PlaceEvidenceIndex:
         target.related_parcel_bsms = list(
             dict.fromkeys([*target.related_parcel_bsms, *source.related_parcel_bsms])
         )
-        if target.anchor_bsms and target.geometry_ref:
-            target.source_bsms = list(dict.fromkeys(target.anchor_bsms))
-        else:
-            target.source_bsms = list(
-                dict.fromkeys([*target.source_bsms, *source.source_bsms])
-            )
+        target.source_bsms = list(
+            dict.fromkeys([*target.source_bsms, *source.source_bsms])
+        )
         target.provenance = list(dict.fromkeys([*target.provenance, *source.provenance]))
         target.relation_refs = list(
             dict.fromkeys([*target.relation_refs, *source.relation_refs])
@@ -2043,34 +2266,23 @@ class PlaceEvidenceIndex:
         )
         village_names = _scope_name_tokens(self.context, village_name)
         village_keys = {_normalize(value) for value in village_names if _normalize(value)}
-        scoped = []
-        for candidate in result.candidates:
-            anchors = [
-                str(ref).split(":", 1)[1]
-                for ref in candidate.evidence_refs
-                if str(ref).startswith("village_anchor:")
-            ]
-            if any(_normalize(anchor) in village_keys for anchor in anchors):
-                scoped.append(candidate)
-        if not scoped:
-            scoped = [
-                candidate for candidate in result.candidates
-                if any(
-                    self._candidate_matches_village_scope(candidate, name)
-                    for name in village_names
-                )
-            ]
+        scoped = [
+            candidate
+            for candidate in result.candidates
+            if any(
+                self._candidate_matches_village_scope(candidate, name)
+                for name in village_names
+            )
+        ]
         if not scoped:
             label_key = _normalize(label)
             typed_scope_refs: set[str] = set()
-            for fact in getattr(self.context, "l1_fact_records", []) or []:
-                attributes = getattr(fact, "attributes", None) or {}
-                if not isinstance(attributes, dict):
-                    attributes = {}
+            typed_scope_match = False
+            for fact in _context_l1_items(self.context):
                 fact_label = _normalize(
                     str(
-                        attributes.get("normalized_name", "")
-                        or getattr(fact, "subject_scope", "")
+                        getattr(fact, "normalized_name", "")
+                        or getattr(fact, "mention", "")
                         or ""
                     )
                 )
@@ -2080,25 +2292,8 @@ class PlaceEvidenceIndex:
                     or label_key in fact_label
                 ):
                     continue
-                scope_text = " ".join(
-                    str(attributes.get(key, "") or "").strip()
-                    for key in (
-                        "location",
-                        "spatial_hint",
-                        "village",
-                        "settlement",
-                        "natural_village",
-                        "related_place",
-                    )
-                    if str(attributes.get(key, "") or "").strip()
-                )
-                if not scope_text:
-                    continue
-                if any(
-                    _normalize(name) in _normalize(scope_text)
-                    for name in village_names
-                    if _normalize(name)
-                ):
+                if set(_normalize(name) for name in _fact_scope_names(fact)) & village_keys:
+                    typed_scope_match = True
                     typed_scope_refs.update(
                         str(value).strip()
                         for value in (
@@ -2107,7 +2302,7 @@ class PlaceEvidenceIndex:
                         )
                         if str(value).strip()
                     )
-            if typed_scope_refs:
+            if typed_scope_refs or typed_scope_match:
                 typed_semantic_candidates = [
                     candidate
                     for candidate in result.candidates
@@ -2129,7 +2324,10 @@ class PlaceEvidenceIndex:
                         or str(candidate.geometry_ref or "").strip()
                     )
                 ]
-                if typed_semantic_candidates and len(spatial_candidates) == 1:
+                if (
+                    (typed_semantic_candidates or typed_scope_match)
+                    and len(spatial_candidates) == 1
+                ):
                     scoped = spatial_candidates
         # L1 may carry the village scope while the actual bundle point is a
         # separate same-name entry (we intentionally do not merge a
@@ -2203,8 +2401,11 @@ class PlaceEvidenceIndex:
             scope.scope_id
             for scope in self.semantic_scopes
             if any(
-                _normalize(getattr(mention, "normalized_name", "")) in village_keys
-                for mention in getattr(scope, "village_mentions", [])
+                _normalize(
+                    getattr(mention, "normalized_name", "")
+                    or getattr(mention, "name", "")
+                ) in village_keys
+                for mention in getattr(scope, "scope_mentions", [])
             )
         ]
         trace.append({"step": "l1_semantic_scopes", "scope_refs": matching_scopes})
@@ -2239,34 +2440,14 @@ class PlaceEvidenceIndex:
         candidate: PlaceResolutionCandidate,
         village_name: str,
     ) -> bool:
-        """Verify facility→village scope from bundle or KG topology.
-
-        A point's nearby parcel BSMs are spatial evidence, not a guessed
-        village label. They can be intersected with the gazetteer village
-        parcel set. When that set is unavailable, the session KG may provide
-        an explicit facility-to-village relation. No global same-name result
-        is accepted without one of these source-backed joins.
-        """
+        """Verify an exact feature against an explicit report-backed scope."""
         village_names = _scope_name_tokens(self.context, village_name)
         if not village_names:
             return False
-        gazetteer = getattr(self.context, "gazetteer", None)
-        village_bsms: set[str] = set()
-        if gazetteer is not None:
-            for village in village_names:
-                for token in (village, f"{village}村", f"{village}自然村"):
-                    entry = gazetteer.resolve(token, fuzzy=False) or gazetteer.resolve(token, fuzzy=True)
-                    if entry is None:
-                        continue
-                    village_bsms.update(
-                        str(value).strip()
-                        for value in (getattr(entry, "bsms", None) or [])
-                        if str(value).strip()
-                    )
+        village_bsms = self.scope_bsms_for_names(village_names)
         candidate_bsms = {
             str(value).strip()
             for value in (
-                *list(getattr(candidate, "anchor_bsms", None) or []),
                 *list(getattr(candidate, "related_parcel_bsms", None) or []),
             )
             if str(value).strip()
@@ -2274,20 +2455,44 @@ class PlaceEvidenceIndex:
         if village_bsms and candidate_bsms.intersection(village_bsms):
             return True
 
+        candidate_l1_refs = {
+            str(value).strip()
+            for value in (getattr(candidate, "l1_fact_refs", None) or [])
+            if str(value).strip()
+        }
+        if candidate_l1_refs:
+            village_keys = {_normalize(value) for value in village_names}
+            for fact in _context_l1_items(self.context):
+                fact_refs = {
+                    str(value).strip()
+                    for value in (
+                        getattr(fact, "fact_id", ""),
+                        *(getattr(fact, "source_refs", None) or []),
+                    )
+                    if str(value).strip()
+                }
+                if not candidate_l1_refs.intersection(fact_refs):
+                    continue
+                if village_keys.intersection(
+                    {_normalize(value) for value in _fact_scope_names(fact)}
+                ):
+                    return True
+
         kg = getattr(self.context, "kg", None)
         if kg is None or not hasattr(kg, "find_entities") or not hasattr(kg, "find_relations"):
             return False
         village_entities = []
         for village in village_names:
-            for token in (village, f"{village}村", f"{village}自然村"):
-                try:
-                    village_entities.extend(kg.find_entities(name=token, limit=12) or [])
-                except Exception:
-                    continue
+            try:
+                village_entities.extend(kg.find_entities(name=village, limit=12) or [])
+            except Exception:
+                continue
         village_refs = {
             str(getattr(entity, "entity_ref", "") or "")
             for entity in village_entities
             if str(getattr(entity, "entity_ref", "") or "").strip()
+            and "residentialcluster" not in str(getattr(entity, "entity_ref", "") or "").casefold()
+            and "residential_cluster" not in str(getattr(entity, "entity_ref", "") or "").casefold()
         }
         if not village_refs:
             return False
@@ -2366,23 +2571,38 @@ def _longest_indexed_overlap(query: str, indexed_key: str) -> tuple[int, str]:
 def _normalize(name: str) -> str:
     if not name:
         return ""
-    cleaned = name.strip().lower()
-    for suffix in ("自然村", "村"):
-        if cleaned.endswith(suffix):
-            cleaned = cleaned[: -len(suffix)].strip()
-            break
-    return cleaned
+    return name.strip().lower()
 
 
 def _scope_name_tokens(context: Any, text: str) -> List[str]:
-    """Extract all source-backed village names embedded in a scope string."""
+    """Extract explicit L1/external scope names without suffix synthesis."""
     raw = str(text or "").strip()
     if not raw:
         return []
     folded = raw.casefold()
     names: List[str] = []
+    for fact in _context_l1_items(context):
+        for scope in _scope_mentions_for_fact(fact):
+            role = _scope_value(scope, "role").casefold()
+            name = _scope_value(scope, "normalized_name") or _scope_value(scope, "name")
+            aliases = [
+                _scope_value(scope, "name"),
+                *(
+                    [str(value) for value in getattr(scope, "aliases", [])]
+                    if not isinstance(scope, dict)
+                    else [str(value) for value in (scope.get("aliases") or [])]
+                ),
+            ]
+            if (
+                _is_scope_role(role)
+                and name
+                and any(value.strip().casefold() in folded for value in aliases + [name] if value.strip())
+            ):
+                names.append(name)
     gazetteer = getattr(context, "gazetteer", None)
     for entry in getattr(gazetteer, "entries", []) or []:
+        if not _is_dynamic_gazetteer_scope(entry):
+            continue
         canonical = str(getattr(entry, "name", "") or "").strip()
         values = [canonical, *(str(value) for value in (getattr(entry, "aliases", None) or []))]
         if any(value and value.casefold() in folded for value in values):
@@ -2392,7 +2612,11 @@ def _scope_name_tokens(context: Any, text: str) -> List[str]:
         return list(dict.fromkeys(names))
     for delimiter in ("、", "，", ",", "；", ";", "和", "与", "及"):
         raw = raw.replace(delimiter, "|")
-    return [part.strip() for part in raw.split("|") if part.strip()]
+    return [
+        PlaceEvidenceIndex.normalize_mention(part.strip())
+        for part in raw.split("|")
+        if PlaceEvidenceIndex.normalize_mention(part.strip())
+    ]
 
 
 __all__ = ["PlaceEvidenceIndex"]

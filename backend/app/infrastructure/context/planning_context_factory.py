@@ -500,7 +500,7 @@ async def build_planning_context(
     demands = _build_context_demands(workspace)
     external_search_port = None
     try:
-        from app.application.queries.evidence import get_active_external_provider
+        from app.infrastructure.search.provider_registry import get_active_external_provider
 
         external_search_port = get_active_external_provider()
     except Exception as exc:

@@ -80,7 +80,7 @@ async def lifespan(app):
         raise
     app.state.readiness = {"database": "ready", "checkpointer": "ready", "langgraph": "ready"}
 
-    from app.application.queries.evidence import configure_external_provider
+    from app.infrastructure.search.provider_registry import configure_external_provider
     configure_external_provider(app)
 
     from app.infrastructure.events import event_hub
@@ -115,7 +115,7 @@ async def lifespan(app):
 
     logger.info("Cleaning up resources...")
     try:
-        from app.application.queries.evidence import close_external_provider
+        from app.infrastructure.search.provider_registry import close_external_provider
         await close_external_provider(app)
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to close external evidence provider: %s", exc, exc_info=True)

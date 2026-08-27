@@ -34,8 +34,7 @@ def _has_structured_spatial_signal(fact: Any) -> bool:
         return True
     for mention in getattr(fact, "spatial_mentions", None) or []:
         if (
-            getattr(mention, "village_scopes", None)
-            or getattr(mention, "place_scopes", None)
+            getattr(mention, "scope_mentions", None)
             or getattr(mention, "relation", "")
             or getattr(mention, "source_feature_ids", None)
             or str(getattr(mention, "target_name", "") or "").strip()

@@ -11,6 +11,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.contracts.domain.l1_contracts import LocationScopeMention
+
 
 class L1MentionContext(BaseModel):
     """One report-derived mention with its semantic and provenance context."""
@@ -22,6 +24,7 @@ class L1MentionContext(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     spatial_hint: str = ""
     related_mentions: list[str] = Field(default_factory=list)
+    scope_mentions: list[LocationScopeMention] = Field(default_factory=list)
     source_report_ref: str = ""
     source_span: str = ""
     dimension_key: str = ""
@@ -32,7 +35,7 @@ class L1MentionContext(BaseModel):
 class L1SemanticScope(BaseModel):
     """A bounded semantic scope linking report mentions to village context.
 
-    A scope is deliberately pre-geometric.  ``village_mentions`` and
+    A scope is deliberately pre-geometric.  ``scope_mentions`` and
     ``object_mentions`` are semantic inputs; later retrieval binds them to KG
     entities, bundle features, and topology relations.
     """
@@ -40,6 +43,7 @@ class L1SemanticScope(BaseModel):
     scope_id: str
     village_mentions: list[str] = Field(default_factory=list)
     village_fact_refs: list[str] = Field(default_factory=list)
+    scope_mentions: list[LocationScopeMention] = Field(default_factory=list)
     object_mentions: list[L1MentionContext] = Field(default_factory=list)
     relation_hints: list[dict[str, Any]] = Field(default_factory=list)
     source_observation_refs: list[str] = Field(default_factory=list)

@@ -494,7 +494,10 @@ def requirements_from_l1(snapshot: Any) -> tuple[EvidenceRequirement, ...]:
                 metadata={"gap_id": str(getattr(gap, "gap_id", "") or "")},
             )
         )
-    for offset, location in enumerate(getattr(snapshot, "location_facts", None) or [], start=len(output)):
+    for offset, location in enumerate(
+        getattr(snapshot, "location_mentions", None) or [],
+        start=len(output),
+    ):
         if getattr(location, "evidence_refs", None) or getattr(location, "source_report_ref", ""):
             continue
         mention = str(getattr(location, "normalized_name", "") or getattr(location, "mention", "") or "").strip()

@@ -147,6 +147,17 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as exc:  # source index persistence is observable but non-fatal
             _log_bounded_runtime_warning(dim_key, "L1_SOURCE_INDEX_PERSIST_FAILED", exc)
 
+    l1_input_context = None
+    if dim_layer == 1:
+        from app.domain.assessment.l1_extraction_loop import build_l1_input_context
+
+        l1_input_context = build_l1_input_context(
+            dimension_key=dim_key,
+            source_index=source_index,
+            session_id=session_id,
+            source_index_ref=source_index_ref or "",
+        )
+
     # 2+3. GIS 和 RAG 并行执行（两者访问独立数据源，无逻辑依赖）
     config = state.get("config", {})
 
@@ -160,14 +171,17 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     from app.core.settings import RAG_TIMEOUT_S
 
-    try:
-        async with asyncio.timeout(RAG_TIMEOUT_S):
-            rag_context, rag_log = await run_rag(dim_key, cfg, state)
-    except asyncio.TimeoutError:
-        logger.warning(
-            "[analyze_dimension] %s: RAG retrieval timed out after %ss", dim_key, RAG_TIMEOUT_S,
-        )
+    if dim_layer == 1:
         rag_context, rag_log = "", None
+    else:
+        try:
+            async with asyncio.timeout(RAG_TIMEOUT_S):
+                rag_context, rag_log = await run_rag(dim_key, cfg, state)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[analyze_dimension] %s: RAG retrieval timed out after %ss", dim_key, RAG_TIMEOUT_S,
+            )
+            rag_context, rag_log = "", None
 
     # 4. Resolve only typed dependency artifacts.  L1 facts are supplied by
     # the snapshot/catalog boundary; report bodies and audit traces never
@@ -267,13 +281,20 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     # 6. 组装 Prompt
-    prompt = _build_prompt(
-        cfg, state, rag_context, deps, same_layer_contexts,
-        professional_data_section=professional_data_section,
-        explore_section=explore_section,
-        quality_feedback=state.get("quality_feedback", ""),
-        structured_pass="l1_observe" if dim_layer == 1 else "",
-    )
+    if dim_layer == 1 and l1_input_context is not None:
+        prompt = json.dumps(
+            {"l1_input_context": l1_input_context.model_dump(mode="json")},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    else:
+        prompt = _build_prompt(
+            cfg, state, rag_context, deps, same_layer_contexts,
+            professional_data_section=professional_data_section,
+            explore_section=explore_section,
+            quality_feedback=state.get("quality_feedback", ""),
+            structured_pass="",
+        )
     logger.info(f"[analyze_dimension] {dim_key}: Prompt length = {len(prompt)} chars")
 
     # 6.5 统计收集 - 开始维度
@@ -302,6 +323,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     l1_diagnostics: list[str] = []
     l1_pass_cursor: dict[str, Any] = {}
     l1_retrieval_trace: list[dict[str, Any]] = []
+    l1_output = None
     try:
         # L1 is exclusively implemented by the bounded observe/validate/report
         # loop. No combined report-plus-structure branch is
@@ -377,8 +399,8 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
             loop_result = await run_l1_dimension_loop(
                 dimension_key=dim_key,
-                prompt=prompt,
                 source_index=source_index,
+                input_context=l1_input_context,
                 runner_kwargs=runner_kwargs,
                 checkpoint_writer=_write_l1_cursor,
                 resume_payload=resume_payload,
@@ -387,6 +409,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             )
             report_body = loop_result.report_body
             observations = list(loop_result.observations or [])
+            l1_output = loop_result.output
             l1_diagnostics = list(loop_result.diagnostics or [])
             l1_pass_cursor = (
                 loop_result.cursor.model_dump(mode="json")
@@ -466,12 +489,15 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # The persisted instruction is the semantic dependency artifact.  Page
     # cursors, source indexes, diagnostics and retrieval traces stay in step
     # audit records and are never replayed into another dimension prompt.
-    instruction_payload = {
-        "observations": [
-            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
-            for item in observations
-        ],
-    }
+    if l1_output is not None:
+        instruction_payload = l1_output.semantic.model_dump(mode="json")
+    else:
+        instruction_payload = {
+            "observations": [
+                item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+                for item in observations
+            ],
+        }
     observations_json = json.dumps(instruction_payload, ensure_ascii=False)
     # 7.6 Observation quality validation (design: validation step after every
     # LLM call).  The validator checks evidence and typed observation shape;
@@ -567,6 +593,24 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # P2: L1/L2/L3 维度步骤 Report（供 positioning-trace 面板定位）
     if dim_layer in (1, 2, 3):
         try:
+            l1_output_payload = (
+                l1_output.model_dump(mode="json")
+                if l1_output is not None
+                else None
+            )
+            l1_checkpoint_payload = None
+            if l1_output is not None:
+                from app.contracts.domain.l1_contracts import L1DimensionPassState
+                from app.domain.assessment.observation_draft import L1DimensionCheckpoint
+
+                checkpoint_cursor = L1DimensionPassState.model_validate(
+                    l1_pass_cursor
+                )
+                l1_checkpoint_payload = L1DimensionCheckpoint(
+                    context=l1_output.context,
+                    output=l1_output,
+                    cursor=checkpoint_cursor,
+                ).model_dump(mode="json")
             await save_step_report(
                 state.get("session_id", ""), f"L{dim_layer}",
                 step_name=f"analyze_dimension:{dim_key}",
@@ -586,17 +630,13 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                         for item in observations
                     ],
                     "observation_count": len(observations),
+                    "l1_output": l1_output_payload,
                     "l1_pass_cursor": l1_pass_cursor,
-                    "l1_pass_payload": {
-                        "report_body": report_body,
-                        "observations": [
-                            item.model_dump(mode="json")
-                            if hasattr(item, "model_dump") else item
-                            for item in observations
-                        ],
-                        "diagnostics": l1_diagnostics,
-                        "cursor": l1_pass_cursor,
-                    },
+                    "l1_pass_payload": (
+                        {"l1_checkpoint": l1_checkpoint_payload}
+                        if l1_checkpoint_payload is not None
+                        else {}
+                    ),
                     "retrieval_followup_trace": l1_retrieval_trace[-24:],
                     "kg_evidence_consumed": explore_audit,
                 },

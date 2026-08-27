@@ -29,7 +29,11 @@ from app.contracts.evidence.feature_identity_contracts import (
     FeatureEvidenceRef,
 )
 from app.contracts.ports.place_resolution_contracts import PlaceResolutionCandidate
-from app.contracts.spatial.spatial_reference_contracts import GeometryRef, normalize_spatial_role
+from app.contracts.spatial.spatial_reference_contracts import (
+    GeometryRef,
+    SearchScopeRef,
+    normalize_spatial_role,
+)
 from app.evidence.index.evidence_scorer import WEIGHTS
 from app.infrastructure.kg.ontology import EntityTypes
 from app.infrastructure.kg.spatial_store import SpatialKGEntity
@@ -41,6 +45,31 @@ _MAX_RECALL_CANDIDATES = 4096
 _MAX_RELATIONS = 24
 _RESOLUTION_CACHE_MAXSIZE = 128
 _QUERY_DELIMITERS = set(",，、;；:：|/\\()（）[]【】<>《》。.!！？?")
+_SCOPE_TARGET_ROLES = frozenset({
+    "scope",
+    "village",
+    "natural_village",
+    "administrative_village",
+    "settlement",
+    "place",
+    "area",
+    "行政村",
+    "自然村",
+    "村庄",
+    "聚落",
+    "地点",
+    "区域",
+})
+_DYNAMIC_SCOPE_SOURCES = frozenset({
+    "amap",
+    "amap_map",
+    "bundle_annotation",
+    "external_anchors",
+    "tencent",
+    "tencent_map",
+    "tianditu",
+    "uploaded_annotation",
+})
 
 
 def _is_bsm(value: object) -> bool:
@@ -78,6 +107,140 @@ def _is_specific_scope_name(value: object) -> bool:
     """Reject gazetteer type labels that are not a spatial scope name."""
     folded = _fold_query(value)
     return bool(folded) and len(folded) >= 2 and folded not in _GENERIC_SCOPE_NAMES
+
+
+def _context_location_mentions(context: Any) -> list[Any]:
+    """Read the canonical L1 mention collection with old-context fallback."""
+
+    mentions = getattr(context, "location_mentions", None)
+    if mentions:
+        return list(mentions)
+    return list(getattr(context, "location_facts", None) or [])
+
+
+def _context_l1_items(context: Any) -> list[Any]:
+    collections = [
+        _context_location_mentions(context),
+        list(getattr(context, "l1_fact_records", None) or []),
+    ]
+    result: list[Any] = []
+    seen_objects: set[int] = set()
+    seen_fact_ids: set[str] = set()
+    for collection in collections:
+        for item in collection:
+            object_id = id(item)
+            fact_id = str(getattr(item, "fact_id", "") or "").strip()
+            if object_id in seen_objects or (fact_id and fact_id in seen_fact_ids):
+                continue
+            seen_objects.add(object_id)
+            if fact_id:
+                seen_fact_ids.add(fact_id)
+            result.append(item)
+    return result
+
+
+def _scope_mentions_for_fact(fact: Any) -> list[Any]:
+    raw = getattr(fact, "scopes", None)
+    if raw in (None, "", []):
+        raw = getattr(fact, "scope_mentions", None)
+    if raw in (None, "", []):
+        raw = [
+            {"name": value, "role": "natural_village"}
+            for value in (getattr(fact, "village_scopes", None) or [])
+        ]
+        raw.extend(
+            {"name": value, "role": "place"}
+            for value in (getattr(fact, "place_scopes", None) or [])
+        )
+    return [] if isinstance(raw, str) else list(raw or [])
+
+
+def _scope_value(scope: Any, field: str, default: str = "") -> str:
+    if isinstance(scope, dict):
+        return str(scope.get(field, default) or "").strip()
+    return str(getattr(scope, field, default) or "").strip()
+
+
+def _fact_scope_names(fact: Any) -> list[str]:
+    return list(dict.fromkeys(
+        _scope_value(scope, "normalized_name") or _scope_value(scope, "name")
+        for scope in _scope_mentions_for_fact(fact)
+        if _scope_value(scope, "normalized_name") or _scope_value(scope, "name")
+    ))
+
+
+def _is_explicit_scope_role(value: Any) -> bool:
+    role = normalize_spatial_role(value).casefold()
+    return bool(role and role not in {"unknown", "target"})
+
+
+def _is_scope_target_role(value: Any) -> bool:
+    role = normalize_spatial_role(value)
+    return role in _SCOPE_TARGET_ROLES
+
+
+def _scope_type_for_role(value: Any) -> str:
+    role = normalize_spatial_role(value)
+    if role in {
+        "village",
+        "natural_village",
+        "administrative_village",
+        "settlement",
+        "行政村",
+        "自然村",
+        "村庄",
+        "聚落",
+    }:
+        return "village_scope"
+    return "unknown"
+
+
+def _typed_l1_feature_context(
+    context: Any,
+    mention: str,
+) -> tuple[str, list[str]]:
+    """Return an L1-declared target role and its explicitly typed scopes."""
+    mention_key = _fold_query(mention)
+    if not mention_key:
+        return "", []
+    for fact in _context_l1_items(context):
+        names = [
+            str(getattr(fact, "normalized_name", "") or "").strip(),
+            str(getattr(fact, "mention", "") or "").strip(),
+        ]
+        if mention_key not in {
+            _fold_query(name)
+            for name in names
+            if _fold_query(name)
+        }:
+            continue
+        role = normalize_spatial_role(
+            getattr(fact, "role", "")
+            or getattr(fact, "observed_type", "")
+            or getattr(fact, "semantic_type", "")
+        )
+        scope_names = [
+            _scope_value(scope, "normalized_name") or _scope_value(scope, "name")
+            for scope in _scope_mentions_for_fact(fact)
+            if _is_explicit_scope_role(_scope_value(scope, "role"))
+            and (
+                _scope_value(scope, "normalized_name")
+                or _scope_value(scope, "name")
+            )
+        ]
+        if role != "unknown" or scope_names:
+            return role, list(dict.fromkeys(scope_names))
+    return "", []
+
+
+def _is_dynamic_scope_entry(entry: Any) -> bool:
+    source = str(getattr(entry, "source", "") or "").strip().casefold()
+    entity_uri = str(getattr(entry, "entity_uri", "") or "").strip().casefold()
+    return (
+        source in _DYNAMIC_SCOPE_SOURCES
+        or entity_uri.startswith("pln:external_")
+        or "external_natural_village" in entity_uri
+    )
 
 
 def _context_parcels(context: Any) -> list[Any]:
@@ -136,17 +299,31 @@ def _parcel_semantic_labels(parcel: Any) -> list[str]:
     return list(dict.fromkeys(_fold_query(value) for value in values if _fold_query(value)))
 
 
-def _query_scope_bsms(context: Any, folded_query: str) -> set[str]:
+def _query_scope_bsms(
+    context: Any,
+    folded_query: str,
+    graph: "EvidenceGraph" | None = None,
+) -> set[str]:
+    scope_names = _query_scope_names(context, folded_query)
+    graph = graph or getattr(context, "evidence_graph", None)
+    index = getattr(graph, "_index", None)
+    indexed_scope_bsms = getattr(index, "scope_bsms_for_names", None)
+    if callable(indexed_scope_bsms):
+        try:
+            return set(indexed_scope_bsms(scope_names) or set())
+        except Exception:
+            pass
     gazetteer = getattr(context, "gazetteer", None)
     if gazetteer is None:
         return set()
     matched: list[tuple[int, set[str]]] = []
     for entry in getattr(gazetteer, "entries", []) or []:
+        if not _is_dynamic_scope_entry(entry):
+            continue
         name = _fold_query(getattr(entry, "name", ""))
         if (
             not _is_specific_scope_name(name)
             or name not in folded_query
-            or "村" not in name
         ):
             continue
         bsms = {
@@ -166,6 +343,8 @@ def _query_scope_names(context: Any, folded_query: str) -> list[str]:
     names: list[str] = []
     gazetteer = getattr(context, "gazetteer", None)
     for entry in getattr(gazetteer, "entries", []) or []:
+        if not _is_dynamic_scope_entry(entry):
+            continue
         values = [
             getattr(entry, "name", ""),
             *(getattr(entry, "aliases", None) or []),
@@ -173,13 +352,27 @@ def _query_scope_names(context: Any, folded_query: str) -> list[str]:
         for value in values:
             text = str(value or "").strip()
             folded = _fold_query(text)
+            entry_role = str(getattr(entry, "role", "") or "").casefold()
             if (
                 _is_specific_scope_name(text)
                 and folded in folded_query
-                and "村" in text
+                and (
+                    not entry_role
+                    or _is_scope_target_role(entry_role)
+                )
             ):
                 names.append(text)
-    for fact in getattr(context, "location_facts", []) or []:
+    for fact in _context_l1_items(context):
+        for scope in _scope_mentions_for_fact(fact):
+            value = _scope_value(scope, "normalized_name") or _scope_value(scope, "name")
+            folded = _fold_query(value)
+            role = _scope_value(scope, "role").casefold()
+            if (
+                folded
+                and folded in folded_query
+                and _is_explicit_scope_role(role)
+            ):
+                names.append(value)
         role = str(getattr(fact, "role", "") or "").casefold()
         value = str(
             getattr(fact, "normalized_name", "")
@@ -187,11 +380,7 @@ def _query_scope_names(context: Any, folded_query: str) -> list[str]:
             or ""
         ).strip()
         folded = _fold_query(value)
-        if (
-            folded
-            and folded in folded_query
-            and ("村" in value or role in {"village", "natural_village"})
-        ):
+        if folded and folded in folded_query and _is_scope_target_role(role):
             names.append(value)
     context_village = str(getattr(context, "village_name", "") or "").strip()
     # The request is already scoped to one administrative village by the
@@ -265,66 +454,49 @@ def _query_direction(query: str, spatial_spec: Any = None) -> str:
     return ""
 
 
-def _scope_centroid(context: Any, scope_names: list[str]) -> tuple[float, float] | None:
-    """Read a scope anchor from gazetteer/KG projections, never from an LLM."""
-    gazetteer = getattr(context, "gazetteer", None)
-    wanted = {_fold_query(value) for value in scope_names if _fold_query(value)}
-    for entry in getattr(gazetteer, "entries", []) or []:
-        names = [
-            getattr(entry, "name", ""),
-            *(getattr(entry, "aliases", None) or []),
-        ]
-        if wanted and not any(_fold_query(value) in wanted for value in names):
-            continue
-        centroid = getattr(entry, "centroid", None)
-        if centroid and len(centroid) >= 2:
-            try:
-                return float(centroid[0]), float(centroid[1])
-            except (TypeError, ValueError):
-                continue
-    observations = {
-        str(getattr(observation, "observation_id", "") or ""): observation
-        for observation in getattr(context, "evidence_observations", []) or []
-    }
-    parcels_by_bsm = {
-        str(getattr(parcel, "bsm", "") or ""): parcel
-        for parcel in context.current_parcels()
-        if str(getattr(parcel, "bsm", "") or "")
-    }
-    for binding in getattr(context, "grounded_bindings", []) or []:
-        if str(getattr(binding, "status", "") or "") != "resolved":
-            continue
-        names = [
-            getattr(observations[ref], "normalized_name", "")
-            or getattr(observations[ref], "mention", "")
-            for ref in getattr(binding, "observation_refs", []) or []
-            if ref in observations
-        ]
-        if wanted and not any(_fold_query(name) in wanted for name in names):
-            continue
-        geometries = []
-        for bsm in getattr(binding, "source_bsms", []) or []:
-            parcel = parcels_by_bsm.get(str(bsm))
-            raw = getattr(parcel, "geometry", None) if parcel is not None else None
-            if raw is None:
-                continue
-            try:
-                from shapely.geometry import shape
+def _scope_centroid(
+    context: Any,
+    scope_names: list[str],
+    graph: "EvidenceGraph" | None = None,
+) -> tuple[float, float] | None:
+    """Estimate a directional center from current scoped parcel evidence."""
 
-                geometry = shape(raw) if isinstance(raw, dict) else raw
-                if geometry is not None and not geometry.is_empty:
-                    geometries.append(geometry)
-            except Exception:
-                continue
-        if geometries:
-            try:
-                from shapely.ops import unary_union
+    graph = graph or getattr(context, "evidence_graph", None)
+    index = getattr(graph, "_index", None)
+    scope_bsms_for_names = getattr(index, "scope_bsms_for_names", None)
+    if not callable(scope_bsms_for_names):
+        return None
+    try:
+        scope_bsms = set(scope_bsms_for_names(scope_names) or set())
+    except Exception:
+        return None
+    if not scope_bsms:
+        return None
+    geometries = []
+    for parcel in _context_parcels(context):
+        bsm = str(getattr(parcel, "bsm", "") or "").strip()
+        if bsm not in scope_bsms:
+            continue
+        raw = getattr(parcel, "geometry", None)
+        if raw is None:
+            continue
+        try:
+            from shapely.geometry import shape
 
-                centroid = unary_union(geometries).centroid
-                return float(centroid.x), float(centroid.y)
-            except Exception:
-                continue
-    return None
+            geometry = shape(raw) if isinstance(raw, dict) else raw
+            if geometry is not None and not geometry.is_empty:
+                geometries.append(geometry)
+        except Exception:
+            continue
+    if not geometries:
+        return None
+    try:
+        from shapely.ops import unary_union
+
+        centroid = unary_union(geometries).centroid
+        return float(centroid.x), float(centroid.y)
+    except Exception:
+        return None
 
 
 def _directional_parcel_bsms(
@@ -338,7 +510,7 @@ def _directional_parcel_bsms(
     direction = _query_direction(query, spatial_spec)
     if not direction:
         return "", set()
-    center = _scope_centroid(context, scope_names)
+    center = _scope_centroid(context, scope_names, graph=graph)
     if center is None:
         return direction, set()
     try:
@@ -359,16 +531,20 @@ def _kg_scope_refs(context: Any, scope_names: list[str]) -> set[str]:
         return set()
     refs: set[str] = set()
     for name in scope_names:
-        for token in (name, f"{name}村", f"{name}自然村"):
-            try:
-                entities = kg.find_entities(name=token, limit=12) or []
-            except Exception:
-                entities = []
-            refs.update(
-                str(getattr(entity, "entity_ref", "") or "").strip()
-                for entity in entities
-                if str(getattr(entity, "entity_ref", "") or "").strip()
-            )
+        try:
+            entities = kg.find_entities(name=name, limit=12) or []
+        except Exception:
+            entities = []
+        for entity in entities:
+            entity_ref = str(getattr(entity, "entity_ref", "") or "").strip()
+            entity_type = str(getattr(entity, "entity_type", "") or "").casefold()
+            if not entity_ref:
+                continue
+            if "residentialcluster" in entity_ref.casefold() or "residential_cluster" in entity_ref.casefold():
+                continue
+            if "residentialcluster" in entity_type or "residential_cluster" in entity_type:
+                continue
+            refs.add(entity_ref)
     return refs
 
 
@@ -944,21 +1120,9 @@ class EvidenceGraph:
         scope_truncated = len(explicit_scopes) > _MAX_CANDIDATES
         if not explicit_scopes and hints:
             folded_hints = _fold_query(hints)
-            gazetteer = getattr(self.context, "gazetteer", None)
-            for entry in getattr(gazetteer, "entries", []) or []:
-                values = [
-                    getattr(entry, "name", ""),
-                    *(getattr(entry, "aliases", None) or []),
-                ]
-                if any(
-                    _is_specific_scope_name(value)
-                    and "村" in str(value)
-                    and _fold_query(value) in folded_hints
-                    for value in values
-                ):
-                    name = str(getattr(entry, "name", "") or "").strip()
-                    if name:
-                        explicit_scopes.append(name)
+            explicit_scopes.extend(
+                _query_scope_names(self.context, folded_hints)
+            )
             explicit_scopes = list(dict.fromkeys(explicit_scopes))
             scope_truncated = (
                 scope_truncated or len(explicit_scopes) > _MAX_CANDIDATES
@@ -1130,10 +1294,11 @@ class EvidenceGraph:
         direct_values = list(direct_candidates.values())[
             :limit
         ]
-        all_roles = (
-            "village", "natural_village", "facility", "landmark", "hazard",
-            "road", "axis", "water", "zone", "parcel",
-        )
+        all_roles = tuple(dict.fromkeys((
+            *_SCOPE_TARGET_ROLES,
+            "facility", "landmark", "hazard", "road", "axis", "water",
+            "zone", "parcel",
+        )))
         role_probe_map = {
             "facility": ("facility", "landmark"),
             "landmark": ("landmark", "facility"),
@@ -1141,8 +1306,13 @@ class EvidenceGraph:
             "axis": ("axis", "road"),
             "water": ("water",),
             "hazard": ("hazard",),
+            "scope": all_roles,
             "village": all_roles,
             "natural_village": all_roles,
+            "administrative_village": all_roles,
+            "settlement": all_roles,
+            "place": all_roles,
+            "area": all_roles,
             "unknown": all_roles,
         }
         probe_roles = role_probe_map.get(expected_role, all_roles)
@@ -1243,9 +1413,14 @@ class EvidenceGraph:
                     "mode": "strict_scope_probe",
                     "candidate_count": len(scoped_values),
                 })
+                search_scope = self.search_scope_for_names(
+                    explicit_scopes,
+                    reason="typed_l1_scope_retrieval",
+                )
                 return {
                     "candidates": scoped_values,
                     "inferred_scope_candidate": None,
+                    "search_scope": search_scope,
                     "status": (
                         "resolved"
                         if len(scoped_values) == 1
@@ -1278,17 +1453,20 @@ class EvidenceGraph:
                     "candidate_count": len(recovery_candidates),
                     "selection": "llm_closed_set",
                 })
+            search_scope = self.search_scope_for_names(
+                explicit_scopes,
+                reason="typed_l1_scope_retrieval",
+            )
             return {
                 "candidates": [],
                 "inferred_scope_candidate": None,
-                "status": "unresolved",
+                "search_scope": search_scope,
+                "status": "inferred_scope" if search_scope is not None else "unresolved",
                 "scope_candidates": recovery_candidates,
                 "query_trace": bounded_query_trace(),
             }
 
-        if direct_values and expected_role not in {
-            "village", "natural_village", "unknown"
-        }:
+        if direct_values and not _is_scope_target_role(expected_role) and expected_role != "unknown":
             trace.append({
                 "step": "supporting_evidence_complete",
                 "mode": "direct_source",
@@ -1307,121 +1485,32 @@ class EvidenceGraph:
                 "query_trace": bounded_query_trace(),
             }
 
-        if expected_role in {"village", "natural_village", "unknown"}:
-            source_values = list(supporting_candidates.values()) or direct_values
-            parcel_bsms: set[str] = set()
-            support_refs: list[str] = []
-            relation_refs: list[str] = []
-            l1_refs: list[str] = []
-            source_roles: set[str] = set()
-            for candidate in source_values[:limit]:
-                source_roles.add(
-                    str(getattr(candidate, "role", "") or "unknown")
-                )
-                support_refs.extend(
-                    getattr(candidate, "evidence_refs", None) or []
-                )
-                relation_refs.extend(
-                    getattr(candidate, "relation_refs", None) or []
-                )
-                l1_refs.extend(
-                    getattr(candidate, "l1_fact_refs", None) or []
-                )
-                related = list(
-                    getattr(candidate, "related_parcel_bsms", None) or []
-                )
-                if not related:
-                    feature_bsm = str(
-                        getattr(candidate, "feature_bsm", "") or ""
-                    ).strip()
-                    source_bsm = str(
-                        getattr(candidate, "source_bsm", "") or ""
-                    ).strip()
-                    related = [
-                        str(value).strip()
-                        for value in (
-                            getattr(candidate, "source_bsms", None) or []
-                        )
-                        if str(value).strip()
-                        and str(value).strip() not in {feature_bsm, source_bsm}
-                    ]
-                parcel_bsms.update(
-                    str(value).strip()
-                    for value in related
-                    if _is_bsm(value)
-                )
-            if parcel_bsms:
-                scope = explicit_scopes[0] if explicit_scopes else query
-                scope_candidate = PlaceResolutionCandidate(
-                    entity_ref=f"scope:village:{scope}",
-                    entity_type="residential_cluster",
-                    role="village",
-                    canonical_name=scope,
-                    aliases=[query] if query and query != scope else [],
-                    anchor_bsms=sorted(parcel_bsms),
-                    related_parcel_bsms=sorted(parcel_bsms),
-                    source_bsms=sorted(parcel_bsms),
-                    score=round(
-                        min(
-                            0.72,
-                            0.38
-                            + min(0.18, 0.03 * len(parcel_bsms))
-                            + min(0.12, 0.04 * len(source_roles)),
-                        ),
-                        4,
-                    ),
-                    evidence_refs=list(dict.fromkeys([
-                        "inferred:cross_role_scope",
-                        "bundle:related_parcels",
-                        *support_refs,
-                    ])),
-                    relation_refs=list(dict.fromkeys(relation_refs))[
-                        :_MAX_RELATIONS
-                    ],
-                    l1_fact_refs=list(dict.fromkeys(l1_refs)),
-                    l1_snapshot_ref=str(
-                        getattr(self.context, "l1_snapshot_ref", "") or ""
-                    ),
-                    bundle_snapshot_digest=str(
-                        getattr(
-                            getattr(self.context, "data_snapshot", None),
-                            "digest",
-                            "",
-                        )
-                        or ""
-                    ),
-                    evidence={
-                        "cross_role_support": min(
-                            1.0, 0.35 + 0.1 * len(source_roles)
-                        ),
-                        "related_parcel_support": 1.0,
-                    },
-                )
+        if _is_scope_target_role(expected_role):
+            scope_names = explicit_scopes or _query_scope_names(
+                self.context,
+                _fold_query(query, hints),
+            )
+            search_scope = self.search_scope_for_names(
+                scope_names,
+                reason="typed_l1_scope_retrieval",
+            )
+            if search_scope is not None:
                 trace.append({
-                    "step": "cross_role_scope_inference",
-                    "scope": scope,
-                    "source_roles": sorted(source_roles),
-                    "source_candidate_count": len(source_values),
-                    "related_parcel_bsms": sorted(parcel_bsms),
-                    "geometry_granularity": "parcel_set",
-                    "best_effort": True,
-                })
-                trace.append({
-                    "step": "supporting_evidence_complete",
-                    "mode": "cross_role_scope",
-                    "candidate_count": 1,
+                    "step": "search_scope_ready",
+                    "scope_names": scope_names,
+                    "scope_bsms": list(search_scope.scope_bsms),
+                    "candidate_materialization": "forbidden",
                 })
                 return {
-                    "candidates": direct_values,
-                    "inferred_scope_candidate": scope_candidate,
-                    "status": "inferred",
+                    "candidates": [],
+                    "inferred_scope_candidate": None,
+                    "search_scope": search_scope,
+                    "status": "inferred_scope",
                     "query_trace": bounded_query_trace(),
                 }
 
         scope_candidates: list[Any] = []
-        if explicit_scopes and expected_role not in {
-            "village", "natural_village", "unknown"
-        }:
+        if explicit_scopes and not _is_scope_target_role(expected_role) and expected_role != "unknown":
             scope_candidates, recovery_trace = self.recover_scoped_candidates(
                 query,
                 role=expected_role,
@@ -1442,10 +1531,19 @@ class EvidenceGraph:
             "step": "supporting_evidence_unresolved",
             "reason": "no source-backed candidate or related parcel set",
         })
+        search_scope = self.search_scope_for_names(
+            explicit_scopes,
+            reason="typed_l1_scope_retrieval",
+        ) if explicit_scopes else None
         return {
             "candidates": direct_values,
             "inferred_scope_candidate": None,
-            "status": "unresolved" if not direct_values else "ambiguous",
+            "search_scope": search_scope,
+            "status": (
+                "inferred_scope"
+                if search_scope is not None and not direct_values
+                else "unresolved" if not direct_values else "ambiguous"
+            ),
             "scope_candidates": scope_candidates,
             "query_trace": bounded_query_trace(),
         }
@@ -1510,7 +1608,7 @@ class EvidenceGraph:
         collected: dict[tuple[str, ...], Any] = {}
         trace: list[dict[str, Any]] = []
         for scope in scopes:
-            scope_bsms = _query_scope_bsms(self.context, _fold_query(scope))
+            scope_bsms = _query_scope_bsms(self.context, _fold_query(scope), graph=self)
             scope_refs = _kg_scope_refs(self.context, [scope])
             if not scope_bsms and not scope_refs:
                 trace.append({
@@ -1620,6 +1718,98 @@ class EvidenceGraph:
             )
         )
 
+    def search_scope_for_names(
+        self,
+        scope_names: list[str] | tuple[str, ...],
+        *,
+        provenance_refs: list[str] | tuple[str, ...] = (),
+        reason: str = "typed_l1_scope",
+    ) -> SearchScopeRef | None:
+        """Build a non-materializable search scope from explicit place names."""
+
+        names = list(dict.fromkeys(
+            str(value).strip() for value in (scope_names or ()) if str(value).strip()
+        ))
+        if not names:
+            return None
+        scope_bsms: set[str] = set()
+        indexed_scope_bsms = getattr(self._index, "scope_bsms_for_names", None)
+        if callable(indexed_scope_bsms):
+            try:
+                scope_bsms.update(indexed_scope_bsms(names) or set())
+            except Exception:
+                pass
+        scope_refs = _kg_scope_refs(self.context, names)
+        if not scope_bsms and not scope_refs:
+            return None
+        source_refs = list(dict.fromkeys(
+            str(value).strip()
+            for value in (provenance_refs or ())
+            if str(value).strip()
+        ))
+        missing_requirements: list[str] = []
+        if not scope_bsms:
+            missing_requirements.append("bundle_scope_bsms")
+        if not source_refs and not str(getattr(self.context, "l1_snapshot_ref", "") or ""):
+            missing_requirements.append("l1_scope_provenance")
+        scope_type = "unknown"
+        requested_keys = {_fold_query(value) for value in names}
+        for fact in _context_l1_items(self.context):
+            for scope in _scope_mentions_for_fact(fact):
+                scope_name = _scope_value(scope, "normalized_name") or _scope_value(scope, "name")
+                if _fold_query(scope_name) not in requested_keys:
+                    continue
+                inferred_type = _scope_type_for_role(_scope_value(scope, "role"))
+                if inferred_type != "unknown":
+                    scope_type = inferred_type
+                    break
+            if scope_type != "unknown":
+                break
+        return SearchScopeRef(
+            scope_bsms=sorted(scope_bsms),
+            scope_type=scope_type,
+            source="evidence_graph:l1_scope",
+            reason=reason,
+            provenance_refs=source_refs,
+            missing_requirements=missing_requirements,
+            source_snapshot_ref=str(
+                getattr(self.context, "l1_snapshot_ref", "") or ""
+            ),
+            bundle_snapshot_digest=str(
+                getattr(getattr(self.context, "data_snapshot", None), "digest", "")
+                or ""
+            ),
+            diagnostics={
+                "scope_names": names,
+                "kg_scope_refs": sorted(scope_refs),
+                "candidate_materialization": "forbidden",
+            },
+        )
+
+    def search_scope_for_mentions(self, mentions: Any) -> SearchScopeRef | None:
+        """Project typed L1 scope objects into one bounded search scope."""
+
+        names: list[str] = []
+        refs: list[str] = []
+        for mention in mentions or []:
+            for scope in _scope_mentions_for_fact(mention):
+                role = _scope_value(scope, "role").casefold()
+                if not _is_explicit_scope_role(role):
+                    continue
+                name = _scope_value(scope, "normalized_name") or _scope_value(scope, "name")
+                if name:
+                    names.append(name)
+                if isinstance(scope, dict):
+                    refs.extend(str(value).strip() for value in (scope.get("source_refs") or []) if str(value).strip())
+                    refs.extend(str(value).strip() for value in (scope.get("source_segment_ids") or []) if str(value).strip())
+                else:
+                    refs.extend(str(value).strip() for value in getattr(scope, "source_refs", []) if str(value).strip())
+                    refs.extend(str(value).strip() for value in getattr(scope, "source_segment_ids", []) if str(value).strip())
+        return self.search_scope_for_names(
+            list(dict.fromkeys(names)),
+            provenance_refs=list(dict.fromkeys(refs)),
+        )
+
     def resolve_mention(
         self, mention: str, role: str = "unknown", hints: str = ""
     ) -> Any:
@@ -1629,7 +1819,102 @@ class EvidenceGraph:
             cached = self._cached_resolution(cache_key)
             if cached is not None:
                 return cached
-        result = self._index.resolve_mention(mention, role=role, hints=hints)
+        typed_role, typed_scopes = _typed_l1_feature_context(
+            self.context,
+            mention,
+        )
+        effective_role = normalize_spatial_role(role or "unknown")
+        if effective_role == "unknown" and typed_role != "unknown":
+            effective_role = typed_role
+        typed_scope_trace: dict[str, Any] | None = None
+        result = None
+        if (
+            effective_role in {"facility", "landmark"}
+            and typed_scopes
+            and callable(getattr(self._index, "query_facility_bsms", None))
+        ):
+            scoped_candidates: dict[tuple[str, str, str], Any] = {}
+            scoped_statuses: list[str] = []
+            scoped_results: list[Any] = []
+            for scope_name in typed_scopes[:_MAX_CANDIDATES]:
+                scoped_result = self._index.query_facility_bsms(
+                    scope_name,
+                    mention,
+                    role=effective_role,
+                    hints=hints,
+                )
+                scoped_results.append(scoped_result)
+                scoped_status = str(
+                    getattr(scoped_result, "status", "unresolved") or "unresolved"
+                )
+                scoped_statuses.append(scoped_status)
+                for candidate in (
+                    getattr(scoped_result, "candidates", []) or []
+                    if scoped_status != "unresolved"
+                    else []
+                ):
+                    if not any(
+                        str(getattr(candidate, field, "") or "").strip()
+                        for field in ("feature_bsm", "source_bsm", "geometry_ref")
+                    ):
+                        continue
+                    key = (
+                        str(getattr(candidate, "entity_ref", "") or ""),
+                        str(getattr(candidate, "feature_bsm", "") or ""),
+                        str(getattr(candidate, "geometry_ref", "") or ""),
+                    )
+                    if any(key):
+                        scoped_candidates.setdefault(key, candidate)
+            if scoped_results:
+                base_result = scoped_results[0]
+                selected_candidates = list(scoped_candidates.values())
+                if selected_candidates:
+                    selected_ref = (
+                        selected_candidates[0].entity_ref
+                        if len(selected_candidates) == 1
+                        and all(status != "ambiguous" for status in scoped_statuses)
+                        else None
+                    )
+                    updates = {
+                        "status": (
+                            "resolved"
+                            if selected_ref
+                            else "ambiguous"
+                        ),
+                        "selected_entity_ref": selected_ref,
+                        "candidates": selected_candidates,
+                        "evidence_refs": [
+                            candidate.entity_ref
+                            for candidate in selected_candidates
+                        ],
+                        "unresolved_reason": None if selected_ref else "multiple scoped features remain",
+                    }
+                else:
+                    updates = {
+                        "status": "unresolved",
+                        "selected_entity_ref": None,
+                        "candidates": [],
+                        "evidence_refs": [],
+                        "unresolved_reason": "no candidate carries the typed L1 scope",
+                    }
+                if hasattr(base_result, "model_copy"):
+                    result = base_result.model_copy(update=updates)
+                else:
+                    result = copy(base_result)
+                    for key, value in updates.items():
+                        setattr(result, key, value)
+                typed_scope_trace = {
+                    "step": "typed_l1_scoped_feature",
+                    "role": effective_role,
+                    "scope_names": typed_scopes,
+                    "candidate_count": len(selected_candidates),
+                }
+        if result is None:
+            result = self._index.resolve_mention(
+                mention,
+                role=effective_role,
+                hints=hints,
+            )
         trace = list(getattr(result, "query_trace", []) or [])
         bundle_digest = str(
             getattr(getattr(self.context, "data_snapshot", None), "digest", "") or ""
@@ -1679,9 +1964,26 @@ class EvidenceGraph:
             "kg_version": str(getattr(self.context, "kg_version", 0) or 0),
             "l1_snapshot_ref": str(getattr(self.context, "l1_snapshot_ref", "") or ""),
         })
+        if typed_scope_trace is not None:
+            trace.append(typed_scope_trace)
         trace.append(_source_semantic_trace(self.context))
         if hasattr(result, "model_copy"):
-            result = result.model_copy(update={"query_trace": trace[-16:]})
+            updates = {"query_trace": trace[-16:]}
+            if typed_scopes:
+                scope = self.search_scope_for_names(
+                    typed_scopes,
+                    reason="typed_l1_scope_retrieval",
+                )
+                if scope is not None:
+                    updates["search_scope"] = scope
+            result = result.model_copy(update=updates)
+            if _is_scope_target_role(effective_role):
+                scope = self.search_scope_for_names(
+                    [str(mention).strip()],
+                    reason="place_mention_scope",
+                )
+                if scope is not None:
+                    result = result.model_copy(update={"search_scope": scope})
         else:
             result = copy(result)
             result.query_trace = trace[-16:]
@@ -1711,6 +2013,16 @@ class EvidenceGraph:
             self,
             spatial_spec,
         )
+        scope_names = _query_scope_names(
+            self.context,
+            _fold_query(village_name),
+        ) or [str(village_name).strip()]
+        search_scope = self.search_scope_for_names(
+            scope_names,
+            reason="facility_scope_retrieval",
+        )
+        if search_scope is not None and hasattr(result, "model_copy"):
+            result = result.model_copy(update={"search_scope": search_scope})
         trace = list(getattr(result, "query_trace", []) or [])
         bundle_digest = str(
             getattr(getattr(self.context, "data_snapshot", None), "digest", "") or ""
@@ -1785,6 +2097,14 @@ class EvidenceGraph:
         """
         result = self.resolve_mention(mention, role=role, hints=hints)
         candidates = list(getattr(result, "candidates", []) or [])
+        if _is_scope_target_role(role):
+            return []
+        if candidates and all(
+            str(getattr(candidate, "role", "") or "").casefold()
+            in _SCOPE_TARGET_ROLES
+            for candidate in candidates
+        ):
+            return []
         if result.status == "resolved":
             candidates = candidates[:1]
         elif not include_ambiguous:
@@ -1841,7 +2161,7 @@ class EvidenceGraph:
         ]
         if not matching_labels:
             return []
-        scope_bsms = _query_scope_bsms(self.context, folded_query)
+        scope_bsms = _query_scope_bsms(self.context, folded_query, graph=self)
         rows: dict[str, tuple[int, str, str, str]] = {}
         for label in matching_labels:
             label_score = len(label)
@@ -1924,7 +2244,7 @@ class EvidenceGraph:
         allowed_roles: set[str] = set()
         for scope in scopes:
             allowed_roles.update(_SCOPE_ROLES.get(scope, ()))
-        scope_bsms = _query_scope_bsms(self.context, folded_query)
+        scope_bsms = _query_scope_bsms(self.context, folded_query, graph=self)
         scope_names = _query_scope_names(self.context, folded_query)
         scope_refs = _kg_scope_refs(self.context, scope_names)
         scope_evidence_available = bool(scope_bsms or scope_refs)
@@ -2167,14 +2487,33 @@ class EvidenceGraph:
         bundle_digest = str(
             getattr(getattr(self.context, "data_snapshot", None), "digest", "") or ""
         )
+        scope_only = _is_scope_target_role(role) or bool(
+            result.candidates
+            and all(
+                _is_scope_target_role(getattr(candidate, "role", ""))
+                for candidate in result.candidates
+            )
+        )
+        spatial_candidates = [
+            candidate
+            for candidate in result.candidates
+            if (
+                not scope_only
+                and not (
+                    _is_scope_target_role(getattr(candidate, "role", ""))
+                    and not str(getattr(candidate, "feature_bsm", "") or "").strip()
+                    and not str(getattr(candidate, "geometry_ref", "") or "").strip()
+                )
+                and (
+                    getattr(candidate, "source_bsms", None)
+                    or getattr(candidate, "feature_bsm", None)
+                    or getattr(candidate, "geometry_ref", None)
+                )
+            )
+        ]
         refs = [
             feature_ref_from_candidate(candidate, bundle_digest=bundle_digest)
-            for candidate in result.candidates[:_MAX_CANDIDATES]
-            if (
-                getattr(candidate, "source_bsms", None)
-                or getattr(candidate, "feature_bsm", None)
-                or getattr(candidate, "geometry_ref", None)
-            )
+            for candidate in spatial_candidates[:_MAX_CANDIDATES]
         ]
         relations = _kg_relations(self.context, refs)
         return EvidencePacket(
@@ -2182,13 +2521,22 @@ class EvidenceGraph:
             bundle_snapshot_digest=bundle_digest,
             kg_version=str(getattr(self.context, "kg_version", 0) or 0),
             l1_snapshot_ref=str(getattr(self.context, "l1_snapshot_ref", "") or ""),
+            l1_scope_refs=(
+                list(getattr(result.search_scope, "provenance_refs", None) or [])
+                if getattr(result, "search_scope", None) is not None
+                else []
+            ),
             candidate_refs=refs,
-            candidate_total=len(result.candidates),
+            candidate_total=0 if scope_only else len(spatial_candidates),
             candidate_offset=0,
             candidate_limit=_MAX_CANDIDATES,
-            candidates_truncated=len(result.candidates) > _MAX_CANDIDATES,
+            candidates_truncated=(
+                not scope_only and len(spatial_candidates) > _MAX_CANDIDATES
+            ),
             next_candidate_offset=(
-                _MAX_CANDIDATES if len(result.candidates) > _MAX_CANDIDATES else None
+                _MAX_CANDIDATES
+                if not scope_only and len(spatial_candidates) > _MAX_CANDIDATES
+                else None
             ),
             relation_evidence=relations,
             ambiguity_status=(
@@ -2318,6 +2666,7 @@ def feature_ref_from_candidate(
                 [
                     *(getattr(candidate, "anchor_bsms", None) or []),
                     *(getattr(candidate, "related_parcel_bsms", None) or []),
+                    *(getattr(candidate, "source_bsms", None) or []),
                 ]
             )
         )[:24],
@@ -2500,6 +2849,16 @@ _L1_SPATIAL_ROLES: dict[str, str] = {
     "village": "village",
     "村庄": "village",
     "natural_village": "village",
+    "scope": "scope",
+    "administrative_village": "scope",
+    "settlement": "scope",
+    "place": "scope",
+    "area": "scope",
+    "行政村": "scope",
+    "自然村": "scope",
+    "聚落": "scope",
+    "地点": "scope",
+    "区域": "scope",
     "hazard": "hazard",
     "hazard_point": "hazard",
     "geological_hazard_point": "hazard",
@@ -2517,6 +2876,7 @@ def _l1_record_values(record: Any) -> dict[str, str]:
         "normalized_name",
         "mention",
         "name",
+        "target_name",
         "location",
         "spatial_hint",
         "village",
@@ -2524,7 +2884,7 @@ def _l1_record_values(record: Any) -> dict[str, str]:
         "natural_village",
         "related_place",
     ):
-        value = attributes.get(key, "")
+        value = getattr(record, key, "") or attributes.get(key, "")
         if isinstance(value, (list, tuple, set)):
             value = "、".join(str(item).strip() for item in value if str(item).strip())
         text = str(value or "").strip()
@@ -2533,13 +2893,22 @@ def _l1_record_values(record: Any) -> dict[str, str]:
     subject_scope = str(getattr(record, "subject_scope", "") or "").strip()
     if subject_scope:
         values.setdefault("subject_scope", subject_scope)
+    scope_names = [
+        _scope_value(scope, "normalized_name") or _scope_value(scope, "name")
+        for scope in _scope_mentions_for_fact(record)
+        if _scope_value(scope, "normalized_name") or _scope_value(scope, "name")
+    ]
+    if scope_names:
+        values.setdefault("location", "、".join(dict.fromkeys(scope_names)))
+        values.setdefault("scope", "、".join(dict.fromkeys(scope_names)))
     return values
 
 
 def _l1_record_role(record: Any, values: dict[str, str]) -> str:
     attributes = getattr(record, "attributes", None) or {}
     raw_role = str(
-        (attributes.get("role", "") if isinstance(attributes, dict) else "")
+        getattr(record, "role", "")
+        or (attributes.get("role", "") if isinstance(attributes, dict) else "")
         or getattr(record, "semantic_type", "")
         or ""
     )
@@ -2561,7 +2930,7 @@ def _typed_l1_spatial_records(
     if not folded_query:
         return []
     result: list[tuple[str, str, Any, dict[str, str]]] = []
-    for record in getattr(context, "l1_fact_records", []) or []:
+    for record in _context_l1_items(context):
         values = _l1_record_values(record)
         role = _l1_record_role(record, values)
         if role == "unknown" and not any(
@@ -2722,18 +3091,25 @@ def _query_scope_hint(graph: EvidenceGraph, context: Any, query: str, default: s
     query_folded = str(query or "").casefold()
     hints: list[str] = []
     for scope in graph.semantic_scopes:
-        for mention in getattr(scope, "village_mentions", []) or []:
-            value = str(getattr(mention, "normalized_name", mention) or "").strip()
+        scope_items = list(getattr(scope, "scope_mentions", None) or [])
+        if not scope_items:
+            scope_items = list(getattr(scope, "village_mentions", None) or [])
+        for mention in scope_items:
+            value = str(
+                getattr(mention, "normalized_name", mention) or ""
+            ).strip()
             if value and value.casefold() in query_folded:
                 hints.append(value)
-    for fact in getattr(context, "location_facts", []) or []:
-        value = str(
-            getattr(fact, "spatial_hint", "")
-            or getattr(fact, "source_span", "")
-            or ""
-        ).strip()
-        if _is_specific_scope_name(value) and value.casefold() in query_folded:
-            hints.append(value)
+    for fact in _context_l1_items(context):
+        for scope in _scope_mentions_for_fact(fact):
+            value = _scope_value(scope, "normalized_name") or _scope_value(scope, "name")
+            role = _scope_value(scope, "role").casefold()
+            if (
+                _is_specific_scope_name(value)
+                and _is_scope_target_role(role)
+                and _fold_query(value) in _fold_query(query_folded)
+            ):
+                hints.append(value)
     for _label, _role, _record, values in _typed_l1_spatial_records(
         context,
         query,
@@ -2751,11 +3127,14 @@ def _query_scope_hint(graph: EvidenceGraph, context: Any, query: str, default: s
                 hints.append(value)
     gazetteer = getattr(context, "gazetteer", None)
     for entry in getattr(gazetteer, "entries", []) or []:
+        if not _is_dynamic_scope_entry(entry):
+            continue
         value = str(getattr(entry, "name", "") or "").strip()
+        entry_role = str(getattr(entry, "role", "") or "").casefold()
         if (
             _is_specific_scope_name(value)
-            and "村" in value
-            and value.casefold() in query_folded
+            and (not entry_role or _is_scope_target_role(entry_role))
+            and _fold_query(value) in _fold_query(query_folded)
         ):
             hints.append(value)
     if not hints:
@@ -2796,17 +3175,30 @@ def _candidate_map(
     scope_hint = _query_scope_hint(graph, context, semantic_query, village_name)
     l1_hints = [query, semantic_query, scope_hint]
     query_folded = _fold_query(semantic_query)
-    for fact in getattr(context, "location_facts", []) or []:
+    for fact in _context_location_mentions(context):
         mention = _fold_query(
             getattr(fact, "normalized_name", "")
             or getattr(fact, "mention", "")
             or ""
         )
         if mention and mention in query_folded:
-            for field in ("spatial_hint", "related_mentions", "source_span"):
+            for field in (
+                "spatial_hint",
+                "related_mentions",
+                "source_span",
+                "scopes",
+            ):
                 value = getattr(fact, field, "")
                 if isinstance(value, (list, tuple)):
-                    l1_hints.extend(str(item) for item in value if str(item).strip())
+                    for item in value:
+                        if field == "scopes":
+                            l1_hints.extend(
+                                str(getattr(item, key, "") or "")
+                                for key in ("name", "normalized_name", "role")
+                                if str(getattr(item, key, "") or "").strip()
+                            )
+                        elif str(item).strip():
+                            l1_hints.append(str(item))
                 elif str(value or "").strip():
                     l1_hints.append(str(value)[:240])
     for _label, _role, record, values in _typed_l1_spatial_records(
@@ -2883,6 +3275,12 @@ def _candidate_map(
         # An L1 mention without a bound feature is semantic scope only.  It
         # must not become a synthetic spatial candidate when a real bundle
         # feature with the same label is available.
+        if (
+            _is_scope_target_role(candidate.role)
+            and not str(candidate.feature_bsm or "").strip()
+            and not str(candidate.geometry_ref or "").strip()
+        ):
+            continue
         if not (
             str(candidate.feature_bsm or "").strip()
             or str(candidate.source_bsm or "").strip()
@@ -3066,7 +3464,19 @@ def enrich_evidence_packet_with_spatial_graph(
     scope_refs = []
     graph = getattr(context, "evidence_graph", None)
     for scope in graph.semantic_scopes if graph is not None else []:
-        mentions = [str(value).casefold() for value in getattr(scope, "village_mentions", [])]
+        scope_items = list(getattr(scope, "scope_mentions", None) or [])
+        mentions = [
+            str(
+                getattr(item, "normalized_name", "")
+                or getattr(item, "name", "")
+                or item
+            ).casefold()
+            for item in scope_items
+        ]
+        mentions.extend(
+            str(value).casefold()
+            for value in getattr(scope, "village_mentions", []) or []
+        )
         if village.casefold() in mentions:
             scope_refs.append(str(scope.scope_id))
 
@@ -3095,7 +3505,7 @@ def enrich_evidence_packet_with_spatial_graph(
             },
             {"step": "village_scope_hint", "value": _query_scope_hint(
                 graph, context, query, village
-            ) if graph is not None else village},
+            ) if graph is not None else village, "scope_kind": "generic"},
             {
                 "step": "directional_scope_hint",
                 "value": _query_direction(query, spatial_spec),

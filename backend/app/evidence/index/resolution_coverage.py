@@ -47,7 +47,11 @@ def resolution_coverage(context: Any) -> ResolutionCoverage:
     """
     graph = getattr(context, "evidence_graph", None)
     cov = ResolutionCoverage()
-    for fact in list(getattr(context, "location_facts", []) or []):
+    for fact in list(
+        getattr(context, "location_mentions", None)
+        or getattr(context, "location_facts", None)
+        or []
+    ):
         name = str(
             getattr(fact, "normalized_name", "")
             or getattr(fact, "mention", "")

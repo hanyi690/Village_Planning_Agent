@@ -9,16 +9,18 @@
 
 - [DOCUMENTATION_AUTHORITY.md](DOCUMENTATION_AUTHORITY.md)：文档冲突时的 canonical owner map。
 - [DOCUMENT_CLEANUP_MANIFEST.md](DOCUMENT_CLEANUP_MANIFEST.md)：后续归档/清理的精确路径清单；本轮不删除文档。
-- [00_SYSTEM_DESIGN.md](00_SYSTEM_DESIGN.md)：单一权威语义链、L1/L2/L3 模型事务、报告时点、LLM/确定性边界和完成规则。
-- [01_CONTRACTS_AND_INVARIANTS.md](01_CONTRACTS_AND_INVARIANTS.md)：对象分类、provider wire/domain contract 分离、item-level failure atomicity 及 `EFF-01` 至 `EFF-08`。
-- [02_EVIDENCE_AND_GROUNDING.md](02_EVIDENCE_AND_GROUNDING.md)：EvidenceGap → EvidenceRequirement、检索、coverage 和 grounding 的主规范。
-- [03_PLANNING_EXECUTION.md](03_PLANNING_EXECUTION.md)：方案、审批、物化、验证、对账和交付设计。
-- [04_EVALUATION_AND_ACCEPTANCE.md](04_EVALUATION_AND_ACCEPTANCE.md)：正确性与效率 acceptance gates。
-- [05_MIGRATION.md](05_MIGRATION.md)：唯一 target-to-current ledger；只在这里记录 `CURRENT`、`PARTIAL`、`GAP`、`RETIRE`、`BLOCKED`。
+- [00_SYSTEM_DESIGN.md](00_SYSTEM_DESIGN.md)：全链路业务流程、阶段关系、阶段反馈和共同运行规则。
+- [01_CONTRACTS_AND_INVARIANTS.md](01_CONTRACTS_AND_INVARIANTS.md)：L1 事实构建、事实类型、契约和结构化输出边界。
+- [02_PLANNING_COGNITION.md](02_PLANNING_COGNITION.md)：L2 规划问题、目标、需求、适宜性和策略。
+- [03_PLANNING_INTENT.md](03_PLANNING_INTENT.md)：L3 claim、PlanningProgram、lineage 和接地前边界。
+- [04_EVIDENCE.md](04_EVIDENCE.md)：Evidence 检索、KG/Bundle 融合、推理、coverage 和 gap 闭合。
+- [05_PROJECTION_AND_GROUND.md](05_PROJECTION_AND_GROUND.md)：目标编译和 GROUND 迭代接地子图。
+- [06_SELECT_EXECUTE_AND_CODE.md](06_SELECT_EXECUTE_AND_CODE.md)：SELECT、EXECUTE、后处理和目标代码树。
+- [05_MIGRATION.md](05_MIGRATION.md)：目标到当前的迁移状态和前后阶段适配记录。
 
 ## Reading paths
 
-- 理解目标：`00` → `01` → `02` → `03` → `04`。
+- 理解目标：`00` → `01` → `02` → `03` → `04` → `05` → `06`。
 - 核对现状：[CURRENT_RUNTIME.md](../architecture/CURRENT_RUNTIME.md) → [API_AND_STATE.md](../architecture/API_AND_STATE.md) → [OPERATIONS.md](../architecture/OPERATIONS.md)。
 - 判断差距：先读目标 owner，再只查 `05_MIGRATION.md`；不要从 historical plan、report 或 ADR 状态措辞推断完成度。
 - 理解决策历史：[ADR](../adr/)；ADR 约束设计，但不替代 current-runtime evidence。

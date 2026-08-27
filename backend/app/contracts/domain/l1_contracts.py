@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from app.contracts.artifacts.classification_ref import ClassificationRef
 from app.contracts.artifacts.contract_meta import ContractMeta, StageIssue
@@ -256,11 +258,104 @@ class L1SourceIndex(ContractMeta):
     diagnostics: list[str] = Field(default_factory=list)
 
 
+class L1InputContext(BaseModel):
+    """Immutable identity for one L1 dimension input projection.
+
+    The context carries only source/index identity and the dimension contract.
+    It deliberately excludes raw report text, retrieved evidence, report prose,
+    and mutable workflow state.  A page projection refers back to this context
+    through ``input_digest``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    context_version: str = "l1.input.v1"
+    session_id: str = ""
+    dimension_key: str = Field(min_length=1)
+    source_index_ref: str = ""
+    source_digest: str = ""
+    source_page_count: int = Field(default=1, ge=1)
+    allowed_fact_types: tuple[str, ...] = ()
+    input_digest: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def canonicalize_digest(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        payload["allowed_fact_types"] = tuple(
+            dict.fromkeys(
+                str(value).strip()
+                for value in (payload.get("allowed_fact_types") or ())
+                if str(value).strip()
+            )
+        )
+        identity = {
+            key: payload.get(key)
+            for key in (
+                "context_version",
+                "session_id",
+                "dimension_key",
+                "source_index_ref",
+                "source_digest",
+                "source_page_count",
+                "allowed_fact_types",
+            )
+        }
+        expected = "sha256:" + hashlib.sha256(
+            json.dumps(
+                identity,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        provided = str(payload.get("input_digest") or "").strip()
+        if provided and provided != expected:
+            raise ValueError("L1 input_digest does not match the input context")
+        payload["input_digest"] = expected
+        return payload
+
+
+class L1DimensionInput(BaseModel):
+    """One bounded source-page projection sent to the L1 provider."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    context: L1InputContext
+    page_index: int = Field(default=0, ge=0)
+    page_segment_ids: tuple[str, ...] = ()
+    source_page: L1SourceIndex | None = None
+
+    @model_validator(mode="after")
+    def validate_page_projection(self) -> "L1DimensionInput":
+        if self.page_index >= self.context.source_page_count:
+            raise ValueError("L1 page_index is outside the input context")
+        if self.source_page is None:
+            if self.page_segment_ids:
+                raise ValueError("L1 page_segment_ids require a source_page")
+            return self
+        if (
+            self.context.source_digest
+            and self.source_page.source_digest
+            and self.context.source_digest != self.source_page.source_digest
+        ):
+            raise ValueError("L1 source page digest does not match the input context")
+        actual_ids = tuple(
+            segment.segment_id for segment in self.source_page.source_segments
+        )
+        if actual_ids != self.page_segment_ids:
+            raise ValueError("L1 page_segment_ids do not match the source page")
+        return self
+
+
 class L1DimensionPassState(BaseModel):
     """Durable cursor for one bounded L1 extraction loop."""
 
     dimension_key: str
     source_digest: str = ""
+    input_digest: str = ""
     pass_name: Literal[
         "observe",
         "report",
@@ -326,5 +421,7 @@ __all__ = [
     "EvidenceGap",
     "L1SourceSegment",
     "L1SourceIndex",
+    "L1InputContext",
+    "L1DimensionInput",
     "L1DimensionPassState",
 ]

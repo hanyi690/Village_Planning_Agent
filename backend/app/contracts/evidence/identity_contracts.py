@@ -7,11 +7,22 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.contracts.artifacts.contract_meta import ContractMeta
+from app.contracts.domain.l1_contracts import LocationScopeMention
+from app.contracts.spatial.spatial_reference_contracts import SearchScopeRef
 
 GeometryGranularity = Literal[
     "exact_feature", "parcel_set", "settlement", "village_scope", "none"
 ]
-ResolutionStatus = Literal["resolved", "ambiguous", "unresolved"]
+ResolutionStatus = Literal[
+    "exact_feature",
+    "feature_set",
+    "inferred_scope",
+    "name_only",
+    "ambiguous",
+    "unresolved",
+    # Read compatibility for pre-rename artifacts.
+    "resolved",
+]
 SourceBindingMode = Literal[
     "all_in_scope",
     "explicit_subset",
@@ -38,6 +49,7 @@ class EvidenceObservation(BaseModel):
     report_section: str = ""
     spatial_hint: str = ""
     relation_mentions: list[str] = Field(default_factory=list)
+    scope_mentions: list[LocationScopeMention] = Field(default_factory=list)
     temporal_status: str = "current"
     confidence: float = 0.0
     extraction_method: str = "l1"
@@ -62,6 +74,7 @@ class GroundedEntityBinding(BaseModel):
     confidence: float = 0.0
     uncertainty_reason: str = ""
     query_trace: list[dict] = Field(default_factory=list)
+    search_scope: SearchScopeRef | None = None
 
 
 class EvidenceObservationSnapshot(ContractMeta):

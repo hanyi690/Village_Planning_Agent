@@ -45,7 +45,8 @@ async def _persist_l1_identity_artifacts(
     if context is None or snapshot is None:
         logger.warning("[layer_aggregate] L1 identity artifacts skipped: context or snapshot missing")
         return {}
-    facts = list(getattr(snapshot, "location_facts", []) or [])
+    facts = list(getattr(snapshot, "location_mentions", []) or [])
+    context.location_mentions = facts
     context.location_facts = facts
     context.l1_fact_records = list(getattr(snapshot, "fact_records", []) or [])
     context.evidence_graph = EvidenceGraph.build(context)

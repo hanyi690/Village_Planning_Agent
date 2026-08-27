@@ -1,12 +1,13 @@
-"""GROUND subgraph aggregate - deterministic orchestrator over SpatialResolver.
+"""GROUND subgraph aggregate - bounded reasoning over SpatialResolver.
 
 Consumes a list of ``SpatialReferenceSpec`` plus a ``PlanningContext`` and
 produces a typed ``GroundingResult`` with ``CandidateSite[]`` candidates,
 ``StageIssue[]`` unresolved items and ``SpatialQueryEvidence[]`` rows.
 
-Pure orchestration: candidate resolution is delegated to the (already-cleaned)
-``SpatialResolver.resolve_spec``; no LLM is ever called. Given the same specs
-and context the output is fully deterministic.
+Deterministic validation and geometry materialization remain here, while
+``SpatialResolver.resolve_spec`` may invoke the bounded GROUND LLM to choose
+among retrieval candidates. The model can only select an existing candidate;
+it cannot create identity, membership, or geometry.
 """
 from __future__ import annotations
 
@@ -410,7 +411,11 @@ def _unique_evidence_geometry(context: Any, mention: str) -> Any:
     if graph is None or not mention or not hasattr(graph, "resolve_mention"):
         return None
     normalized_mention = str(mention).strip()
-    facts = list(getattr(context, "location_facts", None) or [])
+    facts = list(
+        getattr(context, "location_mentions", None)
+        or getattr(context, "location_facts", None)
+        or []
+    )
     role_markers = {"facility", "设施", "现状设施", "公共服务设施", "landmark"}
     has_facility_fact = any(
         normalized_mention

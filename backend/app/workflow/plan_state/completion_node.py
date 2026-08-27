@@ -82,7 +82,9 @@ async def _maybe_extract_bindings(
                 migrated = dict(state or {})
                 migrated["artifact_refs"] = refs
                 snapshot = load_artifact(migrated, "l1_snapshot", L1Snapshot)
-                location_facts = list(getattr(snapshot, "location_facts", []) or [])
+                location_facts = list(
+                    getattr(snapshot, "location_mentions", []) or []
+                )
             except Exception as exc:
                 logger.warning("[layer_completion_check] L1 location facts load failed: %s", exc)
         stats = await run_wave(

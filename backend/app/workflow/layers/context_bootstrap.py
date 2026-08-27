@@ -81,8 +81,9 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
         else:
             context.l1_snapshot_ref = str(getattr(l1_ref, "digest", "") or "")
         fact_records = list(getattr(snapshot, "fact_records", []) or [])
-        facts = list(getattr(snapshot, "location_facts", []) or [])
+        facts = list(getattr(snapshot, "location_mentions", []) or [])
         context.l1_fact_records = fact_records
+        context.location_mentions = facts
         context.location_facts = facts
 
         try:
@@ -212,7 +213,10 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
             l1_snapshot = load_artifact(state, "l1_snapshot", L1Snapshot)
         if l1_snapshot is not None:
-            context.location_facts = list(getattr(l1_snapshot, "location_facts", []) or [])
+            context.location_mentions = list(
+                getattr(l1_snapshot, "location_mentions", []) or []
+            )
+            context.location_facts = context.location_mentions
             await _hydrate_l1_spatial_facts(state, context)
     except Exception as exc:
         logger.debug("[bootstrap] L1 location facts unavailable: %s", exc)

@@ -50,7 +50,7 @@ def _pagination_metadata(
 
 async def _context_for_session(session_id: str, village_name: str = "") -> Any | None:
     try:
-        from app.application.queries.evidence import prepare_evidence_context
+        from app.evidence.retrieval.context_hydration import prepare_evidence_context
 
         return await prepare_evidence_context(
             session_id,

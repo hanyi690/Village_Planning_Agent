@@ -702,11 +702,11 @@ async def run_rag(
         # no configured provider, so the LLM sees a diagnostic rather than a
         # silent omission.  Neither path creates geometry or source identity.
         try:
-            from app.application.queries.evidence import (
-                build_external_evidence_policy,
+            from app.infrastructure.search.provider_registry import (
                 get_active_external_provider,
                 get_configured_external_provider,
             )
+            from app.evidence.retrieval.context_hydration import build_external_evidence_policy
 
             external_port = get_active_external_provider()
             if external_port is None:
