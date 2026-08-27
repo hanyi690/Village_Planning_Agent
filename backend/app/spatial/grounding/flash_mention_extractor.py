@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,14 +48,9 @@ _QUERY_SPEC_CACHE_MAXSIZE = 256
 
 def _ground_llm_disabled() -> bool:
     """Keep real flash calls opt-in while allowing explicitly injected models."""
-    enabled = str(os.getenv("GROUND_LLM_ENABLED", "false")).strip().lower() in {
-        "1", "true", "yes", "on"
-    }
-    disabled = any(
-        str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
-        for name in ("DISABLE_GROUND_LLM", "DISABLE_GROUND_REPORT_LLM")
-    )
-    return not enabled or disabled
+    from app.core.llm_config import get_llm_settings
+
+    return get_llm_settings().ground_llm_is_disabled()
 
 
 PlaceEntityRole = Literal["village", "water", "road", "facility", "landmark", "area"]
@@ -309,30 +303,43 @@ async def extract_spatial_reference_spec(
                 raise RuntimeError("ground query parser provider unavailable") from exc
             return None
     try:
-        from app.infrastructure.llm.structured import run_structured_output
-        from app.core.settings import GROUND_QUERY_SPEC_MAX_TOKENS
+        from app.core.llm_config import get_llm_settings
+        from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
         from app.spatial.grounding.call_budget import (
             reserve_ground_llm_call,
             run_ground_llm_call,
         )
+
+        ground_settings = get_llm_settings()
 
         timeout = reserve_ground_llm_call(budget)
         if timeout is None:
             return None
         messages = [
             {"role": "system", "content": _QUERY_SPEC_SYSTEM.format(query=key_text[:800])},
-            {"role": "user", "content": "请只返回 SpatialReferenceSpec 的 JSON 结构。"},
+            {"role": "user", "content": "请严格填写声明的 SpatialReferenceSpec typed response contract。"},
         ]
 
         async def _invoke():
-            return await run_structured_output(
-                SpatialReferenceSpec,
+            return await get_llm_manager().run_structured(
+                LLMCallSpec(
+                    stage="GROUND",
+                    contract_key="ground.query_spec",
+                    response_model=SpatialReferenceSpec,
+                    call_type="semantic",
+                    max_retries=ground_settings.ground_parse_retries,
+                    timeout_s=timeout,
+                    max_tokens=ground_settings.ground_query_spec_max_tokens,
+                    incomplete_output_max_tokens=2048,
+                    max_concurrent=ground_settings.stage_concurrency("ground"),
+                    semaphore_scope="ground",
+                    temperature=0.0,
+                    allow_content_json=True,
+                    timeout_includes_queue=False,
+                ),
                 messages,
-                max_retries=1,
-                timeout=timeout,
-                temperature=0.0,
-                max_tokens=GROUND_QUERY_SPEC_MAX_TOKENS,
                 llm=model,
+                context={"query_digest": _query_spec_cache_key(key_text)},
             )
 
         response = await run_ground_llm_call(budget, timeout, _invoke)
@@ -530,24 +537,38 @@ async def _extract_structured(
             {"role": "system", "content": prompt},
             {"role": "user", "content": "请从上述文本中提取地点实体。"},
         ]
-        from app.infrastructure.llm.structured import run_structured_output
+        from app.core.llm_config import get_llm_settings
+        from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
         from app.spatial.grounding.call_budget import (
             reserve_ground_llm_call,
             run_ground_llm_call,
         )
 
+        ground_settings = get_llm_settings()
+
         timeout = reserve_ground_llm_call(budget)
         if timeout is None:
             return None
         async def _invoke_structured():
-            return await run_structured_output(
-                SemanticPlaceEntitySet,
+            return await get_llm_manager().run_structured(
+                LLMCallSpec(
+                    stage="GROUND",
+                    contract_key="ground.place_mentions",
+                    response_model=SemanticPlaceEntitySet,
+                    call_type="closed_set",
+                    max_retries=ground_settings.ground_parse_retries,
+                    timeout_s=timeout,
+                    max_tokens=min(300, ground_settings.ground_max_tokens),
+                    incomplete_output_max_tokens=2048,
+                    max_concurrent=ground_settings.stage_concurrency("ground"),
+                    semaphore_scope="ground",
+                    temperature=0.1,
+                    allow_content_json=True,
+                    timeout_includes_queue=False,
+                ),
                 messages,
-                max_retries=1,
-                timeout=timeout,
-                temperature=0.1,
-                max_tokens=300,
                 llm=model,
+                context={"input_chars": len(key_text)},
             )
 
         response = await run_ground_llm_call(budget, timeout, _invoke_structured)

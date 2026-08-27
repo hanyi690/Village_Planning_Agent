@@ -1,8 +1,8 @@
 """Canonical closed catalog for typed L1 facts consumed by L2.
 
 The snapshot owns fact identities.  This module only projects existing
-canonical identities into the closed candidate-set primitives; it never
-creates an identity for a missing or legacy ``fact_id``.
+    canonical identities into the closed candidate-set primitives; it never
+    creates an identity for a missing ``fact_id``.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from app.domain.validation.closed_set import (
+from app.contracts.llm.closed_set_contracts import (
     CandidateDescriptor,
     ExactBatchMembershipResult,
     candidate_set_digest,
@@ -76,18 +76,6 @@ class L1FactCatalog:
         """Return the canonical spatial subset of ``allowed_fact_ids``."""
 
         return list(self._spatial_fact_ids)
-
-    @property
-    def candidate_set_digest(self) -> str:
-        """Expose the shared closed-set digest under its domain name."""
-
-        return self.digest
-
-    @property
-    def catalog_digest(self) -> str:
-        """Alias used when the digest is carried alongside prompt metadata."""
-
-        return self.digest
 
     @property
     def usable_allowed_fact_ids(self) -> list[str]:
@@ -187,12 +175,6 @@ def build_l1_fact_catalog(fact_records: Iterable[Any] | None) -> L1FactCatalog:
     )
 
 
-def l1_fact_catalog_digest(catalog: L1FactCatalog) -> str:
-    """Return the stable digest for one already-built catalog."""
-
-    return catalog.digest
-
-
 def validate_l1_fact_catalog(catalog: L1FactCatalog) -> ExactBatchMembershipResult:
     """Require the catalog's candidate IDs to exactly match its ID projection."""
 
@@ -253,10 +235,6 @@ def validate_l1_fact_references(
     )
 
 
-validate_l1_fact_id_references = validate_l1_fact_references
-validate_l1_fact_reference = validate_l1_fact_references
-
-
 __all__ = [
     "CANONICAL_L1_FACT_PREFIX",
     "SPATIAL_L1_FACT_KINDS",
@@ -264,10 +242,7 @@ __all__ = [
     "build_l1_fact_catalog",
     "empty_l1_fact_catalog",
     "is_canonical_l1_fact_id",
-    "l1_fact_catalog_digest",
     "require_canonical_l1_fact_id",
     "validate_l1_fact_catalog",
-    "validate_l1_fact_reference",
-    "validate_l1_fact_id_references",
     "validate_l1_fact_references",
 ]

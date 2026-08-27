@@ -13,7 +13,7 @@
 | 目录 | 职责 | 关键文件 |
 |---|---|---|
 | `model/` | 几何基础模型 | `workspace.SpatialWorkspace`（空间工作边界）、`geometry`（ParcelRelations/邻接计算）、`subdivision`（地块切分/setback）、`area_engine`、`crs_engine`、`coord_transform`、`geojson_utils`、`parcel_ops`、`relations`、`axis_builder` |
-| `grounding/` | 空间接地 | `grounding`/`grounding_service`（bbox/近邻查询）、`resolver`（空间引用解析）、`village_cluster_mapper`（聚落识别）、`flash_mention_extractor`（地名实体提取）、`bundle_binder`、`coordinate_identity`（坐标/BSM 合并）、`topology`（拓扑证据）、`report_grounder` |
+| `grounding/` | 空间接地 | `grounding`/`grounding_service`（bbox/近邻查询）、`resolver`（空间引用解析）、`flash_mention_extractor`（地名实体提取）、`bundle_binder`、`coordinate_identity`（坐标/BSM 合并）、`topology`（拓扑证据） |
 | `query/` | 空间查询 | `bridge`（SpatialIndex/ConstraintIndex/OverlapResult）、`context.compute_context_blocks`（ContextBlock 生成）、`feature_query` |
 | `allocation/` | 分配求解 | `global_zone_parcel_allocator`、`global_site_allocator`、`facility_location`、`selection`、`allocation_problem`、`zone_allocator_adapter` |
 | `change/` | 地块变更 | `parcel_change` |

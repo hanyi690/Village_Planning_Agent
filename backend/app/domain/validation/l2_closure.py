@@ -57,7 +57,7 @@ def _validate_source_fact_refs(
     return errors
 
 
-def _validate_metric_quantity(metric: Any) -> list[str]:
+def validate_metric_quantity(metric: Any) -> list[str]:
     errors: list[str] = []
     unit = _text(metric.unit)
     value = metric.value
@@ -163,7 +163,7 @@ def validate_l2_decision_set(
                 known_l1_fact_ids=known_l1_fact_ids,
             )
         )
-        errors.extend(_validate_metric_quantity(metric))
+        errors.extend(validate_metric_quantity(metric))
 
     for strategy in decision.strategies:
         if not strategy.source_fact_refs:
@@ -286,4 +286,8 @@ def validate_l2_strategy_graph(
     return strategy if strategy is not None else validated
 
 
-__all__ = ["validate_l2_decision_set", "validate_l2_strategy_graph"]
+__all__ = [
+    "validate_l2_decision_set",
+    "validate_l2_strategy_graph",
+    "validate_metric_quantity",
+]

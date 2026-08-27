@@ -1,9 +1,10 @@
-"""Deterministic decisions over caller-owned closed candidate sets.
+"""Provider-facing closed-set contracts and deterministic membership kernel.
 
-LLM callers may propose a stable identifier, but they do not own the
-candidate set.  This module keeps the set and the decision separate so a
-retry cannot silently change the meaning of an index after candidates are
-reordered.
+This is the single owner for candidate identities used by LLM proposals. A
+domain module may define its own candidate payload, but it must adapt that
+payload to these descriptors before it enters a prompt or a decision
+certificate. The digest is order-independent and final membership is
+deterministic.
 """
 
 from __future__ import annotations
@@ -46,12 +47,18 @@ class ExactBatchMembershipResult(BaseModel):
 
 
 def _digest_payload(value: Any) -> str:
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def candidate_set_digest(candidates: Iterable[CandidateDescriptor]) -> str:
-    """Return a digest independent of provider order."""
+    """Return one stable digest for the complete closed candidate set."""
 
     payload = [item.model_dump(mode="json") for item in candidates]
     payload.sort(key=lambda item: (item["candidate_id"], item["kind"], item["label"]))
@@ -69,7 +76,9 @@ def select_closed_set_candidate(
 
     digest = candidate_set_digest(candidates)
     normalized = [str(item.candidate_id).strip() for item in candidates]
-    duplicates = tuple(sorted({item for item in normalized if normalized.count(item) > 1 and item}))
+    duplicates = tuple(
+        sorted({item for item in normalized if normalized.count(item) > 1 and item})
+    )
     proposed = str(proposed_candidate_id or "").strip()
     if duplicates:
         return CandidateDecision(
@@ -106,10 +115,14 @@ def validate_exact_batch_membership(
 ) -> ExactBatchMembershipResult:
     """Require exact, unique coverage of caller-provided stable IDs."""
 
-    expected = tuple(dict.fromkeys(str(item).strip() for item in expected_ids if str(item).strip()))
+    expected = tuple(
+        dict.fromkeys(str(item).strip() for item in expected_ids if str(item).strip())
+    )
     actual_values = tuple(str(item).strip() for item in actual_ids if str(item).strip())
     actual = tuple(dict.fromkeys(actual_values))
-    duplicates = tuple(sorted({item for item in actual_values if actual_values.count(item) > 1}))
+    duplicates = tuple(
+        sorted({item for item in actual_values if actual_values.count(item) > 1})
+    )
     expected_set = set(expected)
     actual_set = set(actual)
     missing = tuple(sorted(expected_set - actual_set))

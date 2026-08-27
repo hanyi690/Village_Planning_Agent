@@ -224,6 +224,7 @@ class AgentState(TypedDict, total=False):
     context_version: str  # PlanningContext 版本戳
     context_ref: Dict[str, Any]  # session/version reference; context is loaded from the cache
     context_fingerprint: str
+    artifact_root: str
     branch_id: Annotated[str, _replace_branch_id]
     bootstrap_context_done: bool
     artifact_refs: Annotated[Dict[str, Any], _merge_artifact_refs]

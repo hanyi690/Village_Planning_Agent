@@ -514,8 +514,29 @@ def drive(client, session_id: str, deadline: float) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--force-new", action="store_true", help="create a fresh session")
+    parser.add_argument(
+        "--db-path",
+        default="",
+        help="override the persistent E2E SQLite database path",
+    )
     parser.add_argument("--deadline-seconds", type=float, default=1800.0)
     args = parser.parse_args()
+
+    global PERSISTENT_DB
+    if args.db_path:
+        PERSISTENT_DB = Path(args.db_path).resolve()
+        PERSISTENT_DB.parent.mkdir(parents=True, exist_ok=True)
+        # A custom checkpoint database is a separate resumable run.  Bind its
+        # session sidecar and CAS artifact root to the same parent so a
+        # process restart cannot resume the DB while reading another run's
+        # artifact directory.  The default test.db layout keeps its historical
+        # ``session_id.txt`` and ``artifacts`` paths for compatibility.
+        global SESSION_FILE, ARTIFACT_ROOT, LOG_FILE
+        SESSION_FILE = PERSISTENT_DB.with_name(
+            f"{PERSISTENT_DB.stem}.session_id.txt"
+        )
+        ARTIFACT_ROOT = PERSISTENT_DB.parent / "artifacts"
+        LOG_FILE = PERSISTENT_DB.with_name(f"{PERSISTENT_DB.stem}.run.log")
 
     setup_engine()
     pipeline_reset()

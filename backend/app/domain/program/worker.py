@@ -28,7 +28,6 @@ from app.contracts.events import SSEEventType
 from app.core.settings import LLM_STREAM_TIMEOUT
 from app.infrastructure.logging import get_logger
 from app.infrastructure.llm.dimension_runtime import (
-    load_layered_dependency_reports,
     publish_dimension_complete,
     publish_dimension_delta,
     publish_dimension_start,
@@ -42,6 +41,7 @@ from app.infrastructure.llm.dimension_runtime import (
     save_step_report,
     strip_model_reasoning,
 )
+from app.infrastructure.llm.dependency_context import load_dependency_context
 from app.infrastructure.llm.prompts.detailed import get_dimension_prompt as get_layer3_prompt
 from app.contracts.program import PlanningClaimSet
 
@@ -247,7 +247,19 @@ async def _cached_claim_only_generation(
     path = _projection_cache_path(session_id, dimension_key, cache_key, "claims")
     if path.exists():
         try:
-            return response_model.model_validate_json(path.read_text(encoding="utf-8"))
+            cached = response_model.model_validate_json(path.read_text(encoding="utf-8"))
+            for item in cached.claims:
+                sanitized, _diagnostics = _sanitize_l3_provider_component(
+                    item,
+                    source_fact_ids=normalized_source_ids,
+                    spatial_source_fact_ids=normalized_spatial_ids,
+                )
+                original = item.model_dump(mode="python")
+                if sanitized != original:
+                    raise ValueError(
+                        "cached L3 projection is outside the current closed catalog"
+                    )
+            return cached
         except (OSError, ValueError):
             logger.warning("[analyze_l3_dimension] ignoring invalid claims cache %s", path)
     generate_claims = getattr(generator, "generate_claims", None)
@@ -591,7 +603,7 @@ def _l3_candidate_context(
     try:
         from app.domain.validation.l1_fact_catalog import SPATIAL_L1_FACT_KINDS
         from app.domain.program.target_projection.relation_catalog import (
-            relation_options_payload,
+            relation_options_prompt_payload,
         )
 
         catalog = _l3_fact_catalog(state, dimension_key, source_dimension_values)
@@ -604,7 +616,7 @@ def _l3_candidate_context(
             for item in usable_candidates
             if item.metadata.get("fact_kind") in SPATIAL_L1_FACT_KINDS
         ]
-        relation_candidates = relation_options_payload(
+        relation_prompt_context = relation_options_prompt_payload(
             ("facility", "road", "linear", "axis", "site_area", "zone")
         )
         spatial_ids = set(spatial_source_options)
@@ -625,7 +637,10 @@ def _l3_candidate_context(
             "source_fact_catalog_status": (
                 "usable" if catalog.is_unambiguous else "ambiguous"
             ),
-            "relation_options_by_subject_kind": relation_candidates,
+            "relation_options_by_subject_kind": relation_prompt_context[
+                "relation_options_by_subject_kind"
+            ],
+            "relation_specs": relation_prompt_context["relation_specs"],
             "source_dimensions": sorted(
                 str(item) for item in source_dimension_values if str(item).strip()
             ),
@@ -639,6 +654,7 @@ def _l3_candidate_context(
             "source_fact_catalog_digest": "",
             "source_fact_catalog_status": "unavailable",
             "relation_options_by_subject_kind": {},
+            "relation_specs": {},
             "source_dimensions": sorted(
                 str(item) for item in source_dimension_values if str(item).strip()
             ),
@@ -710,26 +726,231 @@ def _spatial_claim_evidence_errors(
     return list(dict.fromkeys(errors))
 
 
-def _compact_prompt_background(text: str, limit: int, label: str) -> str:
-    """Bound report context without pretending truncation is evidence."""
-    value = str(text or "").strip()
-    if not value:
-        return f"（{label}没有可用正文；不得据此补造事实。）"
-    if len(value) <= limit:
-        return value
-    return (
-        value[:limit]
-        + f"\n\n【{label}已截断】仅保留前 {limit} 个字符作为背景；"
-        "被截断内容不是可引用的空间证据。"
+def _l3_relation_grounding_requirement(template: str) -> str:
+    """Map one rejected relation to the smallest safe downstream requirement."""
+
+    if template in {"connect_network", "follow_alignment", "serve", "provide_access"}:
+        return "network_snapshot"
+    if template == "precedes":
+        return "topology"
+    return "candidate_geometry"
+
+
+def _l3_relation_parameter_error(template: str, parameters: Any) -> str:
+    """Return a compact deterministic parameter error for one relation."""
+
+    from app.contracts.planning.relation_parameters import (
+        AccessParameters,
+        AllowedAreaParameters,
+        AvoidConstraintParameters,
+        CoLocateParameters,
+        ConnectParameters,
+        DistanceParameters,
+        EmptyRelationParameters,
+        ExistingAssetParameters,
+        FollowAlignmentParameters,
+        MutuallyExclusiveParameters,
+        PartOfParameters,
+        PrecedesParameters,
+        ServiceParameters,
     )
+    from app.domain.program.target_projection.relation_catalog import relation_spec
+
+    spec = relation_spec(template)
+    if spec is None:
+        return "unknown_relation_template"
+    parameter_models = {
+        "access": AccessParameters,
+        "allowed_area": AllowedAreaParameters,
+        "avoid_constraint": AvoidConstraintParameters,
+        "co_locate": CoLocateParameters,
+        "connect": ConnectParameters,
+        "distance": DistanceParameters,
+        "empty": EmptyRelationParameters,
+        "existing_asset": ExistingAssetParameters,
+        "alignment": FollowAlignmentParameters,
+        "mutually_exclusive": MutuallyExclusiveParameters,
+        "part_of": PartOfParameters,
+        "precedes": PrecedesParameters,
+        "service": ServiceParameters,
+    }
+    if not spec.parameter_types:
+        return "unexpected_relation_parameters" if parameters else ""
+    if not isinstance(parameters, dict):
+        return "relation_parameters_missing"
+    parameter_type = str(parameters.get("parameter_type") or "").strip()
+    if parameter_type not in spec.parameter_types:
+        return f"parameter_type_not_allowed:{parameter_type or '<empty>'}"
+    model = parameter_models.get(parameter_type)
+    if model is None:
+        return f"unsupported_parameter_type:{parameter_type}"
+    try:
+        model.model_validate(parameters)
+    except Exception as exc:  # noqa: BLE001 - convert to an auditable finding
+        return f"invalid_{parameter_type}_parameters:{type(exc).__name__}"
+    return ""
+
+
+def _sanitize_l3_provider_component(
+    component: Any,
+    *,
+    source_fact_ids: Iterable[str],
+    spatial_source_fact_ids: Iterable[str],
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """Close provider identities and relations without rewriting their meaning.
+
+    MiniMax is reliable at returning the outer tool object but is not reliable
+    at obeying a very large nested Literal/union schema.  The provider schema
+    therefore remains structural; this function is the single deterministic
+    boundary that filters runtime identities and relation choices.  Invalid
+    values are dropped with an audit diagnostic and converted into a GROUND
+    requirement rather than being silently rewritten.
+    """
+
+    from app.domain.program.target_projection.relation_catalog import (
+        normalize_relation_subject_kind,
+        relation_options,
+        relation_spec,
+    )
+
+    payload = (
+        component.model_dump(mode="python")
+        if hasattr(component, "model_dump")
+        else dict(component)
+    )
+    claim_id = str(payload.get("claim_id") or "claim").strip() or "claim"
+    component_kind = str(payload.get("component_kind") or "").strip()
+    non_spatial_aliases = {
+        "action",
+        "constraint",
+        "evidence_statement",
+        "indicator",
+        "objective",
+        "project_package",
+        "non_spatial_action",
+    }
+    spatial_kinds = {
+        "facility", "road", "linear", "axis", "restoration_overlay",
+        "protection_overlay", "zone", "land_use_assignment", "site_area",
+    }
+    diagnostics: list[str] = []
+    if component_kind in non_spatial_aliases:
+        original_role = str(payload.get("planning_role") or "").strip()
+        payload["component_kind"] = "non_spatial_action"
+        payload["planning_role"] = (
+            original_role
+            if original_role in non_spatial_aliases
+            else component_kind
+        )
+        component_kind = "non_spatial_action"
+    elif component_kind not in spatial_kinds:
+        diagnostics.append(
+            f"WARNING[l3_component_closed_set] {claim_id}: dropped unsupported "
+            f"component_kind={component_kind or '<empty>'}"
+        )
+        return None, diagnostics
+    allowed = {
+        str(item).strip()
+        for item in (
+            spatial_source_fact_ids if component_kind in spatial_kinds else source_fact_ids
+        )
+        if str(item).strip()
+    }
+    refs = [str(item).strip() for item in (payload.get("source_fact_refs") or []) if str(item).strip()]
+    kept_refs = list(dict.fromkeys(item for item in refs if item in allowed))
+    dropped_refs = sorted(set(refs) - set(kept_refs))
+    payload["source_fact_refs"] = kept_refs
+    if dropped_refs:
+        diagnostics.append(
+            f"WARNING[l3_source_fact_closed_set] {claim_id}: dropped source_fact_refs "
+            f"outside the current candidate set: {dropped_refs}"
+        )
+        uncertainty = str(payload.get("uncertainty") or "").strip()
+        note = "unresolved source fact references were dropped by the current closed catalog"
+        payload["uncertainty"] = f"{uncertainty}; {note}" if uncertainty else note
+
+    requirements = payload.get("spatial_requirements")
+    if component_kind not in spatial_kinds:
+        if requirements is not None:
+            diagnostics.append(
+                f"WARNING[l3_spatial_requirement_boundary] {claim_id}: dropped "
+                "spatial_requirements from a non-spatial component"
+            )
+            payload["spatial_requirements"] = None
+        return payload, diagnostics
+    if requirements is None:
+        return payload, diagnostics
+    requirement_payload = (
+        requirements.model_dump(mode="python")
+        if hasattr(requirements, "model_dump")
+        else dict(requirements)
+    )
+    normalized_subject = normalize_relation_subject_kind(component_kind)
+    allowed_templates = {
+        item.template for item in relation_options(normalized_subject)
+    }
+    kept_relations: list[dict[str, Any]] = []
+    grounding = [
+        str(item).strip()
+        for item in (requirement_payload.get("grounding_requirements") or [])
+        if str(item).strip() in {
+            "place_binding", "candidate_geometry", "demand_points",
+            "parcel_membership", "network_snapshot", "topology",
+        }
+    ]
+    for raw_relation in requirement_payload.get("relations") or []:
+        relation = (
+            raw_relation.model_dump(mode="python")
+            if hasattr(raw_relation, "model_dump")
+            else dict(raw_relation)
+        )
+        template = str(relation.get("relation_template") or "").strip()
+        spec = relation_spec(template)
+        reason = ""
+        if spec is None or template not in allowed_templates:
+            reason = "relation_template_not_allowed_for_component"
+        else:
+            object_kind = str(relation.get("object_ref_kind") or "").strip()
+            allowed_object_kinds = set(spec.object_ref_kinds) - {"target"}
+            if object_kind not in allowed_object_kinds:
+                reason = "object_ref_kind_not_available_before_grounding"
+            elif not str(relation.get("object_ref") or "").strip():
+                reason = "relation_object_ref_missing"
+            elif str(relation.get("geometry_scope") or "").strip() != spec.geometry_scope:
+                reason = "geometry_scope_not_allowed"
+            else:
+                reason = _l3_relation_parameter_error(
+                    template,
+                    relation.get("parameters"),
+                )
+        if reason:
+            diagnostics.append(
+                f"WARNING[l3_relation_closed_set] {claim_id}: dropped "
+                f"{template or '<empty>'} ({reason})"
+            )
+            grounding.append(_l3_relation_grounding_requirement(template))
+            continue
+        relation["criticality"] = (
+            str(relation.get("criticality") or "").strip()
+            if str(relation.get("criticality") or "").strip()
+            in {"hard", "soft", "informational"}
+            else spec.default_criticality
+        )
+        kept_relations.append(relation)
+    requirement_payload["relations"] = kept_relations
+    requirement_payload["grounding_requirements"] = list(dict.fromkeys(grounding))
+    payload["spatial_requirements"] = requirement_payload
+    return payload, diagnostics
 
 
 def _normalize_claim_components(
     *,
     dimension_key: str,
     output: Any,
+    source_fact_ids: Iterable[str] = (),
+    spatial_source_fact_ids: Iterable[str] = (),
 ) -> tuple[Any, PlanningClaimSet]:
-    """Convert validated provider components once into the strict claim contract."""
+    """Close provider values, then convert components into strict claims."""
 
     from app.domain.program.claim_draft import (
         PlanningClaimDraftSet,
@@ -737,12 +958,37 @@ def _normalize_claim_components(
         normalize_claim_draft_set,
     )
 
+    normalized_components: list[dict[str, Any]] = []
+    diagnostics: list[str] = []
+    sanitized_items: list[Any] = []
+    for item in output.claims:
+        payload, component_diagnostics = _sanitize_l3_provider_component(
+            item,
+            source_fact_ids=source_fact_ids,
+            spatial_source_fact_ids=spatial_source_fact_ids,
+        )
+        if payload is None:
+            diagnostics.extend(component_diagnostics)
+            continue
+        normalized_components.append(payload)
+        diagnostics.extend(component_diagnostics)
+        from app.domain.program.claim_draft import L3ProviderComponentDraft
+
+        sanitized_items.append(L3ProviderComponentDraft.model_validate(payload))
+    # Persist the same closed projection that is normalized below.  Otherwise
+    # an invalid provider identity could be written to a cache and reappear on
+    # resume even though the domain claim was already quarantined.
+    try:
+        output.claims = sanitized_items
+    except Exception:
+        pass
     draft_set = PlanningClaimDraftSet(
         dimension_key=dimension_key,
         claims=[
             component_to_planning_claim_draft(item, dimension_key=dimension_key)
-            for item in output.claims
+            for item in normalized_components
         ],
+        diagnostics=diagnostics,
     )
     claim_set = normalize_claim_draft_set(draft_set, dimension_key=dimension_key)
     if draft_set.claims and not claim_set.claims:
@@ -755,7 +1001,6 @@ def _normalize_claim_components(
 
 def _build_l3_report_synthesis_prompt(
     dimension_key: str,
-    planning_prompt: str,
     claim_set: PlanningClaimSet,
     semantic_feedback: list[str] | None = None,
 ) -> str:
@@ -779,7 +1024,6 @@ def _build_l3_report_synthesis_prompt(
         "只返回 report_body 字段，不返回 claims 数组、JSON 调试对象或代码围栏。\n\n"
         f"【validated claims】\n{claims_payload}\n"
         f"【claim diagnostics】\n{feedback}\n"
-        f"【original evidence and planning context】\n{planning_prompt}"
     )
 
 
@@ -840,29 +1084,56 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         trace_sink=evidence_trace,
     )
 
-    # 3. 从数据库加载分层依赖报告（同层 + L1/L2 跨层分开）
+    # 3. Resolve the exact direct dependency edges.  L1 is represented by
+    # the typed fact catalog below; only the abstract L2 decision artifact is
+    # allowed to cross this boundary as semantic instruction.
     store = ReportStore.get_instance()
-    l1_deps, l2_deps, same_layer_contexts = await load_layered_dependency_reports(
-        dim_key, cfg, dim_layer, session_id, is_revision,
+    dependency_context = await load_dependency_context(
+        session_id,
+        dim_key,
+        cfg,
+        dim_layer,
+    )
+    same_layer_deps = tuple(getattr(cfg, "depends_on", ()) or ())
+    layer1_deps = tuple(getattr(cfg, "layer_depends_on", ()) or ())
+    layer2_deps = tuple(getattr(cfg, "phase_depends_on", ()) or ())
+    missing_same = [key for key in same_layer_deps if key in dependency_context.missing_keys]
+    if missing_same:
+        raise RuntimeError(
+            f"维度 {dim_key} 的同层依赖产物缺失: {', '.join(missing_same)}"
+        )
+    same_layer_contexts = (
+        dependency_context.render_for_prompt(
+            include_keys=same_layer_deps,
+            include_summary=False,
+        )
+        if same_layer_deps
+        else ""
+    )
+    l1_deps = (
+        dependency_context.render_for_prompt(
+            include_keys=layer1_deps,
+            include_summary=False,
+            include_instruction=False,
+        )
+        if layer1_deps
+        else ""
+    )
+    l2_deps = (
+        dependency_context.render_for_prompt(
+            include_keys=layer2_deps,
+            include_summary=False,
+        )
+        if layer2_deps
+        else ""
     )
 
     # run_rag is the unified EvidenceBundle adapter; no second retrieval call.
     explore_section = ""
 
     # 5. 组装 L3 Prompt（detailed 模板）
-    same_layer_prompt = same_layer_contexts
-    if dim_key == "project_bank":
-        from app.domain.program.claim_projection import compact_claim_context
-
-        same_layer_prompt = compact_claim_context(same_layer_contexts)
-        logger.info(
-            "[analyze_l3_dimension] %s: compacted same-layer claims %d -> %d chars",
-            dim_key,
-            len(same_layer_contexts),
-            len(same_layer_prompt),
-        )
     prompt = _build_prompt(
-        cfg, state, rag_context, l1_deps, l2_deps, same_layer_prompt, "", explore_section,
+        cfg, state, rag_context, l1_deps, l2_deps, same_layer_contexts, "", explore_section,
     )
     logger.info(f"[analyze_l3_dimension] {dim_key}: Prompt length = {len(prompt)} chars")
 
@@ -919,6 +1190,8 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         draft_set, claim_set = _normalize_claim_components(
             dimension_key=dim_key,
             output=output,
+            source_fact_ids=source_fact_ids,
+            spatial_source_fact_ids=spatial_source_fact_ids,
         )
         semantic_feedback = _spatial_claim_evidence_errors(
             state,
@@ -938,6 +1211,8 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             draft_set, claim_set = _normalize_claim_components(
                 dimension_key=dim_key,
                 output=output,
+                source_fact_ids=source_fact_ids,
+                spatial_source_fact_ids=spatial_source_fact_ids,
             )
             semantic_feedback = _spatial_claim_evidence_errors(
                 state,
@@ -961,7 +1236,6 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         )
         report_prompt = _build_l3_report_synthesis_prompt(
             dim_key,
-            prompt,
             claim_set,
             semantic_feedback,
         )
@@ -1243,9 +1517,8 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             layer=dim_layer,
             is_revision=is_revision,
             inputs={
-                # The complete dependency prose is still passed to the LLM
-                # prompt.  The persisted operator audit deliberately keeps a
-                # compact summary so reports remain readable.
+                # The prompt receives the DependencyContext metadata projection;
+                # the persisted operator audit keeps a compact summary.
                 "dependency_reports_summary": _dependency_summary(l1_deps),
                 "l2_dependency_reports_summary": _dependency_summary(l2_deps),
                 "same_layer_dependency_reports_summary": _dependency_summary(same_layer_contexts),
@@ -1381,14 +1654,11 @@ def _build_prompt(
     return f"【dimension_key={dim_key}】\n" + get_layer3_prompt(
         dimension_key=dim_key,
         project_name=project_name,
-        # L1 report is the current-state analysis background.  L1 spatial
-        # facts are supplied separately for auditable spatial references.
-        # The provider's structured-output request includes the full schema
-        # and the detailed professional template.  Keep upstream reports
-        # bounded here so the request remains inside the configured provider
-        # context window; GROUND receives the complete typed artifacts later.
-        analysis_report=_compact_prompt_background(l1_deps, 5200, "L1 现状分析"),
-        planning_concept=_compact_prompt_background(l2_deps, 3400, "L2 规划思路"),
+        # DependencyContext supplies metadata-only L1/L2 projections.  Typed
+        # L1 facts and their source lineage are supplied separately, so no
+        # report body is used as an identity index or semantic fallback.
+        analysis_report=l1_deps,
+        planning_concept=l2_deps,
         constraints=constraints,
         knowledge_context=rag_context or "",
         revision_instruction=revision_instruction,
@@ -1402,16 +1672,12 @@ def _build_prompt(
             )
         ),
         location_evidence=(
-            _compact_prompt_background(spatial_fact_evidence, 3000, "已审计 L1 spatial facts")
+            spatial_fact_evidence
             + "\n\n"
-            + _compact_prompt_background(
-                spatial_location_evidence,
-                2200,
-                "已审计 L1 spatial location facts",
-            )
+            + spatial_location_evidence
         ),
         candidate_context=candidate_context,
-        dimension_plans=_compact_prompt_background(same_layer_contexts, 2200, "同层规划背景"),
+        dimension_plans=same_layer_contexts,
     )
 
 

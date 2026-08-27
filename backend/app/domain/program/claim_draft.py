@@ -10,8 +10,15 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+)
 
+from app.contracts.json_container import decode_json_container
 from app.contracts.program import (
     PlanningClaim,
     PlanningClaimSet,
@@ -147,8 +154,8 @@ class FacilityPlanningParametersDraft(BaseModel):
 
 
 class AxisPlanningParametersDraft(BaseModel):
-    action: Literal["preserve", "new", "upgrade"]
-    axis_type: Literal["primary", "secondary", "spatial_control"] = "primary"
+    action: str
+    axis_type: str = "primary"
     direction: str = ""
     reference_features: list[str] = Field(default_factory=list)
     connects: list[str] = Field(default_factory=list)
@@ -202,6 +209,157 @@ class SiteAreaPlanningParametersDraft(BaseModel):
     def decode_measures(cls, value: Any) -> Any:
         if isinstance(value, str):
             value = _decode_json_container(value)
+        return value
+
+
+class L3ProviderRelationDraft(BaseModel):
+    """Wire-level relation shape used only by the L3 provider adapter.
+
+    The provider must return a typed object, but a dynamic relation union is not
+    the right place to enforce runtime identity or parameter closure.  Those
+    checks run once in the L3 worker against the current relation catalogue.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    relation_template: str = ""
+    relation_id: str = ""
+    subject_ref: str = ""
+    object_ref: str = ""
+    object_ref_kind: str = "entity"
+    criticality: str = "soft"
+    geometry_scope: str = "pair"
+    parameters: dict[str, Any] | None = None
+    evidence_refs: list[str] = Field(default_factory=list)
+    source_claim_refs: list[str] = Field(default_factory=list)
+    weight: float = 1.0
+
+
+class L3ProviderSpatialRequirementsDraft(BaseModel):
+    """Provider wire shape before deterministic relation closure."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    relations: list[L3ProviderRelationDraft] = Field(default_factory=list)
+    shared_resource_refs: list[str] = Field(default_factory=list)
+    parcel_membership_refs: list[str] = Field(default_factory=list)
+    competing_parcel_refs: list[str] = Field(default_factory=list)
+    network_refs: list[str] = Field(default_factory=list)
+    required_input_refs: list[str] = Field(default_factory=list)
+    grounding_requirements: list[str] = Field(default_factory=list)
+
+
+class L3ProviderComponentDraft(BaseModel):
+    """Single structural wire shape for one provider-emitted L3 component.
+
+    ``L3ClaimOutput`` is the strict internal discriminated union.  It must not
+    also be used as the provider wire contract: component kinds such as
+    ``constraint`` are semantic labels that are normalized to the internal
+    ``non_spatial_action`` kind, and parameter/relation membership depends on
+    the current runtime catalogue.  Those checks belong to the L3 boundary
+    adapter after Instructor has parsed this typed object.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    component_kind: str = ""
+    claim_id: str = ""
+    dimension_key: str = ""
+    statement: str = ""
+    planning_role: str = ""
+    project_package_ref: str = ""
+    affected_population: float | None = None
+    affected_parcel_refs: list[str] = Field(default_factory=list)
+    suggested_category: str = ""
+    suggested_output_kind: str = ""
+    asset_kind: str = ""
+    suggested_interventions: list[str] = Field(default_factory=list)
+    quantity: float | None = None
+    quantity_unit: str | None = None
+    intervention_action: str = ""
+    implementation_phase: str = "short"
+    location_hints: list[str] = Field(default_factory=list)
+    constraint_refs: list[str] = Field(default_factory=list)
+    objective_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    source_fact_refs: list[str] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+    facility_parameters: dict[str, Any] | None = None
+    road_parameters: dict[str, Any] | None = None
+    linear_parameters: dict[str, Any] | None = None
+    axis_parameters: dict[str, Any] | None = None
+    polygon_parameters: dict[str, Any] | None = None
+    site_area_parameters: dict[str, Any] | None = None
+    spatial_requirements: L3ProviderSpatialRequirementsDraft | None = None
+    confidence: float | None = None
+    uncertainty: str = ""
+
+    @field_validator(
+        "affected_parcel_refs",
+        "suggested_interventions",
+        "location_hints",
+        "constraint_refs",
+        "objective_refs",
+        "evidence_refs",
+        "source_fact_refs",
+        "source_refs",
+        mode="before",
+    )
+    @classmethod
+    def decode_list_fields(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            decoded = _decode_json_container(value)
+            if not isinstance(decoded, list):
+                raise TypeError("provider list field must decode to a list")
+            return decoded
+        return value
+
+    @field_validator(
+        "facility_parameters",
+        "road_parameters",
+        "linear_parameters",
+        "axis_parameters",
+        "polygon_parameters",
+        "site_area_parameters",
+        "spatial_requirements",
+        mode="before",
+    )
+    @classmethod
+    def decode_object_fields(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            decoded = _decode_json_container(value)
+            if not isinstance(decoded, dict):
+                raise TypeError("provider object field must decode to an object")
+            return decoded
+        return value
+
+
+class L3ProviderClaimOutput(BaseModel):
+    """Top-level L3 provider envelope before strict domain projection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    claims: list[L3ProviderComponentDraft] = Field(default_factory=list)
+    diagnostics: list[str] = Field(default_factory=list)
+
+    @field_validator("claims", mode="before")
+    @classmethod
+    def decode_claims(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            decoded = _decode_json_container(value)
+            if not isinstance(decoded, list):
+                raise TypeError("structured claims argument must decode to a list")
+            return decoded
+        return value
+
+    @field_validator("diagnostics", mode="before")
+    @classmethod
+    def decode_diagnostics(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            decoded = _decode_json_container(value)
+            if not isinstance(decoded, list):
+                raise TypeError("structured diagnostics argument must decode to a list")
+            return decoded
         return value
 
 
@@ -442,13 +600,81 @@ ClaimComponentDraft: TypeAlias = Annotated[
 
 
 def component_to_planning_claim_draft(
-    component: ClaimComponentDraft,
+    component: ClaimComponentDraft | dict[str, Any],
     *,
     dimension_key: str = "",
 ) -> PlanningClaimDraft:
     """Adapt one validated component to the existing deterministic normalizer."""
 
-    payload = component.model_dump(mode="python")
+    payload = (
+        component.model_dump(mode="python")
+        if hasattr(component, "model_dump")
+        else dict(component)
+    )
+    component_kind = _text(payload.get("component_kind"))
+    non_spatial_aliases = {
+        "action",
+        "constraint",
+        "evidence_statement",
+        "indicator",
+        "objective",
+        "project_package",
+        "non_spatial_action",
+    }
+    if component_kind in non_spatial_aliases:
+        original_role = _text(payload.get("planning_role"))
+        payload["component_kind"] = "non_spatial_action"
+        component_kind = "non_spatial_action"
+        if original_role in non_spatial_aliases:
+            payload["planning_role"] = original_role
+    canonical_fields = {
+        "facility": ("facility", "point", "facility"),
+        "road": ("road", "line", "road"),
+        "linear": (
+            "road",
+            "line",
+            str(payload.get("asset_kind") or "sewer")
+            if str(payload.get("asset_kind") or "sewer") in {
+                "water_supply", "sewer", "stormwater", "power", "communication",
+                "drainage_channel", "revetment",
+            }
+            else "sewer",
+        ),
+        "axis": ("axis", "line", "axis"),
+        "restoration_overlay": ("restoration", "polygon", "none"),
+        "protection_overlay": ("protection", "polygon", "none"),
+        "zone": ("zone", "polygon", "none"),
+        "land_use_assignment": ("zone", "polygon", "land_use"),
+        "site_area": ("site_area", "polygon", "none"),
+        "non_spatial_action": ("action", "action", "none"),
+    }
+    if component_kind in canonical_fields:
+        category, output_kind, asset_kind = canonical_fields[component_kind]
+        payload["suggested_category"] = category
+        payload["suggested_output_kind"] = output_kind
+        payload["asset_kind"] = asset_kind
+        if component_kind == "non_spatial_action":
+            role = _text(payload.get("planning_role"))
+            allowed_roles = {
+                "evidence_statement",
+                "indicator",
+                "constraint",
+                "objective",
+                "non_spatial_action",
+                "project_package",
+            }
+            payload["planning_role"] = role if role in allowed_roles else "non_spatial_action"
+        else:
+            payload["planning_role"] = "spatial_intervention"
+    action = _text(payload.get("intervention_action"))
+    if action not in {
+        "preserve", "new", "expand", "relocate", "upgrade", "widen",
+        "harden", "repair", "demolish",
+    }:
+        payload["intervention_action"] = "new"
+    phase = _text(payload.get("implementation_phase"))
+    if phase not in {"short", "medium", "long"}:
+        payload["implementation_phase"] = "short"
     payload.pop("component_kind", None)
     if dimension_key and not payload.get("dimension_key"):
         payload["dimension_key"] = dimension_key
@@ -519,68 +745,7 @@ class L3ReportOutput(BaseModel):
 
 def _decode_json_container(value: str) -> Any:
     """Decode a provider JSON container without accepting executable text."""
-
-    candidate = value.strip()
-    if candidate.startswith("```") and candidate.endswith("```"):
-        candidate = candidate[3:-3].strip()
-        if candidate.startswith("json"):
-            candidate = candidate[4:].lstrip()
-    try:
-        return json.loads(candidate)
-    except json.JSONDecodeError as exc:
-        repaired = _repair_unescaped_quotes(candidate)
-        if repaired == candidate:
-            raise
-        try:
-            return json.loads(repaired)
-        except json.JSONDecodeError as repaired_exc:
-            raise ValueError(
-                "provider JSON container is malformed after quote repair: "
-                f"{repaired_exc.msg} at column {repaired_exc.colno}"
-            ) from exc
-
-
-def _repair_unescaped_quotes(value: str) -> str:
-    """Repair quotes inside provider strings while preserving JSON structure.
-
-    Some OpenAI-compatible providers serialize a nested tool argument and fail
-    to escape a quotation mark in a Chinese sentence.  This is deliberately a
-    narrow wire-format repair: only a quote inside a string whose next token is
-    not a JSON delimiter is escaped.  The repaired value is still parsed by
-    ``json.loads`` before it can reach the domain contract.
-    """
-
-    chars: list[str] = []
-    in_string = False
-    escaped = False
-    length = len(value)
-    for index, char in enumerate(value):
-        if escaped:
-            chars.append(char)
-            escaped = False
-            continue
-        if char == "\\" and in_string:
-            chars.append(char)
-            escaped = True
-            continue
-        if char != '"':
-            chars.append(char)
-            continue
-        if not in_string:
-            in_string = True
-            chars.append(char)
-            continue
-
-        next_index = index + 1
-        while next_index < length and value[next_index].isspace():
-            next_index += 1
-        next_char = value[next_index] if next_index < length else ""
-        if next_char in {",", "]", "}", ":", ""}:
-            in_string = False
-            chars.append(char)
-        else:
-            chars.extend(("\\", '"'))
-    return "".join(chars)
+    return decode_json_container(value)
 
 
 _CATEGORIES = {
@@ -1445,9 +1610,14 @@ def claim_set_semantic_errors(claim_set: PlanningClaimSet) -> list[str]:
 
 __all__ = [
     "L3ClaimOutput",
+    "L3ProviderClaimOutput",
+    "L3ProviderComponentDraft",
+    "L3ProviderRelationDraft",
+    "L3ProviderSpatialRequirementsDraft",
     "L3ReportOutput",
     "PlanningClaimDraft",
     "PlanningClaimDraftSet",
+    "component_to_planning_claim_draft",
     "claim_set_semantic_errors",
     "normalize_claim_draft_set",
 ]

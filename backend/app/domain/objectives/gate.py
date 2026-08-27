@@ -69,17 +69,11 @@ def evaluate_l2_gate(
             context_version=cv, artifact_id=gate_artifact_id,
         )
 
-    # A gap without a required fact is only an advisory narrative emitted by
-    # the model, not a resolvable evidence request.  Routing such entries to
-    # EXPLORE creates an endless retry loop even when the strategy already
-    # contains concrete goals, priorities and sources.  Only typed gaps with
-    # an explicit missing fact are actionable.
+    # A gap without a required fact is advisory model text, not an evidence
+    # request. Only typed gaps with an explicit missing fact are actionable.
     def _actionable_gap(g: object) -> bool:
         required = str(getattr(g, "required_fact", "") or "").strip()
-        description = str(getattr(g, "description", "") or "").strip()
-        # Legacy parsers may omit required_fact; retain explicit "missing"
-        # descriptions while ignoring model-generated strategy commentary.
-        return bool(required) or description.startswith(("缺", "需要", "不足", "未"))
+        return bool(required)
 
     actionable_gaps = [
         g for g in strategy.evidence_gaps

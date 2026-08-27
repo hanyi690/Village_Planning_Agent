@@ -1,5 +1,5 @@
 """
-Async Rate Limiter for LLM and Embedding API calls.
+Async Rate Limiter for embedding API calls.
 
 Wraps LangChain's InMemoryRateLimiter for RPM control plus asyncio.Semaphore
 for concurrent request limiting. Follows the official two-level control pattern:
@@ -95,31 +95,9 @@ class AsyncRateLimiter:
         logger.debug(f"[AsyncRateLimiter] Rate limit updated to {requests_per_second} rps")
 
 
-# Global rate limiter instances (lazy init)
-_llm_rate_limiter: Optional[AsyncRateLimiter] = None
+# Global embedding rate limiter instance (lazy init)
 _embedding_rate_limiter: Optional[AsyncRateLimiter] = None
 _lock = asyncio.Lock()
-
-
-async def get_llm_rate_limiter(
-    requests_per_second: float = 500.0,
-    max_concurrent: int = 50,
-    warmup_seconds: float = 5.0,
-) -> AsyncRateLimiter:
-    global _llm_rate_limiter
-    if _llm_rate_limiter is None:
-        async with _lock:
-            if _llm_rate_limiter is None:
-                _llm_rate_limiter = AsyncRateLimiter(
-                    requests_per_second=requests_per_second,
-                    max_concurrent=max_concurrent,
-                    warmup_seconds=warmup_seconds,
-                )
-                logger.info(
-                    f"[RateLimiter] LLM rate limiter created: rps={requests_per_second}, "
-                    f"max_concurrent={max_concurrent}, warmup={warmup_seconds}s"
-                )
-    return _llm_rate_limiter
 
 
 async def get_embedding_rate_limiter(
@@ -142,4 +120,4 @@ async def get_embedding_rate_limiter(
     return _embedding_rate_limiter
 
 
-__all__ = ["AsyncRateLimiter", "get_llm_rate_limiter", "get_embedding_rate_limiter"]
+__all__ = ["AsyncRateLimiter", "get_embedding_rate_limiter"]

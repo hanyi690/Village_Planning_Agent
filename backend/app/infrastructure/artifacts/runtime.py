@@ -32,7 +32,7 @@ ARTIFACT_KEYS = (
     "export_result", "render_artifacts", "execution_diagnostics", "kg_layer1",
     "repair_directives", "repair_impact", "global_zone_allocation",
     "planning_scenario", "scenario_set", "approved_execution_input", "validation_certificate", "final_relation_validation",
-    "global_site_allocation", "grounded_anchors", "l1_observations", "l1_bindings",
+    "global_site_allocation", "l1_observations", "l1_bindings",
     "source_semantic_classification", "l1_source_index", "execution_staging", "staged_parcel_changeset",
     "staged_planned_state", "staged_layout_configs",
     "solver_subproblem_plan", "solver_readiness",
@@ -82,9 +82,23 @@ def _parent_digests(
     return parents
 
 
-def _repository(base_dir: str | Path | None = None) -> ContentAddressedArtifactRepository:
+def _repository(
+    base_dir: str | Path | None = None,
+    *,
+    state: dict[str, Any] | None = None,
+) -> ContentAddressedArtifactRepository:
+    """Resolve CAS storage from the checkpoint before process environment.
+
+    Artifact descriptors are immutable, but their blobs still need a storage
+    root.  A resumed process may have a different cwd or environment, so a
+    state-carried root is authoritative whenever the caller did not provide an
+    explicit test/replay directory.  Older checkpoints without the field keep
+    the historical ``run_tmp_root`` fallback.
+    """
+
     if base_dir is None or str(base_dir) == ".run-tmp":
-        base_dir = run_tmp_root()
+        state_root = str((state or {}).get("artifact_root") or "").strip()
+        base_dir = Path(state_root).resolve() if state_root else run_tmp_root()
     return ContentAddressedArtifactRepository(base_dir)
 
 
@@ -169,7 +183,7 @@ def store_artifact(
         exclude_key=key,
         exclude_keys={f"{module}_gate"},
     )
-    repository = _repository(base_dir)
+    repository = _repository(base_dir, state=state)
     existing_ref = current_refs.get(key)
     if existing_ref:
         # ContractMeta/provenance timestamps are deliberately excluded by
@@ -266,7 +280,7 @@ def load_artifact(
         raise ArtifactReplayError(f"artifact {key} belongs to a different branch")
     if ref.schema_id == "":
         raise ArtifactReplayError(f"artifact {key} has no schema identity")
-    repository = _repository(base_dir)
+    repository = _repository(base_dir, state=state)
     payload = repository.get_json(ref)
     if payload is None:
         raise ArtifactReplayError(
@@ -295,7 +309,7 @@ def load_embedded_artifact(
     run_id = state.get("run_id") or state.get("session_id", "")
     if ref.run_id != run_id or ref.branch_id != str(state.get("branch_id") or "main"):
         raise ArtifactReplayError("embedded child artifact belongs to a different run or branch")
-    payload = _repository(base_dir).get_json(ref)
+    payload = _repository(base_dir, state=state).get_json(ref)
     if payload is None:
         raise ArtifactReplayError("embedded child artifact contains a null payload")
     if model is not None:
@@ -316,7 +330,7 @@ def fork_artifact_refs(
     validate_artifact_refs_branch(state)
     run_id = state.get("run_id") or state.get("session_id", "")
     refs = dict(state.get("artifact_refs") or {})
-    repository = _repository(base_dir)
+    repository = _repository(base_dir, state=state)
     forked: dict[str, dict[str, Any]] = {}
     for key, raw_ref in refs.items():
         ref = _descriptor(raw_ref, key)

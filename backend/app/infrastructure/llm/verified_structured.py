@@ -20,7 +20,8 @@ from app.contracts.llm.decision_contracts import (
     stable_digest,
 )
 from app.domain.validation.repair_operations import pending_repair_decisions
-from app.infrastructure.llm.structured import run_structured_output, structured_failure_code
+from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
+from app.infrastructure.llm.structured import structured_failure_code
 
 
 ProposalT = TypeVar("ProposalT", bound=BaseModel)
@@ -161,6 +162,7 @@ async def run_verified_structured_decision(
     max_retries: int = 2,
     timeout: float | None = None,
     llm: Any | None = None,
+    contract_key: str | None = None,
     **kwargs: Any,
 ) -> VerifiedDecisionResult[ProposalT]:
     """Generate one proposal then route it through deterministic semantics.
@@ -178,14 +180,52 @@ async def run_verified_structured_decision(
         }
     )
     try:
-        proposal = await run_structured_output(
-            proposal_model,
+        manager_fields = {
+            "max_tokens",
+            "incomplete_output_max_tokens",
+            "max_concurrent",
+            "semaphore_scope",
+            "transient_retries",
+            "transient_retry_backoff_s",
+            "temperature",
+            "allow_content_json",
+            "timeout_includes_queue",
+            "input_char_limit",
+        }
+        unsupported = sorted(set(kwargs) - manager_fields)
+        if unsupported:
+            raise TypeError(
+                "unsupported verified LLM policy fields: " + ", ".join(unsupported)
+            )
+        proposal = await get_llm_manager().run_structured(
+            LLMCallSpec(
+                stage=context.stage,
+                contract_key=contract_key or context.object_type,
+                response_model=proposal_model,
+                call_type="closed_set",
+                model=model,
+                max_retries=max_retries,
+                timeout_s=timeout,
+                max_tokens=kwargs.get("max_tokens"),
+                incomplete_output_max_tokens=kwargs.get("incomplete_output_max_tokens"),
+                max_concurrent=kwargs.get("max_concurrent"),
+                semaphore_scope=kwargs.get("semaphore_scope"),
+                transient_retries=kwargs.get("transient_retries"),
+                transient_retry_backoff_s=kwargs.get("transient_retry_backoff_s"),
+                temperature=float(kwargs.get("temperature", 0.1)),
+                allow_content_json=bool(kwargs.get("allow_content_json", False)),
+                timeout_includes_queue=bool(
+                    kwargs.get("timeout_includes_queue", True)
+                ),
+                input_char_limit=int(kwargs.get("input_char_limit", 120_000)),
+            ),
             messages,
-            model=model,
-            max_retries=max_retries,
-            timeout=timeout,
+            context={
+                "object_type": context.object_type,
+                "input_digest": context.input_digest,
+                "candidate_set_digest": context.candidate_set_digest,
+            },
             llm=llm,
-            **kwargs,
         )
     except Exception as exc:
         failure_code = structured_failure_code(exc) or "STRUCTURED_OUTPUT_ERROR"

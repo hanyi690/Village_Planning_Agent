@@ -9,42 +9,18 @@ from __future__ import annotations
 import json
 import unicodedata
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from app.contracts.llm.program_contracts import (
+    QuantityKind,
+    ResolutionStatus,
+    UnitResolution,
+    UnitResolutionBatch,
+)
 
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
-
-QuantityKind = Literal[
-    "area",
-    "length",
-    "count",
-    "capacity",
-    "population",
-    "ratio",
-    "time",
-]
-ResolutionStatus = Literal["resolved", "abstain"]
-
-
-class UnitResolution(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    claim_id: str
-    field_path: str
-    raw_unit: str
-    quantity_kind: QuantityKind
-    normalized_unit: str
-    status: ResolutionStatus
-
-
-class UnitResolutionBatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    resolutions: list[UnitResolution] = Field(default_factory=list)
-
 
 @dataclass(frozen=True)
 class _FieldSpec:
@@ -415,24 +391,6 @@ def _build_llm_prompt(candidates: list[_UnitCandidate]) -> str:
     )
 
 
-def _parse_resolution_batch_response(content: Any) -> UnitResolutionBatch:
-    text = str(content or "")
-    if isinstance(content, list):
-        text = "".join(str(part) for part in content)
-    try:
-        from app.infrastructure.llm.dimension_runtime import strip_model_reasoning
-
-        text = strip_model_reasoning(text)
-    except Exception:  # noqa: BLE001
-        pass
-    if not isinstance(text, str) or not text.strip():
-        return UnitResolutionBatch()
-    try:
-        return UnitResolutionBatch.model_validate_json(text)
-    except ValidationError:
-        return UnitResolutionBatch()
-
-
 async def flash_repair_units(draft_set: Any, session_id: str) -> Any:
     deterministic_batch, unresolved = resolve_units_deterministically(draft_set)
     if not deterministic_batch.resolutions and not unresolved:
@@ -442,21 +400,35 @@ async def flash_repair_units(draft_set: Any, session_id: str) -> Any:
     if not unresolved:
         return repaired
     from app.infrastructure.llm.factory import create_flash_llm
+    from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
+    from app.core.llm_config import get_llm_settings
 
     llm = create_flash_llm(max_tokens=600, temperature=0.0)
     prompt = _build_llm_prompt(unresolved)
+    stage_policy = get_llm_settings().stage_policy("l3")
     try:
-        import asyncio
-
-        response = (
-            await llm.ainvoke(prompt)
-            if asyncio.iscoroutinefunction(getattr(llm, "ainvoke", None))
-            else llm.invoke(prompt)
+        llm_batch = await get_llm_manager().run_structured(
+            LLMCallSpec(
+                stage="L3",
+                contract_key="program.unit_repair",
+                response_model=UnitResolutionBatch,
+                call_type="closed_set",
+                max_retries=stage_policy.parse_retries,
+                timeout_s=stage_policy.timeout_s,
+                max_tokens=min(1200, stage_policy.max_tokens),
+                incomplete_output_max_tokens=2048,
+                max_concurrent=stage_policy.max_concurrent,
+                semaphore_scope="l3",
+                temperature=0.0,
+                allow_content_json=True,
+            ),
+            [{"role": "user", "content": prompt}],
+            llm=llm,
+            context={"stage": "L3_UNIT_REPAIR", "session_id": session_id},
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("[flash_unit_repair] llm call failed for %s: %s", session_id, exc)
         return repaired
-    llm_batch = _parse_resolution_batch_response(getattr(response, "content", ""))
     unresolved_keys = {(item.claim_id, item.field_path, item.raw_unit) for item in unresolved}
     filtered = UnitResolutionBatch(
         resolutions=[

@@ -420,20 +420,7 @@ async def build_planning_context(
                 type(e).__name__,
             )
 
-    # 5. Village anchors (only when KG is live)
-    village_anchors: list = []
-    if kg is not None and kg_session_ref:
-        try:
-            from app.infrastructure.kg.queries.sparql import query_kg
-
-            village_anchors = query_kg(kg, "get_village_anchors") or []
-        except Exception as e:
-            logger.warning(
-                "[PlanningContext] village anchors query failed: %s",
-                type(e).__name__,
-            )
-
-    # 6. Report manifest + summary index (bundle-owned, no report bodies)
+    # 5. Report manifest + summary index (bundle-owned, no report bodies)
     reports: Dict[str, Dict[str, Any]] = {}
     report_summary_index: Dict[str, Dict[str, Any]] = {}
     if include_reports and session_id and bundle is not None:
@@ -534,7 +521,6 @@ async def build_planning_context(
         kg_version=kg_version,
         gazetteer=gazetteer,
         constraint_index=constraint_index,
-        village_anchors=village_anchors,
         input_documents=runtime_documents,
         reports=reports,
         reports_loaded=bool(include_reports and session_id and bundle is not None),
@@ -587,7 +573,7 @@ async def build_planning_context(
         )
     _context_cache[session_id] = context
     logger.info(
-        "[PlanningContext] built v%d for %s (%s): snapshot=%s kg=%s gaz=%s cidx=%s reports=%d anchors=%d",
+        "[PlanningContext] built v%d for %s (%s): snapshot=%s kg=%s gaz=%s cidx=%s reports=%d",
         version,
         session_id,
         resolved_village or "(none)",
@@ -596,7 +582,6 @@ async def build_planning_context(
         gazetteer is not None,
         constraint_index is not None,
         len(reports),
-        len(village_anchors),
     )
     return context
 

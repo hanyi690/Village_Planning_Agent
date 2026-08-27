@@ -185,6 +185,8 @@ class L1DimensionPassState(BaseModel):
     diagnostics: list[str] = Field(default_factory=list)
     calls_used: int = 0
     max_calls: int = 4
+    source_page_index: int = Field(default=0, ge=0)
+    source_page_count: int = Field(default=1, ge=1)
     status: Literal["running", "complete", "diagnostic"] = "running"
 
 

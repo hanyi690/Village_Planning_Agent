@@ -45,7 +45,6 @@ class PlanningContext:
         kg_version: KG mutation version (invalidates cached SPARQL results).
         gazetteer: Village gazetteer (may be None when not resolvable).
         constraint_index: ``ConstraintIndex`` built from the bundle (may be None).
-        village_anchors: Pre-computed ``get_village_anchors`` rows.
         input_documents: Runtime text working set resolved from bundle document
             refs; bodies are not persisted in the bundle snapshot.
         reports: Bundle-owned report manifest, ``{dim_key: {summary,
@@ -83,7 +82,6 @@ class PlanningContext:
     kg_version: int = 0
     gazetteer: Any = None
     constraint_index: Any = None
-    village_anchors: List[Dict[str, Any]] = field(default_factory=list)
     input_documents: List[Dict[str, Any]] = field(default_factory=list)
     reports: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     reports_loaded: bool = False
@@ -97,8 +95,6 @@ class PlanningContext:
     evidence_graph: Any = None
     evidence_graph_key: str = ""
     external_search_port: Any = None
-    grounded_anchors: List[Any] = field(default_factory=list)
-    grounding_shared_context: Any = None
     grounding_unresolved: List[Dict[str, Any]] = field(default_factory=list)
     grounded_bindings: List[Any] = field(default_factory=list)
     ports: PlanningPorts = field(default_factory=PlanningPorts)

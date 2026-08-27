@@ -257,13 +257,27 @@ Doc type rules:
 Output the object only, no explanation."""
 
         try:
-            from app.infrastructure.llm.structured import run_structured_output
+            from app.core.llm_config import get_llm_settings
+            from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
 
-            proposal = await run_structured_output(
-                DocumentTypeProposal,
+            settings = get_llm_settings()
+            proposal = await get_llm_manager().run_structured(
+                LLMCallSpec(
+                    stage="RAG",
+                    contract_key="rag.document_metadata",
+                    response_model=DocumentTypeProposal,
+                    call_type="retrieval",
+                    max_retries=1,
+                    timeout_s=settings.request_timeout_seconds(),
+                    max_tokens=100,
+                    incomplete_output_max_tokens=1024,
+                    max_concurrent=settings.provider_concurrency(),
+                    semaphore_scope="rag-metadata",
+                    temperature=0.1,
+                    allow_content_json=True,
+                ),
                 [{"role": "user", "content": prompt}],
                 llm=llm,
-                max_retries=1,
             )
             keywords = list(dict.fromkeys(
                 str(keyword).strip()[:80]

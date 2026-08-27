@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 from typing import Any, Callable, Dict, List
 from langgraph.graph import StateGraph, END, START
 from langchain_core.messages import HumanMessage
@@ -146,9 +145,11 @@ try:
     from langgraph.types import RetryPolicy
 
     try:
+        from app.core.llm_config import get_llm_settings
+
         _NODE_TRANSIENT_RETRIES = min(
             1,
-            max(0, int(os.getenv("LLM_NODE_TRANSIENT_RETRIES", "0"))),
+            max(0, int(get_llm_settings().node_transient_retries)),
         )
     except (TypeError, ValueError):
         _NODE_TRANSIENT_RETRIES = 0
@@ -629,8 +630,64 @@ def _approve_select(state: Dict[str, Any], paused_stage: str) -> str:
     # scenario as the execution boundary.
     if state.get("scoped_replan_required"):
         return "select"
-    # Otherwise approval is an explicit human override of the SELECT gate.
-    return "execute"
+    # A SELECT approval may only cross into EXECUTE with the complete,
+    # content-addressed approval boundary.  A HUMAN decision is not allowed
+    # to turn a missing/partial ScenarioSet into an executable plan.
+    if _select_execution_artifacts_ready(state):
+        return "execute"
+    return END_DIAGNOSTIC
+
+
+def _select_execution_artifacts_ready(state: Dict[str, Any]) -> bool:
+    """Verify the typed SELECT artifacts before routing into EXECUTE."""
+
+    refs = dict(state.get("artifact_refs") or {})
+    if not all(
+        refs.get(key)
+        for key in (
+            "scenario_set",
+            "planning_scenario",
+            "execution_plan",
+            "approved_execution_input",
+        )
+    ):
+        return False
+    try:
+        from app.contracts.planning.approval import ApprovedExecutionInput
+        from app.contracts.planning.scenario import PlanningScenario, ScenarioSet
+        from app.contracts.workflow.execution_plan_contracts import ExecutionPlan
+        from app.infrastructure.artifacts.runtime import load_artifact
+
+        artifact_state = {**state, "artifact_refs": refs}
+        scenario_set = load_artifact(artifact_state, "scenario_set", ScenarioSet)
+        scenario = load_artifact(artifact_state, "planning_scenario", PlanningScenario)
+        execution_plan = load_artifact(
+            artifact_state, "execution_plan", ExecutionPlan
+        )
+        approval = load_artifact(
+            artifact_state,
+            "approved_execution_input",
+            ApprovedExecutionInput,
+        )
+        if scenario_set is None or scenario is None or execution_plan is None:
+            return False
+        if approval is None or not approval.can_execute:
+            return False
+        approval.assert_matches(
+            scenario_set,
+            scenario,
+            scenario_set_ref=str(
+                getattr(scenario_set, "set_id", "") or ""
+            ),
+            context_version=str(state.get("context_version") or ""),
+            bundle_snapshot_digest=str(
+                (state.get("context_ref") or {}).get("snapshot_digest") or ""
+            ),
+        )
+        approval.assert_execution_plan_matches(execution_plan)
+        return True
+    except Exception:
+        return False
 
 
 def _approve_ground(state: Dict[str, Any], paused_stage: str) -> str:
@@ -2188,6 +2245,38 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
                 result,
             )
         )
+        if result.get("human_approval_diagnostic"):
+            result.update({
+                "delivery_status": "diagnostic_only",
+                "diagnostic_terminal": {
+                    "stage": "select",
+                    "reason": "select_human_approval_invalid",
+                    "diagnostic": result["human_approval_diagnostic"],
+                },
+            })
+            return result
+        effective_state = dict(state)
+        effective_state["artifact_refs"] = {
+            **dict(state.get("artifact_refs") or {}),
+            **dict(result.get("artifact_refs") or {}),
+        }
+        if not (
+            result.get("scoped_replan_required")
+            or state.get("scoped_replan_required")
+            or _select_execution_artifacts_ready(effective_state)
+        ):
+            result.update({
+                "delivery_status": "diagnostic_only",
+                "diagnostic_terminal": {
+                    "stage": "select",
+                    "reason": "select_approval_without_executable_scenario",
+                    "message": (
+                        "SELECT approval requires a complete ScenarioSet, "
+                        "PlanningScenario, ExecutionPlan and ApprovedExecutionInput."
+                    ),
+                },
+            })
+            return result
     if action in ("accept", "approve") and paused_stage:
         if (
             paused_stage == "l3"

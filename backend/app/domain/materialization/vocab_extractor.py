@@ -677,13 +677,28 @@ async def _extract_vocabulary_llm(
             ensure_ascii=False,
         ),
     )
-    from app.infrastructure.llm.structured import run_structured_output
+    from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
+    from app.core.llm_config import get_llm_settings
 
-    data = await run_structured_output(
-        _VocabularyOutput,
+    settings = get_llm_settings()
+    stage_policy = settings.stage_policy("l3")
+    data = await get_llm_manager().run_structured(
+        LLMCallSpec(
+            stage="L3",
+            contract_key="materialization.vocabulary",
+            response_model=_VocabularyOutput,
+            call_type="closed_set",
+            max_retries=2,
+            timeout_s=stage_policy.timeout_s,
+            max_tokens=min(2400, stage_policy.max_tokens),
+            incomplete_output_max_tokens=4096,
+            max_concurrent=stage_policy.max_concurrent,
+            semaphore_scope="l3-materialization",
+            temperature=0.1,
+            allow_content_json=True,
+        ),
         [{"role": "user", "content": prompt}],
         llm=llm,
-        max_retries=2,
         context={
             "closed_set": {
                 "dlbm_ids": sorted(closed_set.dlbm_ids),

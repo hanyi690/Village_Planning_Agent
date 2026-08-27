@@ -460,22 +460,36 @@ class LLMOutlineCorrector:
             )
             prompt = f"""你是文档结构分析专家。为每个给定标题提出层级。
 
-只返回严格 typed JSON 对象：{{"items": [{{"heading_id": "...", "level": 1, "heading_type": "chapter"}}]}}。
+严格填写声明的 OutlineLevelBatch typed response contract；不要把 JSON 写入 message.content。
 必须逐一返回本批次全部 heading_id，不能新增、遗漏、重复或改写 ID。
 level 只能是 1 到 4 的整数；heading_type 只能是 chapter、section、article、item。
 不能返回序号、候选位置、解释文本或其他字段。
 
 本批次标题：
 {heading_list}
-"""
+            """
             try:
-                from app.infrastructure.llm.structured import run_structured_output_sync
+                from app.core.llm_config import get_llm_settings
+                from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
 
-                proposal = run_structured_output_sync(
-                    OutlineLevelBatch,
+                settings = get_llm_settings()
+                proposal = get_llm_manager().run_structured_sync(
+                    LLMCallSpec(
+                        stage="RAG",
+                        contract_key="rag.outline_levels",
+                        response_model=OutlineLevelBatch,
+                        call_type="closed_set",
+                        max_retries=1,
+                        timeout_s=settings.request_timeout_seconds(),
+                        max_tokens=1200,
+                        incomplete_output_max_tokens=2048,
+                        max_concurrent=settings.provider_concurrency(),
+                        semaphore_scope="rag-outline",
+                        temperature=0.1,
+                        allow_content_json=True,
+                    ),
                     [{"role": "user", "content": prompt}],
                     llm=self.llm,
-                    max_retries=1,
                 )
                 expected_ids = [str(item["heading_id"]) for item in batch]
                 actual_ids = [item.heading_id for item in proposal.items]

@@ -448,6 +448,43 @@ def _compile_target_tasks(
         )
         return [evidence, candidate, solver], solver.task_id, []
 
+    if node.target_kind in {"road", "linear", "axis"} and node.operation in _SOURCE_OPERATIONS:
+        source_identity_artifact = f"evidence:source_identity:{target_id}"
+        source_identity = _task(
+            task_id=_task_id(target_id, "evidence:source_identity"),
+            task_kind="evidence",
+            target_refs=target_refs,
+            capability="evidence.source_identity",
+            required_inputs=[f"source_identity:{target_id}"],
+            produced_artifact_refs=[source_identity_artifact],
+            diagnostics=[
+                *[f"pending_locator:{ref}" for ref in node.locator_refs if ref],
+            ],
+        )
+        candidate = _task(
+            task_id=_task_id(target_id, "candidate:source_geometry"),
+            task_kind="candidate_producer",
+            target_refs=target_refs,
+            capability=node.required_capabilities[0] if node.required_capabilities else "network.candidate",
+            required_inputs=[source_identity_artifact],
+            produced_artifact_refs=[f"candidate_domain:{target_id}"],
+            dependency_task_ids=[source_identity.task_id],
+            diagnostics=[
+                *[f"pending_locator:{ref}" for ref in node.locator_refs if ref],
+            ],
+        )
+        solver = _task(
+            task_id=_task_id(target_id, "solver:source_geometry"),
+            task_kind="solver_subproblem",
+            target_refs=target_refs,
+            capability=node.required_capabilities[0] if node.required_capabilities else "network.solver",
+            required_inputs=[f"candidate_domain:{target_id}"],
+            produced_artifact_refs=[f"solver_subproblem:{target_id}"],
+            dependency_task_ids=[candidate.task_id],
+            solver_kind="network_path" if node.target_kind == "road" else "auto",
+        )
+        return [source_identity, candidate, solver], solver.task_id, []
+
     if node.target_kind in {"road", "linear", "axis"}:
         endpoint_artifact = f"evidence:endpoint_binding:{target_id}"
         network_artifact = f"evidence:network_snapshot:{target_id}"

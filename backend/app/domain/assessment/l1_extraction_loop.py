@@ -15,12 +15,14 @@ from app.domain.assessment.source_index import render_l1_source_index
 from app.domain.assessment.observation_draft import (
     L1PlanningFactDraft,
     L1ReportOutput,
-    l1_observation_output_model_for_dimension,
+    l1_observation_provider_model_for_dimension,
+    normalize_l1_observation_provider_output,
 )
 
 
 CheckpointWriter = Callable[[dict[str, Any]], Awaitable[None] | None]
 _FACT_ADAPTER = TypeAdapter(L1PlanningFactDraft)
+_L1_OBSERVE_PAGE_CHARS = 6200
 
 
 @dataclass
@@ -36,6 +38,58 @@ class L1DimensionRunResult:
 
 def _unique(values: list[str]) -> list[str]:
     return list(dict.fromkeys(str(value) for value in values if str(value).strip()))
+
+
+def _source_pages(
+    source_index: L1SourceIndex | None,
+    *,
+    max_chars: int = _L1_OBSERVE_PAGE_CHARS,
+) -> list[L1SourceIndex | None]:
+    """Partition source segments into deterministic, resumable observe pages.
+
+    The complete source index is still processed across the pages.  Paging is
+    only an output/latency boundary: it prevents one provider response from
+    having to enumerate every fact in every source segment at once.
+    """
+
+    if source_index is None or not source_index.source_segments:
+        return [source_index]
+    pages: list[L1SourceIndex] = []
+    current: list[Any] = []
+    current_chars = 0
+    for segment in source_index.source_segments:
+        segment_chars = max(1, len(segment.text))
+        if current and current_chars + segment_chars > max_chars:
+            pages.append(source_index.model_copy(update={"source_segments": current}))
+            current = []
+            current_chars = 0
+        current.append(segment)
+        current_chars += segment_chars
+    if current:
+        pages.append(source_index.model_copy(update={"source_segments": current}))
+    return pages or [source_index]
+
+
+def _observation_key(observation: Any) -> str:
+    payload = (
+        observation.model_dump(mode="json")
+        if hasattr(observation, "model_dump")
+        else observation
+    )
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _merge_observations(existing: list[Any], incoming: list[Any]) -> list[Any]:
+    """Merge page results without collapsing distinct evidence-backed facts."""
+
+    merged = list(existing)
+    known = {_observation_key(item) for item in merged}
+    for item in incoming:
+        key = _observation_key(item)
+        if key not in known:
+            merged.append(item)
+            known.add(key)
+    return merged
 
 
 def _observation_label(observation: Any) -> str:
@@ -184,7 +238,7 @@ async def run_l1_dimension_loop(
     evidence audit surface; no parallel asset/demand register is generated.
     """
 
-    from app.infrastructure.llm.structured import run_structured_output
+    from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
     from app.domain.assessment.dimension_contracts import (
         get_dimension_semantic_contract,
         render_dimension_semantic_contract,
@@ -251,75 +305,147 @@ async def run_l1_dimension_loop(
         cursor = cursor.model_copy(update={"pass_name": "report", "status": "running"})
 
     base_kwargs = dict(runner_kwargs or {})
+    llm_manager = get_llm_manager()
+
+    def _call_spec(
+        response_model: type[Any],
+        *,
+        contract_key: str,
+        call_type: str,
+        max_tokens: int,
+    ) -> LLMCallSpec:
+        return LLMCallSpec(
+            stage="L1",
+            contract_key=contract_key,
+            response_model=response_model,
+            call_type=call_type,
+            max_retries=int(base_kwargs.get("max_retries", 0)),
+            timeout_s=float(base_kwargs.get("timeout", 480.0)),
+            max_tokens=max(1, int(max_tokens)),
+            incomplete_output_max_tokens=int(
+                base_kwargs.get("incomplete_output_max_tokens", max_tokens)
+            ),
+            max_concurrent=int(base_kwargs.get("max_concurrent", 1)),
+            semaphore_scope=str(base_kwargs.get("semaphore_scope", "l1")),
+            transient_retries=int(base_kwargs.get("transient_retries", 0)),
+            transient_retry_backoff_s=float(
+                base_kwargs.get("transient_retry_backoff_s", 0.0)
+            ),
+            temperature=float(base_kwargs.get("temperature", 0.3)),
+            allow_content_json=bool(base_kwargs.get("allow_content_json", False)),
+            timeout_includes_queue=bool(
+                base_kwargs.get("timeout_includes_queue", False)
+            ),
+        )
     semantic_contract = get_dimension_semantic_contract(dimension_key, 1)
     allowed_fact_types = tuple(semantic_contract.get("l1_fact_types", []) or [])
     allowed_fact_types_json = json.dumps(
         list(allowed_fact_types), ensure_ascii=False, separators=(",", ":")
     )
+    source_pages = _source_pages(source_index)
+    source_page_count = len(source_pages)
+    if cursor.source_page_count != source_page_count:
+        cursor = cursor.model_copy(
+            update={"source_page_count": source_page_count}
+        )
+    if cursor.source_page_index >= source_page_count:
+        cursor = cursor.model_copy(
+            update={"pass_name": "report", "source_page_index": source_page_count}
+        )
     observe_system = (
         f"【L1 observe pass; dimension_key={dimension_key}】\n"
-        "只输出一个 JSON 对象，根对象只能包含 observations 和 diagnostics。"
-        '形状固定为 {"observations":[],"diagnostics":[]}；'
-        "observations 必须是 JSON 数组，不能把单条 fact 直接作为根对象，"
-        "不能把数组或 JSON 文本放进 observations 字段，不能返回 report_body、Markdown 或正文。"
+        "本 pass 只负责 typed observations，不负责报告写作；响应字段、类型和默认值只以声明的 "
+        "L1ObservationProviderOutput 工具 schema 为准。不要把 JSON 写入 message.content，不要输出 "
+        "report_body、Markdown、正文或额外根字段。observations 必须是数组；没有内容时使用 schema 默认值。"
         f"每条 observation 的 fact_type 只能逐字选择本维度闭集 {allowed_fact_types_json}；"
         "不同 fact_type 只填写其 schema 声明的专属字段，不要混用其他分支字段。"
+        "不要按数量配额截断或扩写；逐条保留本页来源实际支持的观察，"
+        "同一来源句中的同一语义只保留一条。"
         "共享证据字段只填来源明确支持的值；尽量提供 source_segment_ids 和 source_quote，"
         "没有直接证据就标记 uncertain，不得猜测。"
+        "字符串字段没有值时使用空字符串，数组字段没有值时使用空数组，不要返回 null；"
+        "attributes 的值使用标量或可序列化的 JSON 值，不要把列表写入字符串字段。"
         "空间 locator 只记录来源明确支持的粗粒度地点/关系，不填写坐标或几何；"
         "全村指标、诉求或政策事实不需要为了格式强行添加点位。"
         "同一语义族内不同子类或量值必须保留可区分的 semantic_type 或 attributes.metric，"
         "不能压成泛化事实。\n\n"
         f"{render_dimension_semantic_contract(dimension_key, 1)}\n\n"
-        f"【L1 source index】\n{render_l1_source_index(source_index)}"
     )
 
     if cursor.pass_name in {"observe", "diagnostic"}:
-        observe_response_model = l1_observation_output_model_for_dimension(
+        observe_response_model = l1_observation_provider_model_for_dimension(
             dimension_key
         )
-        output = await run_structured_output(
-            observe_response_model,
-            [
-                {"role": "system", "content": observe_system},
-                {"role": "user", "content": prompt},
-            ],
-            **base_kwargs,
-        )
-        if output is None:
-            raise ValueError("L1 observe pass returned no structured output")
-        diagnostics.extend(
-            str(value)
-            for value in (getattr(output, "diagnostics", []) or [])
-            if str(value).strip()
-        )
-        observations, source_diagnostics = _validate_observation_sources(
-            list(output.observations or []),
-            source_index,
-        )
-        diagnostics.extend(source_diagnostics)
-        diagnostics.extend(
-            _dimension_mismatch_diagnostics(
-                observations,
-                dimension_key=dimension_key,
+        while cursor.pass_name in {"observe", "diagnostic"}:
+            if cursor.calls_used >= cursor.max_calls:
+                diagnostics.append("l1_observe_page_budget_exhausted")
+                break
+            page_index = min(cursor.source_page_index, source_page_count - 1)
+            page_system = (
+                observe_system
+                + f"【L1 source page {page_index + 1}/{source_page_count}】\n"
+                "本次只处理这一页中的 source_segment；没有出现在本页的来源不得引用。"
+                "若本页没有本维度事实，返回空 observations 数组。\n\n"
+                "【L1 source index】\n"
+                + render_l1_source_index(source_pages[page_index])
             )
-        )
-        cursor = cursor.model_copy(
-            update={
-                "pass_name": "report",
-                "attempt": cursor.attempt + 1,
-                "calls_used": cursor.calls_used + 1,
-                "status": "running",
-            }
-        )
-        await _write_checkpoint(
-            checkpoint_writer,
-            pass_name="observe",
-            report_body=report_body,
-            observations=observations,
-            diagnostics=diagnostics,
-            cursor=cursor,
-        )
+            provider_output = await llm_manager.run_structured(
+                _call_spec(
+                    observe_response_model,
+                    contract_key="l1.observe",
+                    call_type="semantic",
+                    max_tokens=int(base_kwargs.get("max_tokens", 1)),
+                ),
+                [
+                    {"role": "system", "content": page_system},
+                    {"role": "user", "content": prompt},
+                ],
+            )
+            output = normalize_l1_observation_provider_output(
+                dimension_key,
+                provider_output,
+            )
+            if output is None:
+                raise ValueError("L1 observe pass returned no structured output")
+            diagnostics.extend(
+                str(value)
+                for value in (getattr(output, "diagnostics", []) or [])
+                if str(value).strip()
+            )
+            page_observations, source_diagnostics = _validate_observation_sources(
+                list(output.observations or []),
+                source_pages[page_index],
+            )
+            diagnostics.extend(source_diagnostics)
+            diagnostics.extend(
+                _dimension_mismatch_diagnostics(
+                    page_observations,
+                    dimension_key=dimension_key,
+                )
+            )
+            observations = _merge_observations(observations, page_observations)
+            next_page_index = page_index + 1
+            page_complete = next_page_index >= source_page_count
+            cursor = cursor.model_copy(
+                update={
+                    "pass_name": "report" if page_complete else "observe",
+                    "attempt": cursor.attempt + 1,
+                    "calls_used": cursor.calls_used + 1,
+                    "source_page_index": next_page_index,
+                    "source_page_count": source_page_count,
+                    "status": "running",
+                }
+            )
+            await _write_checkpoint(
+                checkpoint_writer,
+                pass_name="observe",
+                report_body=report_body,
+                observations=observations,
+                diagnostics=diagnostics,
+                cursor=cursor,
+            )
+            if page_complete:
+                break
 
     final_status = "complete"
     if not report_body:
@@ -357,13 +483,25 @@ async def run_l1_dimension_loop(
                 f"【validated L1 material】\n{report_material}"
             )
             report_kwargs = dict(base_kwargs)
-            report_output = await run_structured_output(
-                L1ReportOutput,
+            if report_kwargs.get("report_max_tokens") is not None:
+                report_kwargs["max_tokens"] = report_kwargs["report_max_tokens"]
+                report_kwargs.pop("report_max_tokens", None)
+            report_output = await llm_manager.run_structured(
+                _call_spec(
+                    L1ReportOutput,
+                    contract_key="l1.report",
+                    call_type="report",
+                    max_tokens=int(
+                        report_kwargs.get(
+                            "max_tokens",
+                            report_kwargs.get("report_max_tokens", 1),
+                        )
+                    ),
+                ),
                 [
                     {"role": "system", "content": report_system},
                     {"role": "user", "content": "请根据已验证材料生成现状正文。"},
                 ],
-                **report_kwargs,
             )
             if report_output is None or not str(report_output.report_body or "").strip():
                 diagnostics.append("l1_report_synthesis_empty")

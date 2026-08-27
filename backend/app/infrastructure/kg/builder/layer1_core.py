@@ -642,39 +642,6 @@ def add_terrain(kg, terrain_analysis=None):
     return kg
 
 
-def add_residential_clusters_from_typed(kg, parcels, annotations=None) -> None:
-    """宅基地聚落（村簇）——与 village_cluster_mapper 统一聚类（1340/0702 + 0.008）。
-
-    空间推理一致性：村名映射（assign_villages_to_clusters）与设施/水体/道路的
-    serves/nearby 指向同一批簇，BSM 才能对齐。
-    """
-    from app.spatial.grounding.village_cluster_mapper import build_village_clusters
-
-    clusters = build_village_clusters(list(parcels or []))
-    if not clusters:
-        logger.debug("No residential clusters derived from 宅基地 parcels")
-        return
-    seq = 0
-    for cluster in clusters:
-        name = f"居民点{seq + 1}"
-        uri = EntityIdPolicy.fallback_uri("settlement", name, seq)
-        kg.g.add((uri, RDF.type, EntityTypes.ResidentialCluster))
-        kg.g.add((uri, PLN.name, Literal(name)))
-        if cluster.centroid:
-            add_centroid(kg.g, uri, cluster.centroid[0], cluster.centroid[1])
-        kg.g.add((uri, Relations.sfWithin, PLN.village))
-        add_geo_feature_type(kg.g, uri)
-        for bsm in cluster.bsms:
-            for s in kg.g.subjects(PLN.bsm, Literal(bsm)):
-                if (s, RDF.type, EntityTypes.Parcel) in kg.g:
-                    kg.g.add((s, Relations.sfWithin, uri))
-        seq += 1
-    logger.info(
-        "Identified %d residential settlements (unified clustering)",
-        len(clusters),
-    )
-
-
 @kg_builder("current_facility", entity_type="Facility", layer=1, order=10)
 def add_facilities_from_typed(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> dict:
     from app.data.model.spatial_types import CurrentFacility

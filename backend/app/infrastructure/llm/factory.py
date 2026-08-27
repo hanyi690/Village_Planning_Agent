@@ -58,6 +58,9 @@ async def get_llm_semaphore(
     """
     loop = asyncio.get_running_loop()
     if max_concurrent is None:
+        # Compatibility export is populated from the same typed settings
+        # boundary.  Reading it here also preserves the test/application seam
+        # that can replace the effective process budget before a call starts.
         from app.core.settings import LLM_MAX_CONCURRENT
 
         max_concurrent = LLM_MAX_CONCURRENT
@@ -100,9 +103,11 @@ def get_provider(explicit_provider: Optional[str] = None) -> LLMProvider:
     """
     Get the LLM provider from explicit setting or environment variable.
     """
-    from app.core.settings import LLM_PROVIDER
+    from app.core.llm_config import get_llm_settings, normalize_provider_name
 
-    provider_name = explicit_provider or LLM_PROVIDER
+    provider_name = normalize_provider_name(
+        explicit_provider or get_llm_settings().provider
+    )
 
     if provider_name in ("deepseek", "openai"):
         return LLMProvider.OPENAI
@@ -119,26 +124,13 @@ def get_provider(explicit_provider: Optional[str] = None) -> LLMProvider:
 
 def get_api_key(provider: LLMProvider) -> str:
     """Get the API key for the specified provider from environment variables."""
-    if provider == LLMProvider.ZHIPUAI:
-        key = os.getenv("ZHIPUAI_API_KEY")
-        if not key:
-            raise ValueError("ZHIPUAI_API_KEY not found in environment.")
-        return key
-    elif provider == LLMProvider.MINIMAX:
-        key = os.getenv("MINIMAX_API_KEY")
-        if not key:
-            raise ValueError("MINIMAX_API_KEY not found in environment.")
-        return key
-    elif provider == LLMProvider.OPENCODE_GO:
-        key = os.getenv("OPENCODE_GO_API_KEY")
-        if not key:
-            raise ValueError("OPENCODE_GO_API_KEY not found in environment.")
-        return key
-    else:
-        key = os.getenv("OPENAI_API_KEY")
-        if not key:
-            raise ValueError("OPENAI_API_KEY not found in environment.")
-        return key
+    from app.core.llm_config import get_llm_settings
+
+    connection = get_llm_settings().connection(provider.value)
+    try:
+        return connection.require_api_key()
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def _merge_callbacks(user_callbacks: Optional[List[Any]] = None) -> List[Any]:
@@ -175,13 +167,14 @@ def _create_openai_llm(
     except ImportError:
         from langchain_community.chat_models import ChatOpenAI
 
-    api_key = get_api_key(LLMProvider.OPENAI)
+    from app.core.llm_config import get_llm_settings
 
-    from app.core.settings import OPENAI_API_BASE, LLM_REQUEST_TIMEOUT
-    if OPENAI_API_BASE:
-        kwargs['base_url'] = OPENAI_API_BASE
-    kwargs.setdefault('request_timeout', LLM_REQUEST_TIMEOUT)
-    kwargs.setdefault('max_retries', max(0, int(os.getenv('LLM_PROVIDER_MAX_RETRIES', '0'))))
+    config = get_llm_settings()
+    connection = config.connection("openai")
+    api_key = connection.require_api_key()
+    kwargs.setdefault('base_url', connection.base_url)
+    kwargs.setdefault('request_timeout', config.request_timeout_seconds())
+    kwargs.setdefault('max_retries', config.provider_max_retries)
     for key, value in _provider_http_clients().items():
         kwargs.setdefault(key, value)
 
@@ -256,8 +249,8 @@ def _create_zhipuai_llm(
 
     api_key = get_api_key(LLMProvider.ZHIPUAI)
 
-    from app.core.settings import LLM_REQUEST_TIMEOUT
-    kwargs.setdefault('request_timeout', LLM_REQUEST_TIMEOUT)
+    from app.core.llm_config import get_llm_settings
+    kwargs.setdefault('request_timeout', get_llm_settings().request_timeout_seconds())
 
     all_callbacks = _merge_callbacks(callbacks)
     if all_callbacks:
@@ -295,13 +288,15 @@ def _create_minimax_llm(
     except ImportError:
         from langchain_community.chat_models import ChatOpenAI
 
-    from app.core.settings import MINIMAX_API_BASE, LLM_REQUEST_TIMEOUT
+    from app.core.llm_config import get_llm_settings
 
+    config = get_llm_settings()
+    connection = config.connection("minimax")
     api_key = get_api_key(LLMProvider.MINIMAX)
     effective_temperature = min(1.0, max(0.01, float(temperature)))
-    kwargs["base_url"] = MINIMAX_API_BASE
-    kwargs.setdefault("request_timeout", LLM_REQUEST_TIMEOUT)
-    kwargs.setdefault("max_retries", max(0, int(os.getenv("LLM_PROVIDER_MAX_RETRIES", "0"))))
+    kwargs["base_url"] = connection.base_url
+    kwargs.setdefault("request_timeout", config.request_timeout_seconds())
+    kwargs.setdefault("max_retries", config.provider_max_retries)
     for key, value in _provider_http_clients().items():
         kwargs.setdefault(key, value)
 
@@ -354,12 +349,14 @@ def _create_opencode_go_llm(
     except ImportError:
         from langchain_community.chat_models import ChatOpenAI
 
-    from app.core.settings import OPENCODE_GO_API_BASE, LLM_REQUEST_TIMEOUT
+    from app.core.llm_config import get_llm_settings
 
+    config = get_llm_settings()
+    connection = config.connection("opencode-go")
     api_key = get_api_key(LLMProvider.OPENCODE_GO)
-    kwargs["base_url"] = OPENCODE_GO_API_BASE
-    kwargs.setdefault("request_timeout", LLM_REQUEST_TIMEOUT)
-    kwargs.setdefault("max_retries", max(0, int(os.getenv("LLM_PROVIDER_MAX_RETRIES", "0"))))
+    kwargs["base_url"] = connection.base_url
+    kwargs.setdefault("request_timeout", config.request_timeout_seconds())
+    kwargs.setdefault("max_retries", config.provider_max_retries)
     # langchain-openai otherwise injects a socket-options transport that
     # disables httpx proxy auto-detection.  OpenCode Go is reached through the
     # deployment proxy in this environment, so keep the plain proxy-aware
@@ -400,15 +397,11 @@ def create_llm(
     **kwargs
 ) -> Any:
     """Create an LLM instance with specified provider."""
-    from app.core.settings import (
-        LLM_MODEL,
-        MINIMAX_MODEL,
-        OPENCODE_GO_MODEL,
-        LANGCHAIN_TRACING_V2,
-        LANGCHAIN_PROJECT,
-    )
+    from app.core import settings as app_settings
+    from app.core.llm_config import get_llm_settings
 
     selected_provider = get_provider(provider)
+    llm_config = get_llm_settings()
     # MiniMax reasoning responses can otherwise inherit an accidentally huge
     # workspace MAX_TOKENS (for example 65536), keeping every long planning
     # dimension open for many minutes.  Keep the provider boundary bounded;
@@ -417,15 +410,10 @@ def create_llm(
     if selected_provider == LLMProvider.MINIMAX:
         max_tokens = min(int(max_tokens), 8192)
     if model is None:
-        if selected_provider == LLMProvider.MINIMAX:
-            model = MINIMAX_MODEL
-        elif selected_provider == LLMProvider.OPENCODE_GO:
-            model = OPENCODE_GO_MODEL
-        else:
-            model = LLM_MODEL
+        model = llm_config.connection(selected_provider.value).model
 
-    if LANGCHAIN_TRACING_V2:
-        logger.debug(f"[LLM Factory] LangSmith tracing enabled (project: {LANGCHAIN_PROJECT})")
+    if app_settings.LANGCHAIN_TRACING_V2:
+        logger.debug(f"[LLM Factory] LangSmith tracing enabled (project: {app_settings.LANGCHAIN_PROJECT})")
 
     logger.debug(f"[LLM Factory] Creating LLM: model={model}, provider={selected_provider.value}")
 
@@ -497,10 +485,8 @@ def get_minimax_llm(
     **kwargs,
 ) -> Any:
     """Get a MiniMax LLM explicitly through the OpenAI-compatible endpoint."""
-    from app.core.settings import MINIMAX_MODEL
-
     return _create_minimax_llm(
-        model or MINIMAX_MODEL, temperature, max_tokens,
+        model or get_llm_settings().connection("minimax").model, temperature, max_tokens,
         callbacks=callbacks, metadata=metadata, **kwargs
     )
 
@@ -514,10 +500,8 @@ def get_opencode_go_llm(
     **kwargs,
 ) -> Any:
     """Get an OpenCode Go LLM explicitly."""
-    from app.core.settings import OPENCODE_GO_MODEL
-
     return _create_opencode_go_llm(
-        model or OPENCODE_GO_MODEL, temperature, max_tokens,
+        model or get_llm_settings().connection("opencode-go").model, temperature, max_tokens,
         callbacks=callbacks, metadata=metadata, **kwargs
     )
 
@@ -540,6 +524,16 @@ def create_flash_llm(
         # returned through the provider split-response transport configured in
         # create_minimax_llm, so structured callers receive JSON content rather
         # than needing local reasoning-text extraction.
+        if get_provider() is LLMProvider.OPENCODE_GO:
+            from app.core.llm_config import get_llm_settings
+
+            config = get_llm_settings()
+            extra_body = dict(kwargs.pop("extra_body", None) or {})
+            extra_body.setdefault("thinking", config.opencode_go_thinking_payload())
+            kwargs["extra_body"] = extra_body
+            reasoning_effort = config.opencode_go_reasoning_effort()
+            if reasoning_effort and "reasoning_effort" not in kwargs:
+                kwargs["reasoning_effort"] = reasoning_effort
         return create_llm(
             temperature=temperature if temperature is not None else 0.3,
             max_tokens=max_tokens if max_tokens is not None else 500,

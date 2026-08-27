@@ -10,11 +10,10 @@ target remains pending.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.contracts.artifacts.classification_ref import (
     ClassificationDecision,
@@ -40,13 +39,9 @@ _PROMPT_VERSION = "l3-classification-verified-v2"
 def _classification_max_attempts() -> int:
     """Return one attempt by default, with at most one explicit reask."""
 
-    try:
-        retries = min(
-            1,
-            max(0, int(os.getenv("L3_CLASSIFICATION_RETRIES", "0"))),
-        )
-    except (TypeError, ValueError):
-        retries = 0
+    from app.core.llm_config import get_llm_settings
+
+    retries = min(1, max(0, int(get_llm_settings().classification_retries)))
     return 1 + retries
 
 
@@ -111,9 +106,14 @@ class _ClassificationProposalItem(BaseModel):
 
 
 class _ClassificationProposalBatch(BaseModel):
-    """Strict wrapper; its item code enum is generated per invocation."""
+    """Stable provider envelope; candidate membership is checked locally."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
+
+    results: list[_ClassificationProposalItem] = Field(
+        default_factory=list,
+        max_length=12,
+    )
 
 
 def _strict_string_values(value: Any) -> tuple[str, ...] | None:
@@ -284,21 +284,16 @@ def _candidate_set_digest(targets: Sequence[_ClassificationTarget]) -> str:
 
 
 def _dynamic_proposal_model(candidate_codes: Sequence[str]) -> type[BaseModel]:
-    """Build a schema whose code enum is exactly this invocation's candidates."""
+    """Return the stable provider schema for the classification call.
+
+    ``candidate_codes`` remains an input to the prompt and semantic validator,
+    but runtime values are intentionally not compiled into provider JSON
+    schema.  A changing catalog must not change the wire contract.
+    """
     codes = tuple(dict.fromkeys(candidate_codes))
     if not codes:
         raise ValueError("classification proposal requires a non-empty candidate set")
-    code_type = Literal.__getitem__(codes)
-    item_model = create_model(
-        f"ClassificationProposalItem_{stable_digest(codes)[:12]}",
-        __base__=_ClassificationProposalItem,
-        selected_code=(code_type | None, None),
-    )
-    return create_model(
-        f"ClassificationProposalBatch_{stable_digest(codes)[:12]}",
-        __base__=_ClassificationProposalBatch,
-        results=(list[item_model], ...),
-    )
+    return _ClassificationProposalBatch
 
 
 def _build_code_catalog(
@@ -618,8 +613,9 @@ async def generate_classification_decisions(
         for start in range(0, len(remaining), _BATCH_SIZE):
             batch = remaining[start : start + _BATCH_SIZE]
             batch_key = tuple(target.target_id for target in batch)
-            batch_codes = [code for target in batch for code in target.candidate_codes]
-            model = _dynamic_proposal_model(batch_codes)
+            model = _dynamic_proposal_model(
+                [code for target in batch for code in target.candidate_codes]
+            )
             batch_input_digest = stable_digest(
                 {
                     "targets": [target.model_dump(mode="json") for target in batch],
@@ -657,6 +653,7 @@ async def generate_classification_decisions(
                 decision_context=context,
                 proposal_model_factory=lambda _context, proposal_model=model: proposal_model,
                 messages=messages,
+                contract_key="program.classification",
                 semantic_validator=lambda decision_context, proposal: _validate_batch(
                     decision_context,
                     proposal,
@@ -667,6 +664,7 @@ async def generate_classification_decisions(
                 max_retries=0,
                 timeout=180,
                 max_tokens=4096,
+                allow_content_json=True,
             )
 
             accepted_ids: set[str] = set()

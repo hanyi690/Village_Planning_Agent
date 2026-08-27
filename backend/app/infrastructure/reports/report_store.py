@@ -17,7 +17,7 @@ import weakref
 from datetime import datetime
 from typing import Any, Dict, List, Optional, TypedDict
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from app.database.models import DimensionReport
 from app.database.engine import get_async_session
@@ -38,6 +38,20 @@ def _report_write_lock() -> asyncio.Lock:
             lock = asyncio.Lock()
             _REPORT_WRITE_LOCKS[loop] = lock
         return lock
+
+
+def _summary_needs_enrichment(summary: Any) -> bool:
+    """Schedule only pending display summaries, never replace typed output."""
+    if summary in (None, ""):
+        return True
+    if isinstance(summary, dict):
+        status = summary.get("summary_status")
+    else:
+        try:
+            status = json.loads(str(summary)).get("summary_status")
+        except (TypeError, json.JSONDecodeError, AttributeError):
+            status = None
+    return status in (None, "", "pending")
 
 
 # ==========================================
@@ -109,7 +123,7 @@ class ReportStore:
         """
         report_id = str(uuid.uuid4())
         display_content = content
-        summary = await self._generate_summary(display_content, dim_key, layer)
+        summary = (metadata or {}).get("summary", '{"summary_status":"pending"}')
 
         db_report = DimensionReport(
             session_id=session_id,
@@ -118,7 +132,7 @@ class ReportStore:
             version=version,
             report_id=report_id,
             content=display_content,
-            instruction=None,
+            instruction=(metadata or {}).get("instruction"),
             summary=summary,
             revision_trigger=metadata.get("revision_reason") if metadata else None,
             knowledge_sources=knowledge_sources,
@@ -133,6 +147,8 @@ class ReportStore:
                 await db.refresh(db_report)
 
         logger.info(f"[ReportStore] Saved: {session_id}/{dim_key}/v{version} (id={report_id[:8]}...)")
+        if _summary_needs_enrichment(summary):
+            self.schedule_summary(session_id, dim_key, layer, version, report_id)
         return report_id
 
     async def bulk_save(self, reports: List[Dict[str, Any]]) -> List[str]:
@@ -226,9 +242,18 @@ class ReportStore:
 
         report_ids = [r["report_id"] for r in reports]
         logger.info(f"[ReportStore] Bulk saved {len(reports)} reports: {[r['dimension_key'] for r in reports]}")
+        for report_data in reports:
+            if _summary_needs_enrichment(report_data.get("summary", "")):
+                self.schedule_summary(
+                    report_data["session_id"],
+                    report_data["dimension_key"],
+                    report_data["layer"],
+                    report_data["version"],
+                    report_data["report_id"],
+                )
         return report_ids
 
-    async def update_summary(self, session_id: str, dim_key: str, version: int, summary: str) -> bool:
+    async def update_summary(self, session_id: str, dim_key: str, version: int, summary: str, report_id: str) -> bool:
         """Update the summary of an existing report (async background enrichment).
 
         Returns True if updated, False if the report row was not found.
@@ -236,27 +261,98 @@ class ReportStore:
         async with _report_write_lock():
             async with get_async_session() as db:
                 result = await db.execute(
-                    select(DimensionReport).where(
+                    update(DimensionReport)
+                    .where(
                         DimensionReport.session_id == session_id,
                         DimensionReport.dimension_key == dim_key,
                         DimensionReport.version == version,
+                        DimensionReport.report_id == report_id,
                     )
+                    .values(summary=summary)
                 )
-                report = result.scalar_one_or_none()
-                if report is None:
+                if int(getattr(result, "rowcount", 0) or 0) != 1:
                     return False
-                report.summary = summary
                 await db.commit()
                 return True
 
-    async def _generate_summary(self, content: str, dim_key: str = "", layer: int = 1) -> str:
-        """Generate the single typed display-summary projection."""
-        if not content:
-            return ""
+    async def _get_summary_source(self, session_id: str, dim_key: str, version: int, report_id: str) -> tuple[str, Any] | None:
+        """Load the complete source only inside the async summary worker."""
+        async with get_async_session() as db:
+            result = await db.execute(
+                select(DimensionReport.content, DimensionReport.instruction).where(
+                    DimensionReport.session_id == session_id,
+                    DimensionReport.dimension_key == dim_key,
+                    DimensionReport.version == version,
+                    DimensionReport.report_id == report_id,
+                )
+            )
+            row = result.one_or_none()
+            if row is None:
+                return None
+            return str(row[0] or ""), row[1]
 
-        from app.infrastructure.llm.dimension_runtime import generate_summary
+    def schedule_summary(self, session_id: str, dim_key: str, layer: int, version: int, report_id: str):
+        from app.bootstrap.composition import CompositionRoot
+        from app.infrastructure.tasks.task_supervisor import build_summary_task_key
 
-        return await generate_summary(dim_key, layer, content)
+        async def run():
+            from app.infrastructure.llm.dimension_runtime import generate_summary
+            source = await self._get_summary_source(session_id, dim_key, version, report_id)
+            if source is None:
+                return
+            content, instruction = source
+            # The summary worker owns the only read of the complete report
+            # source.  Keep the typed instruction beside the full report body
+            # instead of replacing the body with an instruction-only view;
+            # the display summary must be able to see every report section.
+            source_artifact = {
+                "report_body": content,
+                "typed_instruction": instruction,
+            }
+            summary = await generate_summary(
+                dim_key,
+                layer,
+                content,
+                source_artifact=source_artifact,
+            )
+            await self.update_summary(session_id, dim_key, version, summary, report_id=report_id)
+
+        try:
+            supervisor = CompositionRoot.get_task_supervisor()
+        except Exception as exc:
+            logger.warning("[ReportStore] Summary supervisor unavailable: %s", type(exc).__name__)
+            return None
+        coroutine = run()
+        try:
+            return supervisor.create_task(
+                build_summary_task_key(session_id, layer, dim_key, version, report_id),
+                coroutine,
+            )
+        except Exception as exc:
+            coroutine.close()
+            logger.warning("[ReportStore] Summary task not scheduled: %s", type(exc).__name__)
+            return None
+
+    async def get_latest_dependency_records(self, session_id: str, dependency_keys: List[str]) -> Dict[str, Dict[str, Any]]:
+        keys = [str(key).strip() for key in dependency_keys if str(key).strip()]
+        if not keys:
+            return {}
+        async with get_async_session() as db:
+            result = await db.execute(
+                select(
+                    DimensionReport.dimension_key, DimensionReport.layer,
+                    DimensionReport.version, DimensionReport.report_id,
+                    DimensionReport.summary, DimensionReport.instruction,
+                ).where(
+                    DimensionReport.session_id == session_id,
+                    DimensionReport.dimension_key.in_(keys),
+                ).order_by(DimensionReport.dimension_key, DimensionReport.version.desc())
+            )
+            records: Dict[str, Dict[str, Any]] = {}
+            for row in result.all():
+                if row.dimension_key not in records:
+                    records[row.dimension_key] = dict(row._mapping)
+            return records
 
     @staticmethod
     def parse_summary(summary: str) -> Dict[str, Any]:

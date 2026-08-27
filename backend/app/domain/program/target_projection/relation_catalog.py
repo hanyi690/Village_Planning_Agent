@@ -202,6 +202,39 @@ def relation_options_payload(
     return payload
 
 
+def relation_options_prompt_payload(
+    subject_kinds: tuple[str, ...] = (
+        "facility",
+        "road",
+        "linear",
+        "axis",
+        "site_area",
+        "zone",
+    ),
+) -> dict[str, object]:
+    """Render a deduplicated relation catalogue for bounded prompts."""
+
+    expanded = relation_options_payload(subject_kinds)
+    options_by_subject_kind: dict[str, list[dict[str, str]]] = {}
+    relation_specs: dict[str, dict[str, object]] = {}
+    for subject_kind, options in expanded.items():
+        options_by_subject_kind[subject_kind] = []
+        for option in options:
+            template = str(option["relation_template"])
+            options_by_subject_kind[subject_kind].append({
+                "relation_template": template,
+            })
+            relation_specs.setdefault(template, {
+                "object_ref_kinds": option["object_ref_kinds"],
+                "parameter_types": option["parameter_types"],
+                "default_criticality": option["default_criticality"],
+            })
+    return {
+        "relation_options_by_subject_kind": options_by_subject_kind,
+        "relation_specs": relation_specs,
+    }
+
+
 def render_relation_options_contract(
     subject_kinds: tuple[str, ...] = (
         "facility",
@@ -237,6 +270,7 @@ __all__ = [
     "normalize_relation_subject_kind",
     "relation_options",
     "relation_options_payload",
+    "relation_options_prompt_payload",
     "relation_spec",
     "render_relation_options_contract",
 ]

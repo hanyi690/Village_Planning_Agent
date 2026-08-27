@@ -13,12 +13,12 @@ roads/constraints/water 等）物化为 RDF 图（rdflib）+ SemanticMemoryStore
 
 | 目录/文件 | 职责 |
 |---|---|
-| `builder/` | KGBuilder 组合式构建：`base.PlanningKG`、`builder.KGBuilder`、`registry`（BuildContext/BuilderSpec）、`layer1_core`/`layer1_extended`/`layer1_control_lines`、`layer2`/`layer3`/`layer4`、`materialize_topology`、`entity_cluster_topology`、`enrichment` 挂载点 |
+| `builder/` | KGBuilder 组合式构建：`base.PlanningKG`、`builder.KGBuilder`、`registry`（BuildContext/BuilderSpec）、`layer1_core`/`layer1_extended`/`layer1_control_lines`、`layer2`/`layer3`/`layer4`、`entity_cluster_topology`、`enrichment` 挂载点 |
 | `service.py` | `build_knowledge_graph_data`：从 bundle 构建 KG 数据 |
 | `session_kg.py` | 会话级 KG：进程池构建、CAS layer1 复用、`ensure_session_kg` |
 | `manager.py` | `KGManager` + `CacheKey.compute_layer1_cache_key` + LRU 缓存 |
 | `queries/` | 查询层：`contracts`、`semantic`、`cognition`、`execute_queries`、`spatial_ref`、`sparql`；顶层 `__init__` 导出 `query_kg`/`get_entity_context`/`get_parcel_semantic_context` 等 |
-| `enrichment/` | 富化：`name_backfill`、`bindings`、`descriptions`、`relations`、`report_entity_enrichment` |
+| `enrichment/` | 富化：`bindings`、`descriptions`、`relations`、`report_entity_enrichment` |
 | `gazetteer/` | 地名词典适配 |
 | `adapters/` | `gazetteer_adapter`/`semantic_query_adapter`/`spatial_query_adapter`（实现 contracts/ports） |
 | `ontology.py` | `PLN`/`GEO` 命名空间、EntityTypes、Relations、SemanticPredicates、GeoPredicates |

@@ -54,6 +54,13 @@ def _ground_bindings(
     """Map only source-backed GROUND facts to compiler input labels."""
 
     bindings: list[PlanningTaskBinding] = []
+    candidate_geometries = {
+        str(getattr(item, "candidate_id", "") or ""): (index, item)
+        for index, item in enumerate(
+            list(getattr(problem, "candidate_geometries", None) or [])
+        )
+        if str(getattr(item, "candidate_id", "") or "").strip()
+    }
 
     def append(label: str, kind: str, fragment: str) -> None:
         value = _binding(
@@ -75,6 +82,28 @@ def _ground_bindings(
         geometry_refs = list(getattr(domain, "candidate_geometry_refs", None) or [])
         if str(getattr(domain, "status", "") or "") == "resolved" and candidate_ids:
             append(f"candidate_domain:{target_id}", "candidate_domain", fragment)
+            for candidate_id in candidate_ids:
+                geometry_entry = candidate_geometries.get(str(candidate_id))
+                if geometry_entry is None:
+                    continue
+                geometry_index, geometry = geometry_entry
+                if (
+                    str(getattr(geometry, "kind", "") or "") == "line"
+                    and str(getattr(geometry, "role", "") or "") == "execution_geometry"
+                    and str(getattr(geometry, "spatial_domain_kind", "") or "") == "exact_feature"
+                    and bool(str(getattr(geometry, "wkt", "") or "").strip())
+                    and bool(
+                        getattr(geometry, "source_feature_ids", None)
+                        or getattr(geometry, "source_refs", None)
+                        or getattr(geometry, "source_bsms", None)
+                    )
+                ):
+                    append(
+                        f"source_identity:{target_id}",
+                        "geometry",
+                        f"/problem/candidate_geometries/{geometry_index}",
+                    )
+                    break
         if geometry_refs:
             append(f"geometry:{target_id}", "geometry", fragment)
     for index, domain in enumerate(list(getattr(problem, "target_domains", None) or [])):

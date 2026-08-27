@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from app.core.llm_config import get_llm_settings
 
 # The supported production command runs with ``backend`` as cwd, while the
 # repository-managed .env lives at the workspace root.  Relying on
@@ -24,46 +25,34 @@ IS_PRODUCTION = os.getenv("ENVIRONMENT") == "production"
 # Support PROJECT_ROOT env var override (for Docker where file layout differs)
 PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT", "")).resolve() if os.getenv("PROJECT_ROOT") else Path(__file__).resolve().parent.parent.parent.parent
 
-# API Keys
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ZHIPUAI_API_KEY = os.getenv("ZHIPUAI_API_KEY")
-
-# DashScope (阿里云百炼) API 配置
-DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
-DASHSCOPE_API_BASE = os.getenv("DASHSCOPE_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-
 # Implicit LLM calls use MiniMax high-speed unless a provider/model override is
 # supplied explicitly.
 DEFAULT_LLM_MODEL = "MiniMax-M2.7-highspeed"
 
-# MiniMax OpenAI-compatible provider.  Keep this separate from the
-# primary OPENAI_API_KEY/base pair so switching providers cannot silently send
-# a MiniMax key to DashScope (or vice versa).
-MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY")
-MINIMAX_API_BASE = os.getenv("MINIMAX_API_BASE", "https://api.minimaxi.com/v1")
-MINIMAX_MODEL = os.getenv("MINIMAX_MODEL", DEFAULT_LLM_MODEL)
-
-# OpenCode Go OpenAI-compatible provider.
-OPENCODE_GO_API_KEY = os.getenv("OPENCODE_GO_API_KEY")
-OPENCODE_GO_API_BASE = os.getenv(
-    "OPENCODE_GO_API_BASE",
-    "https://opencode.ai/zen/go/v1",
-)
-OPENCODE_GO_MODEL = os.getenv("OPENCODE_GO_MODEL", "deepseek-v4-flash")
-
-# LLM Configuration
-# MiniMax is the default provider; every model setting remains explicitly
-# overridable for controlled experiments and provider-specific deployments.
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "minimax")
-LLM_MODEL = os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)
-MAX_TOKENS = int(os.getenv("MAX_TOKENS", "32768"))
+# Compatibility exports remain available to the rest of the application, but
+# their values now come from the same typed snapshot used by the factory and
+# Instructor.  This prevents one client path from silently selecting a
+# different provider, model, endpoint, or protocol.
+LLM_CONFIG = get_llm_settings()
+LLM_PROVIDER = LLM_CONFIG.provider
+LLM_MODEL = LLM_CONFIG.llm_model
+MAX_TOKENS = LLM_CONFIG.max_tokens
+OPENAI_API_KEY = LLM_CONFIG.openai_api_key
+ZHIPUAI_API_KEY = LLM_CONFIG.zhipuai_api_key
+DASHSCOPE_API_KEY = LLM_CONFIG.dashscope_api_key
+DASHSCOPE_API_BASE = LLM_CONFIG.dashscope_api_base
+MINIMAX_API_KEY = LLM_CONFIG.minimax_api_key
+MINIMAX_API_BASE = LLM_CONFIG.minimax_api_base
+MINIMAX_MODEL = LLM_CONFIG.minimax_model
+OPENCODE_GO_API_KEY = LLM_CONFIG.opencode_go_api_key
+OPENCODE_GO_API_BASE = LLM_CONFIG.opencode_go_api_base
+OPENCODE_GO_MODEL = LLM_CONFIG.opencode_go_model
+LLM_STRUCTURED_MODE = LLM_CONFIG.structured_mode
+LLM_PROVIDER_MAX_RETRIES = LLM_CONFIG.provider_max_retries
+LLM_PROVIDER_REQUEST_TIMEOUT = LLM_CONFIG.request_timeout_seconds()
 
 _PROVIDER_CONCURRENCY_DEFAULT = (
-    8
-    if LLM_PROVIDER.lower() in {"minimax", "minimaxai", "mini-max"}
-    else 12
-    if LLM_PROVIDER.lower() in {"opencode-go", "opencode_go", "opencodego"}
-    else 8
+    LLM_CONFIG.provider_concurrency()
 )
 
 # L1 dimensions fan out concurrently, but each dimension still emits a
@@ -71,29 +60,21 @@ _PROVIDER_CONCURRENCY_DEFAULT = (
 # Keep a bounded per-request budget while leaving enough headroom for source
 # lineage and structured observations.  These are request/output budgets, not
 # model context-window limits.
-L1_MAX_TOKENS = int(os.getenv("L1_MAX_TOKENS", "32768"))
+L1_MAX_TOKENS = LLM_CONFIG.stage_policy("l1").max_tokens
+L1_REPORT_MAX_TOKENS = LLM_CONFIG.stage_policy("l1").report_max_tokens
 # A length-retry is a separate, one-shot ceiling.  It is deliberately larger
 # than the normal L1 request but remains bounded and provider-configurable.
-LLM_INCOMPLETE_OUTPUT_MAX_TOKENS = int(
-    os.getenv("LLM_INCOMPLETE_OUTPUT_MAX_TOKENS", "65536")
-)
-L1_LLM_TIMEOUT_S = float(os.getenv("L1_LLM_TIMEOUT_S", "480"))
-L1_LLM_MAX_CONCURRENT = int(
-    os.getenv("L1_LLM_MAX_CONCURRENT", str(_PROVIDER_CONCURRENCY_DEFAULT))
-)
-L1_TRANSIENT_RETRIES = int(os.getenv("L1_TRANSIENT_RETRIES", "1"))
-L1_TRANSIENT_RETRY_BACKOFF_S = float(
-    os.getenv(
-        "L1_TRANSIENT_RETRY_BACKOFF_S",
-        "8.0"
-        if LLM_PROVIDER.lower() in {"minimax", "minimaxai", "mini-max"}
-        else "3.0",
-    )
+LLM_INCOMPLETE_OUTPUT_MAX_TOKENS = LLM_CONFIG.incomplete_output_max_tokens
+L1_LLM_TIMEOUT_S = LLM_CONFIG.stage_policy("l1").timeout_s
+L1_LLM_MAX_CONCURRENT = LLM_CONFIG.stage_concurrency("l1")
+L1_TRANSIENT_RETRIES = LLM_CONFIG.stage_policy("l1").transient_retries
+L1_TRANSIENT_RETRY_BACKOFF_S = (
+    LLM_CONFIG.stage_policy("l1").transient_retry_backoff_s
 )
 
 # LLM Request Timeout (seconds)
-LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "180"))  # 3 minutes
-LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "600"))  # 10 minutes; real L3 dimensions take 228-483s, 120s caused spurious provider trips
+LLM_REQUEST_TIMEOUT = int(LLM_CONFIG.request_timeout_seconds())
+LLM_STREAM_TIMEOUT = int(LLM_CONFIG.stream_timeout)  # 10 minutes; real L3 dimensions take 228-483s, 120s caused spurious provider trips
 DIMENSION_EXECUTION_TIMEOUT_S = float(
     os.getenv("DIMENSION_EXECUTION_TIMEOUT_S", str(min(1200, LLM_STREAM_TIMEOUT)))
 )  # includes provider queue wait plus one long real request
@@ -102,16 +83,16 @@ GROUND_ANCHOR_TIMEOUT_S = float(os.getenv("GROUND_ANCHOR_TIMEOUT_S", "180"))  # 
 # Spatial grounding is still opt-in below.  Once enabled, one run needs enough
 # time for grouped ambiguous mentions and typed topology-aware choices; the
 # deterministic candidate graph always runs first, so these are not blind calls.
-GROUND_LLM_CALL_TIMEOUT_S = float(os.getenv("GROUND_LLM_CALL_TIMEOUT_S", "60"))
-GROUND_MAX_LLM_CALLS = int(os.getenv("GROUND_MAX_LLM_CALLS", "16"))
-GROUND_LLM_MAX_CONCURRENT = int(os.getenv("GROUND_LLM_MAX_CONCURRENT", "4"))
+GROUND_LLM_CALL_TIMEOUT_S = float(LLM_CONFIG.ground_call_timeout_s)
+GROUND_MAX_LLM_CALLS = int(LLM_CONFIG.ground_max_calls)
+GROUND_LLM_MAX_CONCURRENT = LLM_CONFIG.stage_concurrency("ground")
 # One initial selector wave plus at most two shared-context recovery waves.
 # The runtime clamps this to 1..3 so repeated provider calls stay bounded.
-GROUND_MAX_RECOVERY_ROUNDS = int(os.getenv("GROUND_MAX_RECOVERY_ROUNDS", "3"))
-GROUND_QUERY_SPEC_MAX_TOKENS = int(
-    os.getenv("GROUND_QUERY_SPEC_MAX_TOKENS", "1200")
-)
-GROUND_LLM_ENABLED = os.getenv("GROUND_LLM_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+GROUND_MAX_RECOVERY_ROUNDS = int(LLM_CONFIG.ground_max_recovery_rounds)
+GROUND_QUERY_SPEC_MAX_TOKENS = int(LLM_CONFIG.ground_query_spec_max_tokens)
+GROUND_LLM_MAX_TOKENS = int(LLM_CONFIG.ground_max_tokens)
+GROUND_LLM_PARSE_RETRIES = int(LLM_CONFIG.ground_parse_retries)
+GROUND_LLM_ENABLED = bool(LLM_CONFIG.ground_llm_enabled)
 RAG_TIMEOUT_S = int(os.getenv("RAG_TIMEOUT_S", "60"))  # per-dimension RAG retrieval cap
 TOOL_TIMEOUT_S = int(os.getenv("TOOL_TIMEOUT_S", "30"))  # per-tool call budget in DataPipeline
 EXTERNAL_ANCHOR_TIMEOUT_S = int(os.getenv("EXTERNAL_ANCHOR_TIMEOUT_S", "30"))  # 外源锚点总预算，超时跳过（绝不阻塞 L1 派发）
@@ -151,18 +132,16 @@ DIMENSION_TIMEOUT_S = _parse_dimension_timeouts(os.getenv("DIMENSION_TIMEOUT_S",
 
 # LLM Max Concurrent Requests.  This is the single default provider budget;
 # L2/L3 may override it explicitly for a provider-specific deployment.
-LLM_MAX_CONCURRENT = int(
-    os.getenv("LLM_MAX_CONCURRENT", str(_PROVIDER_CONCURRENCY_DEFAULT))
-)
+LLM_MAX_CONCURRENT = LLM_CONFIG.provider_concurrency()
 
 # Optional OpenAI-compatible reasoning control (for example DeepSeek V4
 # Flash through OpenCode Go).  Empty keeps the provider's native default.
-LLM_REASONING_EFFORT = os.getenv("LLM_REASONING_EFFORT", "").strip()
+LLM_REASONING_EFFORT = LLM_CONFIG.reasoning_effort.strip()
 
 # Consecutive transport failures required before opening the session circuit.
 # A single transient 5xx should not deadlock the whole fan-out layer.
-LLM_PROVIDER_CIRCUIT_FAILURE_THRESHOLD = int(
-    os.getenv("LLM_PROVIDER_CIRCUIT_FAILURE_THRESHOLD", "3")
+LLM_PROVIDER_CIRCUIT_FAILURE_THRESHOLD = max(
+    1, int(LLM_CONFIG.provider_circuit_failure_threshold)
 )
 
 # LLM Rate Limit (requests_per_second for InMemoryRateLimiter)
@@ -172,8 +151,9 @@ LLM_RATE_LIMIT_RPS = float(os.getenv("LLM_RATE_LIMIT_RPS", "500"))
 LLM_WARMUP_SECONDS = float(os.getenv("LLM_WARMUP_SECONDS", "5.0"))
 
 # Embedding API rate limits (text-embedding-v4 ~30 QPS)
-EMBEDDING_MAX_CONCURRENT = int(os.getenv("EMBEDDING_MAX_CONCURRENT", "10"))
-EMBEDDING_RATE_LIMIT_RPS = float(os.getenv("EMBEDDING_RATE_LIMIT_RPS", "25"))
+EMBEDDING_MAX_CONCURRENT = int(LLM_CONFIG.embedding_max_concurrent)
+EMBEDDING_RATE_LIMIT_RPS = float(LLM_CONFIG.embedding_rate_limit_rps)
+RAG_DASHSCOPE_ENABLED = bool(LLM_CONFIG.rag_dashscope_enabled)
 
 # LangGraph Send API parallel node limit.  Keep it aligned with the provider
 # budget unless a deployment deliberately chooses a smaller graph fan-out.
@@ -199,9 +179,6 @@ VALIDATION_BUDGET_PER_SESSION = int(os.getenv("VALIDATION_BUDGET_PER_SESSION", "
 # Per-dimension LLM failure retries before the run degrades to a diagnostic
 # terminal (provider resume re-dispatches ONLY the failed dimensions).
 DIMENSION_RETRY_LIMIT = int(os.getenv("DIMENSION_RETRY_LIMIT", "1"))
-
-# OpenAI-compatible API base URL (for DeepSeek, etc.)
-OPENAI_API_BASE = os.getenv("OPENAI_API_BASE")
 
 # ==========================================
 # RAG / Vector Store Configuration
@@ -249,8 +226,8 @@ QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "rural_planning")
 # Embedding Model Configuration
 # ==========================================
 # 使用阿里云 DashScope Embedding API
-ALIYUN_EMBEDDING_MODEL = os.getenv("ALIYUN_EMBEDDING_MODEL", "text-embedding-v4")
-EMBEDDING_DIMENSIONS = int(os.getenv("EMBEDDING_DIMENSIONS", "1024"))
+ALIYUN_EMBEDDING_MODEL = LLM_CONFIG.embedding_model
+EMBEDDING_DIMENSIONS = int(LLM_CONFIG.embedding_dimensions)
 
 # ==========================================
 # Text Splitting Configuration
@@ -479,9 +456,9 @@ DEFAULT_IMAGE_FORMAT = os.getenv("DEFAULT_IMAGE_FORMAT", "jpeg")  # jpeg, png, g
 # Flash model is used for lightweight tasks: summaries, keyword extraction, etc.
 # Uses the active provider's OpenAI-compatible endpoint for unified calling.
 
-FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", DEFAULT_LLM_MODEL)
-FLASH_MODEL_MAX_TOKENS = int(os.getenv("FLASH_MODEL_MAX_TOKENS", "500"))
-FLASH_MODEL_TEMPERATURE = float(os.getenv("FLASH_MODEL_TEMPERATURE", "0.3"))
+FLASH_MODEL_NAME = LLM_CONFIG.flash_model_name
+FLASH_MODEL_MAX_TOKENS = int(LLM_CONFIG.flash_model_max_tokens)
+FLASH_MODEL_TEMPERATURE = float(LLM_CONFIG.flash_model_temperature)
 
 # ==========================================
 # Semantic enrichment / vocabulary LLM configuration
@@ -490,20 +467,18 @@ FLASH_MODEL_TEMPERATURE = float(os.getenv("FLASH_MODEL_TEMPERATURE", "0.3"))
 # extraction.  They are not a second retrieval path and must not be used as a
 # deterministic fallback for EvidenceGraph resolution.
 
-GIS_EXPLORE_LLM_ENABLED = os.getenv("GIS_EXPLORE_LLM_ENABLED", "false").lower() in {"1", "true", "yes"}
-GIS_EXPLORE_MODEL = os.getenv("GIS_EXPLORE_MODEL", DEFAULT_LLM_MODEL)
-GIS_EXPLORE_MAX_TOKENS = int(os.getenv("GIS_EXPLORE_MAX_TOKENS", "1200"))
-GIS_EXPLORE_TEMPERATURE = float(os.getenv("GIS_EXPLORE_TEMPERATURE", "0.1"))
+GIS_EXPLORE_LLM_ENABLED = bool(LLM_CONFIG.gis_explore_llm_enabled)
+GIS_EXPLORE_MODEL = LLM_CONFIG.gis_explore_model
+GIS_EXPLORE_MAX_TOKENS = int(LLM_CONFIG.gis_explore_max_tokens)
+GIS_EXPLORE_TEMPERATURE = float(LLM_CONFIG.gis_explore_temperature)
 
 # Source-label semantics are an explicit, quota-consuming Minimax step.  Keep
 # it off for local/demo runs; production enables it when the provider budget
 # and the current L1 snapshot are ready.  Disabled means unresolved/ambiguous,
 # never a deterministic label fallback.
-SOURCE_SEMANTIC_LLM_ENABLED = os.getenv("SOURCE_SEMANTIC_LLM_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+SOURCE_SEMANTIC_LLM_ENABLED = bool(LLM_CONFIG.source_semantic_llm_enabled)
 
 # L3 semantic repair is a quota-consuming planning step.  Local tests and
 # demos keep it disabled unless a typed test LLM is injected explicitly;
 # production enables it only after the provider budget is approved.
-L3_SEMANTIC_REPAIR_LLM_ENABLED = os.getenv(
-    "L3_SEMANTIC_REPAIR_LLM_ENABLED", "false"
-).lower() in {"1", "true", "yes", "on"}
+L3_SEMANTIC_REPAIR_LLM_ENABLED = LLM_CONFIG.semantic_repair_enabled

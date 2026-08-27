@@ -5,6 +5,16 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from pydantic import TypeAdapter
+
+
+def _public_event_adapter() -> TypeAdapter:
+    # Import lazily: the API package imports the projection module while its
+    # router is being assembled, so a module-level PublicEvent import would
+    # create an application-projection <-> API package cycle.
+    from app.api.v1.contracts import PublicEvent
+
+    return TypeAdapter(PublicEvent)
 
 def public_event(session_id: str, event: dict[str, object]) -> dict[str, object]:
     seq = int(event.get("seq") or 0)
@@ -42,7 +52,7 @@ def public_event(session_id: str, event: dict[str, object]) -> dict[str, object]
             occurred_at = None
     if not isinstance(occurred_at, datetime):
         occurred_at = datetime.now(timezone.utc)
-    return {
+    projected = {
         "schema_version": "1.0",
         "event_id": f"{session_id}:{seq}",
         "seq": seq,
@@ -51,6 +61,10 @@ def public_event(session_id: str, event: dict[str, object]) -> dict[str, object]
         "type": public_type,
         "data": data,
     }
+    # Keep REST sync and SSE behind the same executable public boundary.  The
+    # internal event bus is intentionally flexible, but a new internal field
+    # or event shape must never silently become a public contract.
+    return _public_event_adapter().validate_python(projected).model_dump(mode="python")
 
 
 __all__ = ["public_event"]

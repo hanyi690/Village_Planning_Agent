@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import re
 import threading
@@ -69,10 +70,12 @@ def trip_provider_failure(session_id: str) -> None:
         with _PROVIDER_FAILURE_LOCK:
             count = _PROVIDER_FAILURE_COUNTS.get(session_id, 0) + 1
             _PROVIDER_FAILURE_COUNTS[session_id] = count
-            try:
-                threshold = max(1, int(os.getenv("LLM_PROVIDER_CIRCUIT_FAILURE_THRESHOLD", "3")))
-            except (TypeError, ValueError):
-                threshold = 3
+            from app.core.llm_config import get_llm_settings
+
+            threshold = max(
+                1,
+                int(get_llm_settings().provider_circuit_failure_threshold),
+            )
             if count >= threshold:
                 _PROVIDER_FAILURE_SESSIONS.add(session_id)
 
@@ -108,13 +111,6 @@ def dimension_failure_attempt(state: dict[str, Any], dimension_key: str) -> dict
     except (TypeError, ValueError):
         counts[key] = 1
     return counts
-
-
-def _display_report(content: str | None) -> str:
-    """Return dependency report prose (report body; instruction stored separately)."""
-    if not content:
-        return ""
-    return strip_model_reasoning(content)
 
 
 def strip_model_reasoning(content: str) -> str:
@@ -163,20 +159,119 @@ class RAGRetrievalLog:
     skip_reason: str  # 如果RAG被跳过，记录原因
 
 
-class DependencyError(Exception):
-    """依赖缺失异常"""
+_EVIDENCE_ENTITY_SCOPE = (
+    "parcels",
+    "facilities",
+    "roads",
+    "annotations",
+    "hazards",
+    "waters",
+    "zones",
+    "settlements",
+)
 
-    pass
+
+async def _current_planning_context(state: Dict[str, Any]) -> Any:
+    """Return the workflow-owned context required by every evidence request."""
+
+    session_id = str((state or {}).get("session_id", "") or "").strip()
+    if not session_id:
+        raise RuntimeError("PLANNING_CONTEXT_UNAVAILABLE: missing session_id")
+    from app.infrastructure.context.planning_context_factory import get_cached_context
+
+    context = get_cached_context(session_id)
+    if context is None:
+        from app.workflow.stages.support import _require_context
+
+        await _require_context(state)
+        context = get_cached_context(session_id)
+    if context is None:
+        raise RuntimeError("PLANNING_CONTEXT_UNAVAILABLE: context is not hydrated")
+    return context
+
+
+def _project_cognition_scope(
+    context: Any,
+    state: Dict[str, Any],
+    entity_scope: list[str],
+) -> dict[str, Any]:
+    """Build the small request scope passed to ProjectCognition."""
+
+    config = (state or {}).get("config") or {}
+    supplied = (state or {}).get("project_scope") or config.get("project_scope") or {}
+    if not isinstance(supplied, dict):
+        supplied = {}
+    spatial = supplied.get("spatial_scope")
+    if not isinstance(spatial, dict):
+        spatial = {
+            key: supplied[key]
+            for key in ("spatial_ref", "bbox", "geometry_ref", "crs", "village_name")
+            if key in supplied
+        }
+    else:
+        spatial = dict(spatial)
+    spatial["entity_scope"] = list(dict.fromkeys(
+        str(value).strip() for value in entity_scope if str(value).strip()
+    ))
+    context_village = str(getattr(context, "village_name", "") or "").strip()
+    if context_village:
+        spatial["village_name"] = context_village
+    scope = {"spatial_scope": spatial}
+    time_scope = supplied.get("time_scope")
+    if isinstance(time_scope, dict):
+        scope["time_scope"] = dict(time_scope)
+    return scope
+
+
+def _analysis_evidence_context(
+    result: Any,
+    *,
+    budget: int = 48,
+    excluded_source_families: set[str] | None = None,
+) -> str:
+    """Render only the analysis-safe evidence projection.
+
+    Query plans, query traces, raw rows and report bodies remain in the
+    retrieval/audit plane.  ``render_analysis_evidence`` projects the existing
+    EvidenceBundle/EvidencePacket contracts without creating a second evidence
+    contract.
+    """
+
+    from app.infrastructure.context.project_cognition import (
+        render_analysis_evidence_for_prompt,
+    )
+
+    projection = render_analysis_evidence_for_prompt(result, budget=min(budget, 16))
+    excluded = {str(item).strip() for item in (excluded_source_families or set())}
+    if excluded:
+        projection["facts"] = [
+            fact
+            for fact in projection.get("facts", [])
+            if not excluded.intersection(fact.get("source_families", []))
+        ]
+        projection["sources"] = [
+            source
+            for source in projection.get("sources", [])
+            if source.get("source_family") not in excluded
+        ]
+    return "## EXPLORE 证据\n" + json.dumps(
+        projection,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 async def retrieve_vector_context(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[str, Any | None]:
-    """Run RAG retrieval for a dimension. Returns (context_str, RAGRetrievalLog|None).
+    """Run the internal vector provider used by the unified evidence router.
 
-    Re-reads live config from the checkpoint so PATCH updates to
-    rag_layer_config are visible even though Send freezes state at dispatch.
+    The returned context string is intentionally empty.  Vector chunks remain
+    available to the router as typed evidence; report-style prompt prose is
+    not an analysis-layer output.
     """
     from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
+    await _current_planning_context(state)
     session_id = state.get("session_id", "")
     config = state.get("config", {})
     dim_layer = getattr(cfg, "layer", get_dimension_layer(dimension_key) or 3)
@@ -257,13 +352,12 @@ async def retrieve_vector_context(dimension_key: str, cfg: Any, state: Dict[str,
     knowledge_cache = config.get("knowledge_cache", {})
     if state.get("is_revision") and dimension_key in knowledge_cache:
         cached = knowledge_cache[dimension_key]
-        ctx = cached.get("context", "")
-        logger.info(f"[dimension_runtime] {dimension_key}: RAG cache hit ({len(ctx)} chars)")
+        logger.info(f"[dimension_runtime] {dimension_key}: RAG cache hit")
         rlog = RAGRetrievalLog(
             dimension_key=dimension_key, query=cached.get("query", ""),
             query_generation_method="cached", retrieved_chunks=[],
             total_results=cached.get("total_results", 0), retrieval_latency_ms=0,
-            context_length=len(ctx), context_truncated=False,
+            context_length=0, context_truncated=False,
             rag_enabled=True, skip_reason="",
         )
         await sse_manager.publish(session_id, {
@@ -273,7 +367,7 @@ async def retrieve_vector_context(dimension_key: str, cfg: Any, state: Dict[str,
             "total_results": cached.get("total_results", 0),
             "documents": cached.get("documents", []),
         })
-        return (ctx, rlog)
+        return ("", rlog)
 
     start_time = time.time()
     try:
@@ -355,12 +449,11 @@ async def retrieve_vector_context(dimension_key: str, cfg: Any, state: Dict[str,
             )
             retrieved_chunks.append(chunk)
 
-        ctx = RagService.format_for_prompt(results) if results else ""
         rlog = RAGRetrievalLog(
             dimension_key=dimension_key, query=queries[0] if queries else "",
             query_generation_method=query_method, retrieved_chunks=retrieved_chunks,
             total_results=len(results), retrieval_latency_ms=latency_ms,
-            context_length=len(ctx), context_truncated=False,
+            context_length=0, context_truncated=False,
             rag_enabled=True, skip_reason="",
         )
         await sse_manager.publish(session_id, {
@@ -381,9 +474,9 @@ async def retrieve_vector_context(dimension_key: str, cfg: Any, state: Dict[str,
             } for r in results],
         })
         logger.info(
-            f"[dimension_runtime] {dimension_key}: RAG retrieved {len(ctx)} chars, {len(results)} chunks, {latency_ms:.1f}ms"
+            f"[dimension_runtime] {dimension_key}: RAG retrieved {len(results)} chunks, {latency_ms:.1f}ms"
         )
-        return (ctx, rlog)
+        return ("", rlog)
     except Exception as e:
         message = str(e).lower()
         if any(marker in message for marker in (
@@ -414,6 +507,8 @@ def _planning_evidence_query(
     dimension_key: str,
     cfg: Any,
     state: Dict[str, Any],
+    *,
+    context: Any = None,
 ) -> str:
     """Build the bounded semantic query used by planning workers.
 
@@ -424,8 +519,7 @@ def _planning_evidence_query(
     """
     config = state.get("config") or {}
     session_id = str(state.get("session_id", "") or "").strip()
-    context = None
-    if session_id:
+    if context is None and session_id:
         try:
             from app.infrastructure.context.planning_context_factory import (
                 get_cached_context,
@@ -529,20 +623,27 @@ async def run_rag(
     *,
     trace_sink: dict[str, Any] | None = None,
 ) -> tuple[str, Any | None]:
-    """Compatibility adapter to the unified Explore evidence service.
+    """Retrieve one unified evidence packet for a planning dimension.
 
-    The historical vector-RAG implementation remains available only as the
-    ``rag`` retriever adapter.  Dimension workers call this one entry point;
-    they must not append a second ``retrieve_evidence`` section themselves.
+    Dimension workers call this one entry point; they must not append a second
+    retrieval section themselves.  The returned string is an analysis-only
+    projection, while the packet and query trace remain in the evidence plane.
     """
     from app.contracts.evidence.evidence_contracts import ExplorationRequest
-    from app.evidence.retrieval.evidence_service import (
-        render_evidence_prompt_section,
-        retrieve_evidence,
-    )
+    from app.evidence.retrieval.evidence_service import retrieve_evidence
 
     session_id = str(state.get("session_id", "") or "")
     config = state.get("config") or {}
+    context = await _current_planning_context(state)
+    entity_scope = list(_EVIDENCE_ENTITY_SCOPE)
+    project_cognition_scope = _project_cognition_scope(
+        context,
+        state,
+        entity_scope,
+    )
+    from app.infrastructure.context.project_cognition import build_project_cognition
+
+    project_cognition = build_project_cognition(context, project_cognition_scope)
     external_enabled = str(
         config.get(
             "evidence_external_for_llm",
@@ -551,7 +652,7 @@ async def run_rag(
     ).strip().lower() in {"1", "true", "yes", "on"}
     external_kwargs: dict[str, Any] = {}
     owned_external_provider = False
-    context_refs = ["source:rag"]
+    context_refs = []
     if external_enabled:
         # External evidence is deliberately an explicit planning opt-in.  In
         # the normal application path the lifecycle-owned provider is reused;
@@ -593,21 +694,29 @@ async def run_rag(
     request = ExplorationRequest(
         run_id=f"{session_id}:{dimension_key}:adapter",
         request_type="spatial_lookup",
-        query=_planning_evidence_query(dimension_key, cfg, state),
+        query=_planning_evidence_query(
+            dimension_key,
+            cfg,
+            state,
+            context=context,
+        ),
         stage=f"L{getattr(cfg, 'layer', 3)}",
         dimension_key=dimension_key,
         query_purpose="context_injection",
-        entity_scope=[
-            "parcels", "facilities", "roads", "annotations", "hazards",
-            "waters", "zones", "settlements",
-        ],
+        entity_scope=entity_scope,
         context_refs=context_refs,
+        project_cognition_digest=project_cognition.cognition_digest,
+        project_scope=project_cognition.spatial_scope,
     )
     try:
         result = await retrieve_evidence(
             request,
             session_id=session_id,
-            village_name=str(config.get("village_name", "") or ""),
+            village_name=str(
+                getattr(context, "village_name", "")
+                or config.get("village_name", "")
+                or ""
+            ),
             **external_kwargs,
         )
     finally:
@@ -625,7 +734,7 @@ async def run_rag(
                     )
     bundle = getattr(result, "evidence_bundle", None)
     packet = getattr(result, "evidence_packet", None)
-    cognition = getattr(result, "spatial_cognition", None)
+    spatial_cognition = getattr(result, "spatial_cognition", None)
     coverage = getattr(result, "coverage", None)
     if trace_sink is not None:
         sources = list(getattr(bundle, "sources", None) or [])
@@ -637,7 +746,7 @@ async def run_rag(
             }),
             "fact_count": len(getattr(bundle, "facts", None) or []),
             "kg_confidence": float(
-                getattr(cognition, "kg_confidence", 0.0) or 0.0
+                getattr(spatial_cognition, "kg_confidence", 0.0) or 0.0
             ),
             "candidate_count": len(getattr(packet, "candidate_refs", None) or []),
             "relation_count": len(getattr(packet, "relation_evidence", None) or []),
@@ -650,6 +759,8 @@ async def run_rag(
             "unresolved_count": len(
                 getattr(bundle, "unresolved", None) or []
             ),
+            "project_cognition_digest": project_cognition.cognition_digest,
+            "project_scope": project_cognition.spatial_scope,
         })
     rag_log = None
     try:
@@ -658,71 +769,11 @@ async def run_rag(
         rag_log = consume_rag_log(session_id, dimension_key)
     except Exception:
         rag_log = None
-    # Use the same persisted L1Snapshot that the consuming worker uses to
-    # build its fact catalog.  Falling back to the context cache is only for
-    # stages that do not yet have an L1 artifact.
-    allowed_l1_fact_ids = _current_l1_fact_ids(session_id, state)
-    return render_evidence_prompt_section(
-        result.evidence_bundle,
-        result.spatial_cognition,
-        result.evidence_packet,
-        result.coverage,
-        allowed_l1_fact_ids=allowed_l1_fact_ids,
+    excluded_source_families = {"l1"} if int(getattr(cfg, "layer", 3) or 3) >= 2 else set()
+    return _analysis_evidence_context(
+        result,
+        excluded_source_families=excluded_source_families,
     ), rag_log
-
-
-def _current_l1_fact_ids(
-    session_id: str,
-    state: Dict[str, Any] | None = None,
-) -> set[str] | None:
-    """Return the current snapshot's selectable L1 IDs, if hydrated.
-
-    Evidence lineage can contain refs from semantic overlays and source
-    annotations.  Only IDs present in the same frozen snapshot as the worker
-    may be shown in an LLM prompt as L1 lineage.  ``None`` is reserved for a
-    context that has no L1 field at all; an explicitly hydrated empty list
-    therefore remains an empty closed set.
-    """
-    try:
-        from app.domain.validation.l1_fact_catalog import build_l1_fact_catalog
-
-        artifact_ref = ((state or {}).get("artifact_refs") or {}).get("l1_snapshot")
-        if isinstance(artifact_ref, dict):
-            try:
-                from app.infrastructure.artifacts.runtime import load_artifact
-
-                payload = load_artifact(state or {}, "l1_snapshot")
-                if hasattr(payload, "model_dump"):
-                    payload = payload.model_dump(mode="json")
-                if isinstance(payload, dict) and "fact_records" in payload:
-                    return set(
-                        build_l1_fact_catalog(payload.get("fact_records") or [])
-                        .usable_allowed_fact_ids
-                    )
-            except Exception:
-                # An explicit snapshot reference with an unreadable artifact
-                # is an empty closed set, not permission to use cached or
-                # lineage-only IDs from another context version.
-                return set()
-            return set()
-
-        from app.infrastructure.context.planning_context_factory import (
-            get_cached_context,
-        )
-
-        context = get_cached_context(session_id) if session_id else None
-        if context is None or not hasattr(context, "l1_fact_records"):
-            return None
-        return set(
-            build_l1_fact_catalog(
-                getattr(context, "l1_fact_records", None) or []
-            ).usable_allowed_fact_ids
-        )
-    except Exception:
-        # Prompt rendering remains available when the optional context cache
-        # is cold; the evidence graph still applies the same filter whenever
-        # its PlanningContext carries the snapshot records.
-        return None
 
 
 async def run_targeted_evidence(
@@ -741,38 +792,42 @@ async def run_targeted_evidence(
     """
 
     from app.contracts.evidence.evidence_contracts import ExplorationRequest
-    from app.evidence.retrieval.evidence_service import (
-        render_evidence_prompt_section,
-        retrieve_evidence,
-    )
+    from app.evidence.retrieval.evidence_service import retrieve_evidence
 
     session_id = str(state.get("session_id", "") or "")
     config = state.get("config") or {}
+    context = await _current_planning_context(state)
+    entity_scope = list(_EVIDENCE_ENTITY_SCOPE)
+    project_cognition_scope = _project_cognition_scope(
+        context,
+        state,
+        entity_scope,
+    )
+    from app.infrastructure.context.project_cognition import build_project_cognition
+
+    project_cognition = build_project_cognition(context, project_cognition_scope)
     request = ExplorationRequest(
         run_id=f"{session_id}:{dimension_key}:l1-followup",
         request_type="fact_check",
         query=str(query or "").strip(),
-        context_refs=[
-            "source:local_text",
-            "source:report",
-            "source:kg",
-            "source:bundle",
-            "source:rag",
-        ],
+        context_refs=[],
         stage=f"L{getattr(cfg, 'layer', 1)}",
         dimension_key=dimension_key,
         query_purpose="fact_check",
         required_facts=list(required_facts or []),
-        entity_scope=[
-            "parcels", "facilities", "roads", "annotations", "hazards",
-            "waters", "zones", "settlements",
-        ],
+        entity_scope=entity_scope,
+        project_cognition_digest=project_cognition.cognition_digest,
+        project_scope=project_cognition.spatial_scope,
     )
     try:
         result = await retrieve_evidence(
             request,
             session_id=session_id,
-            village_name=str(config.get("village_name", "") or ""),
+            village_name=str(
+                getattr(context, "village_name", "")
+                or config.get("village_name", "")
+                or ""
+            ),
         )
         trace: list[dict[str, Any]] = []
         if result.evidence_packet is not None:
@@ -814,145 +869,13 @@ async def run_targeted_evidence(
             ],
             "unresolved": list(result.evidence_bundle.unresolved or [])[:16],
         })
-        return render_evidence_prompt_section(
-            result.evidence_bundle,
-            result.spatial_cognition,
-            result.evidence_packet,
-            result.coverage,
-            allowed_l1_fact_ids=_current_l1_fact_ids(session_id, state),
-        ), trace
+        return _analysis_evidence_context(result), trace
     except Exception as exc:  # noqa: BLE001 - repair remains bounded
         return "", [{
             "step": "l1_followup_retrieval",
             "status": "failed",
             "error_code": type(exc).__name__,
         }]
-
-
-async def load_dependency_reports(
-    dimension_key: str,
-    cfg: Any,
-    dim_layer: int,
-    session_id: str,
-    is_revision: bool,
-) -> tuple[str, str]:
-    """Load same-layer and cross-layer dependency reports.
-
-    Returns (deps, same_layer_contexts). Raises DependencyError when
-    same-layer dependencies cannot be recovered from DB + fallback.
-    """
-    from app.infrastructure.reports.report_store import ReportStore
-
-    store = ReportStore.get_instance()
-    deps = ""
-    same_layer_contexts = ""
-
-    # 同层依赖加载 - 通过 DB 获取（并行节点无法通过状态快照看到彼此的 pending_reports）
-    same_layer_deps = getattr(cfg, "depends_on", [])
-    if same_layer_deps:
-        contexts = []
-        for dep_key in same_layer_deps:
-            db_report = await store.get_latest(session_id, dep_key)
-            if db_report:
-                contexts.append(f"【{dep_key}】分析结果：\n{_display_report(db_report)}")
-                continue
-            # Fallback: get_latest_report
-            dep_report = await store.get_latest_report(session_id, dep_key)
-            if dep_report:
-                contexts.append(f"【{dep_key}】分析结果：\n{_display_report(dep_report['content'])}")
-                continue
-            raise DependencyError(
-                f"维度 {dimension_key} 的同层依赖 {dep_key} 报告缺失"
-                "（_ready_dispatch 应保证依赖已完成，此为调度 bug）"
-            )
-        same_layer_contexts = "\n\n".join(contexts)
-        logger.info(f"[dimension_runtime] {dimension_key}: 加载同层依赖 {len(same_layer_deps)} 个")
-
-    # 跨层依赖加载（按配置过滤）
-    if dim_layer == 2:
-        # Layer 2 依赖 Layer 1 报告（按 layer_depends_on 配置）
-        layer1_deps = getattr(cfg, "layer_depends_on", [])
-        layer1_reports = await store.get_layer_reports(session_id, 1)
-        if layer1_deps:
-            deps = "\n".join([f"【{k}】{_display_report(layer1_reports.get(k, ''))}" for k in layer1_deps if layer1_reports.get(k)])
-        else:
-            deps = "\n".join([f"【{k}】{_display_report(v)}" for k, v in layer1_reports.items() if v])
-        logger.info(f"[dimension_runtime] {dimension_key}: 加载跨层依赖 {len(layer1_deps) if layer1_deps else len(layer1_reports)} 个")
-
-    elif dim_layer == 3:
-        # Layer 3 依赖 Layer 1 和 Layer 2（按配置过滤）
-        layer1_deps = getattr(cfg, "layer_depends_on", [])
-        layer2_deps = getattr(cfg, "phase_depends_on", [])
-        # 顺序调用避免 SQLite aiosqlite 连接管理问题
-        layer1_reports = await store.get_layer_reports(session_id, 1)
-        layer2_reports = await store.get_layer_reports(session_id, 2)
-        deps_parts = []
-        for k in layer1_deps:
-            if layer1_reports.get(k):
-                deps_parts.append(f"【{k}】{_display_report(layer1_reports[k])}")
-        for k in layer2_deps:
-            if layer2_reports.get(k):
-                deps_parts.append(f"【{k}】{_display_report(layer2_reports[k])}")
-        deps = "\n".join(deps_parts)
-        logger.info(f"[dimension_runtime] {dimension_key}: 加载跨层依赖 L1={len(layer1_deps)} L2={len(layer2_deps)} 个")
-
-    return deps, same_layer_contexts
-
-
-async def load_layered_dependency_reports(
-    dimension_key: str,
-    cfg: Any,
-    dim_layer: int,
-    session_id: str,
-    is_revision: bool,
-) -> tuple[str, str, str]:
-    """Load same-layer + split cross-layer dependency reports.
-
-    For L3 the cross-layer deps split into L1 (layer_depends_on) and L2
-    (phase_depends_on). Returns (l1_deps, l2_deps, same_layer_contexts).
-    For non-L3 layers, l2_deps is "".
-    """
-    from app.infrastructure.reports.report_store import ReportStore
-
-    store = ReportStore.get_instance()
-    same_layer_contexts = ""
-
-    # 同层依赖加载（与 load_dependency_reports 完全一致）
-    same_layer_deps = getattr(cfg, "depends_on", [])
-    if same_layer_deps:
-        contexts = []
-        for dep_key in same_layer_deps:
-            db_report = await store.get_latest(session_id, dep_key)
-            if db_report:
-                contexts.append(f"【{dep_key}】分析结果：\n{_display_report(db_report)}")
-                continue
-            # Fallback: get_latest_report
-            dep_report = await store.get_latest_report(session_id, dep_key)
-            if dep_report:
-                contexts.append(f"【{dep_key}】分析结果：\n{_display_report(dep_report['content'])}")
-                continue
-            raise DependencyError(
-                f"维度 {dimension_key} 的同层依赖 {dep_key} 报告缺失"
-                "（_ready_dispatch 应保证依赖已完成，此为调度 bug）"
-            )
-        same_layer_contexts = "\n\n".join(contexts)
-        logger.info(f"[dimension_runtime] {dimension_key}: 加载同层依赖 {len(same_layer_deps)} 个")
-
-    # 跨层依赖加载：L1 (layer_depends_on) 与 L2 (phase_depends_on) 分开返回
-    layer1_deps = getattr(cfg, "layer_depends_on", [])
-    layer2_deps = getattr(cfg, "phase_depends_on", [])
-    l1_deps = ""
-    l2_deps = ""
-    if layer1_deps:
-        # 顺序调用避免 SQLite aiosqlite 连接管理问题
-        layer1_reports = await store.get_layer_reports(session_id, 1)
-        l1_deps = "\n".join([f"【{k}】{_display_report(layer1_reports.get(k, ''))}" for k in layer1_deps if layer1_reports.get(k)])
-    if dim_layer == 3 and layer2_deps:
-        layer2_reports = await store.get_layer_reports(session_id, 2)
-        l2_deps = "\n".join([f"【{k}】{_display_report(layer2_reports.get(k, ''))}" for k in layer2_deps if layer2_reports.get(k)])
-    logger.info(f"[dimension_runtime] {dimension_key}: 加载分层跨层依赖 L1={len(layer1_deps)} L2={len(layer2_deps)} 个")
-
-    return l1_deps, l2_deps, same_layer_contexts
 
 
 async def publish_dimension_start(
@@ -1116,24 +1039,31 @@ async def save_step_report(
         logger.debug(f"[dimension_runtime] {dimension_key}: step report failed: {e}")
 
 
-async def generate_summary(dimension_key: str, dim_layer: int, content: str) -> str:
+async def generate_summary(
+    dimension_key: str,
+    dim_layer: int,
+    content: str,
+    *,
+    source_artifact: Any,
+) -> str:
     """Generate a typed summary and serialize it at the storage boundary."""
     from app.data.ingestion.summary_generator import generate_summary_model
 
-    summary = await generate_summary_model(dimension_key, dim_layer, content)
+    summary = await generate_summary_model(
+        dimension_key,
+        dim_layer,
+        content,
+        source_artifact=source_artifact,
+    )
     return summary.model_dump_json(ensure_ascii=False)
 
 
 __all__ = [
     "RetrievedChunk",
     "RAGRetrievalLog",
-    "DependencyError",
     "is_provider_quota_exhausted",
-    "retrieve_vector_context",
     "run_rag",
     "run_targeted_evidence",
-    "load_dependency_reports",
-    "load_layered_dependency_reports",
     "strip_model_reasoning",
     "publish_dimension_start",
     "publish_dimension_delta",

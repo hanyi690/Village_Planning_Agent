@@ -661,7 +661,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         session_id=state.get("session_id", ""),
         village_name=state.get("config", {}).get("village_name", ""),
         spatial_workspace=getattr(context, "workspace", None),
-        facility_anchors=getattr(context, "village_anchors", None),
+        facility_anchors=[],
         candidate_geometry_by_id=candidate_catalog,
         land_design_briefs=list(getattr(execution_plan, "land_design_briefs", None) or []),
         execution_plan=execution_plan,

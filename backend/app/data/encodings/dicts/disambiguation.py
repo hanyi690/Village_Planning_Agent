@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.domain.validation.closed_set import (
+from app.contracts.llm.closed_set_contracts import (
     CandidateDecision,
     CandidateDescriptor,
     candidate_set_digest,

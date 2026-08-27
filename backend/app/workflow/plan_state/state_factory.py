@@ -15,6 +15,7 @@ from app.core.settings import (
     RAG_ENABLED,
 )
 from app.workflow.runtime_adapter import initial_workflow_state
+from app.infrastructure.paths import run_tmp_root
 
 
 class StateFactory:
@@ -88,6 +89,7 @@ class StateFactory:
             "context_version": "",
             "context_ref": {"session_id": session_id, "version": ""},
             "context_fingerprint": "",
+            "artifact_root": str(run_tmp_root()),
             "branch_id": "main",
             "bootstrap_context_done": False,
             "artifact_refs": {},

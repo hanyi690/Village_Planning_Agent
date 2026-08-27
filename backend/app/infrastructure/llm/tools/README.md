@@ -14,7 +14,6 @@ conversation 节点 `bind_tools` 与 `workflow/tools/execute_node.py` 执行。�
 | 文件/目录 | 职责 |
 |---|---|
 | `registry.py` | `ToolRegistry` + `ToolMetadata`：工具注册、元数据与查找（`get_tool_info`/`get_tool`） |
-| `tools.py` | `get_tools_for_llm`：返回可绑定工具列表 |
 | `helpers.py` | `make_result` / `to_tool_message`：统一工具返回协议 |
 | `intent_tools.py` | 规划意图工具（`advance_planning_intent`、`gis_analysis`）与路由名 |
 | `access/` | 会话统一读路径工具：`bundle`/`knowledge`/`rag`/`reports`/`shared` |

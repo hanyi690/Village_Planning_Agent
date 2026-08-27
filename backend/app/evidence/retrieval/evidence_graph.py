@@ -282,18 +282,48 @@ def _scope_centroid(context: Any, scope_names: list[str]) -> tuple[float, float]
                 return float(centroid[0]), float(centroid[1])
             except (TypeError, ValueError):
                 continue
-    kg_anchors = getattr(context, "village_anchors", None) or []
-    for anchor in kg_anchors:
-        name = _fold_query(anchor.get("name", "")) if isinstance(anchor, dict) else ""
-        if wanted and name not in wanted:
+    observations = {
+        str(getattr(observation, "observation_id", "") or ""): observation
+        for observation in getattr(context, "evidence_observations", []) or []
+    }
+    parcels_by_bsm = {
+        str(getattr(parcel, "bsm", "") or ""): parcel
+        for parcel in context.current_parcels()
+        if str(getattr(parcel, "bsm", "") or "")
+    }
+    for binding in getattr(context, "grounded_bindings", []) or []:
+        if str(getattr(binding, "status", "") or "") != "resolved":
             continue
-        try:
-            lon = float(anchor.get("lon"))
-            lat = float(anchor.get("lat"))
-        except (AttributeError, TypeError, ValueError):
+        names = [
+            getattr(observations[ref], "normalized_name", "")
+            or getattr(observations[ref], "mention", "")
+            for ref in getattr(binding, "observation_refs", []) or []
+            if ref in observations
+        ]
+        if wanted and not any(_fold_query(name) in wanted for name in names):
             continue
-        if lon or lat:
-            return lon, lat
+        geometries = []
+        for bsm in getattr(binding, "source_bsms", []) or []:
+            parcel = parcels_by_bsm.get(str(bsm))
+            raw = getattr(parcel, "geometry", None) if parcel is not None else None
+            if raw is None:
+                continue
+            try:
+                from shapely.geometry import shape
+
+                geometry = shape(raw) if isinstance(raw, dict) else raw
+                if geometry is not None and not geometry.is_empty:
+                    geometries.append(geometry)
+            except Exception:
+                continue
+        if geometries:
+            try:
+                from shapely.ops import unary_union
+
+                centroid = unary_union(geometries).centroid
+                return float(centroid.x), float(centroid.y)
+            except Exception:
+                continue
     return None
 
 

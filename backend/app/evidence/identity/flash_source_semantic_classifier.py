@@ -23,7 +23,7 @@ from app.contracts.evidence.source_semantic_contracts import (
 )
 from app.evidence.identity.source_semantic_store import SourceSemanticStore
 from app.domain.validation.l1_fact_catalog import is_canonical_l1_fact_id
-from app.infrastructure.llm.structured import run_structured_output
+from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
@@ -385,8 +385,8 @@ class SourceSemanticClassifier:
                 {
                     "role": "system",
                     "content": (
-                        "你是当前 GIS 快照的闭集语义分类器。只返回根对象 "
-                        "{\"proposals\":[...]}，根对象不得有其他字段；每个输入 source_feature_id "
+                        "你是当前 GIS 快照的闭集语义分类器。严格填写声明的 typed response contract；"
+                        "响应根字段由 schema 定义，不要把 JSON 写入 message.content。每个输入 source_feature_id "
                         "必须恰好返回一个 proposal，不能缺失、重复或新增。proposal 只能包含 "
                         "source_feature_id、candidate_ref、supporting_fact_refs 三个字段。candidate_ref "
                         "只能逐字选择给定 candidates 中的 candidate_ref；无法由当前 L1/KG 证据证明时必须为 null。"
@@ -400,13 +400,22 @@ class SourceSemanticClassifier:
             passes: list[SourceFeatureSemanticProposalBatch] = []
             for pass_number in range(2):
                 try:
-                    proposal = await run_structured_output(
-                        SourceFeatureSemanticProposalBatch,
+                    proposal = await get_llm_manager().run_structured(
+                        LLMCallSpec(
+                            stage="L1",
+                            contract_key="evidence.source_semantic",
+                            response_model=SourceFeatureSemanticProposalBatch,
+                            call_type="closed_set",
+                            max_retries=1,
+                            timeout_s=self.timeout,
+                            max_tokens=1800,
+                            incomplete_output_max_tokens=4096,
+                            max_concurrent=None,
+                            semaphore_scope="source-semantic",
+                            temperature=self.effective_temperature,
+                            allow_content_json=True,
+                        ),
                         messages,
-                        max_retries=1,
-                        timeout=self.timeout,
-                        temperature=self.effective_temperature,
-                        max_tokens=1800,
                         llm=self.llm,
                         context={"pass": pass_number + 1, "fingerprint": fingerprint},
                     )

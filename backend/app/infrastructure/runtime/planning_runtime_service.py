@@ -637,51 +637,6 @@ class PlanningRuntimeService:
         async for snapshot in cls._graph.aget_state_history(config):
             yield snapshot
 
-    @staticmethod
-    async def _replay_l1_kg_enrichment(session_id: str, state: dict) -> None:
-        """Replay L1 KG enrichment (name backfill / entity names) on resume.
-
-        L1 ground_anchors mutates the in-memory session KG; resume's
-        ensure_session_kg(force=True) rebuilds the base KG from the bundle and
-        would lose those injected names.  Re-apply from the persisted
-        grounded_anchors artifact (idempotent: placeholders only, never
-        overwrites a real name).
-        """
-        try:
-            refs = dict((state or {}).get("artifact_refs") or {})
-            if not refs.get("grounded_anchors"):
-                return
-            from app.infrastructure.artifacts.runtime import load_artifact
-            from app.contracts.spatial.grounding_contracts import GroundedAnchor
-
-            payload = load_artifact(state, "grounded_anchors")
-            if not payload:
-                return
-            anchors = [
-                a if isinstance(a, GroundedAnchor) else GroundedAnchor(**a)
-                for a in payload
-                if isinstance(a, dict)
-            ] if isinstance(payload, list) else []
-            if not anchors:
-                return
-            from app.infrastructure.kg.manager import KGManager
-
-            kg = KGManager().get_session_kg(session_id)
-            if kg is None:
-                return
-            from app.domain.ground.anchors import _inject_anchors_into_kg
-
-            written = _inject_anchors_into_kg(None, kg, anchors, session_id)
-            logger.info(
-                "[PlanningRuntimeService] replayed %d L1 KG enrichments on resume for %s",
-                written, session_id,
-            )
-        except Exception as exc:  # noqa: BLE001 - replay must never block resume
-            logger.warning(
-                "[PlanningRuntimeService] L1 KG enrichment replay failed for %s: %s",
-                session_id, exc,
-            )
-
     @classmethod
     async def resume_from_interrupt(
         cls,
@@ -707,15 +662,14 @@ class PlanningRuntimeService:
         if not resume_data:
             raise ValueError("resume payload must be a non-empty object")
 
+        command_update = None
         if state_updates:
             raw_snapshot = await cls.aget_state(session_id)
             raw_state = dict(raw_snapshot.values or {}) if raw_snapshot else {}
-            command = Command(
-                resume=resume_data,
-                update=cls._pack_workflow_patch_preserving_artifacts(raw_state, state_updates),
+            command_update = cls._pack_workflow_patch_preserving_artifacts(
+                raw_state,
+                state_updates,
             )
-        else:
-            command = Command(resume=resume_data)
 
         async with cls._execution_locks.setdefault(session_id, asyncio.Lock()):
             # Check the token inside the execution lock.  Checking only in
@@ -728,36 +682,47 @@ class PlanningRuntimeService:
             else:
                 current = await cls.aget_state_values(session_id) or {}
 
-            # HUMAN interrupts raised inside the compiled cognitive segment
-            # live in that segment's checkpoint namespace. Resuming from the
-            # parent thread head replays Layer 1 from the beginning and can
-            # expose the same event_id again. Resolve the deepest pending
-            # interrupt checkpoint before streaming the Command(resume=...).
+            # HUMAN interrupts raised inside a compiled segment are exposed
+            # through the parent snapshot. Keep the parent graph config when
+            # resuming: LangGraph uses its checkpoint map to route the
+            # Command into the nested segment and then persist the child's
+            # return value back into the parent. Selecting the child config
+            # directly would consume the interrupt but strand the parent
+            # projection before the cross-segment jump is committed.
             resume_config = dict(config)
+            interrupt_id = ""
             try:
                 parent_snapshot = await cls.aget_state(session_id, subgraphs=True)
                 for task in getattr(parent_snapshot, "tasks", ()) or ():
-                    if not getattr(task, "interrupts", None):
+                    pending_interrupts = list(getattr(task, "interrupts", None) or ())
+                    if not pending_interrupts:
                         continue
+                    expected_interrupt_event_id = str(
+                        current.get("human_review_event_id") or ""
+                    )
+                    for pending_interrupt in pending_interrupts:
+                        pending_value = getattr(pending_interrupt, "value", None)
+                        pending_event_id = (
+                            str(pending_value.get("event_id") or "")
+                            if isinstance(pending_value, dict)
+                            else ""
+                        )
+                        candidate_id = str(getattr(pending_interrupt, "id", "") or "")
+                        if candidate_id and (
+                            not interrupt_id
+                            or (
+                                expected_interrupt_event_id
+                                and pending_event_id == expected_interrupt_event_id
+                            )
+                        ):
+                            interrupt_id = candidate_id
                     sub_state = getattr(task, "state", None)
                     sub_config = getattr(sub_state, "config", None) or {}
                     sub_configurable = dict(sub_config.get("configurable") or {})
                     checkpoint_ns = str(sub_configurable.get("checkpoint_ns") or "")
                     checkpoint_id = str(sub_configurable.get("checkpoint_id") or "")
-                    if checkpoint_ns:
-                        resume_config["configurable"]["checkpoint_ns"] = checkpoint_ns
-                    if checkpoint_id:
-                        resume_config["configurable"]["checkpoint_id"] = checkpoint_id
-                    checkpoint_map = sub_configurable.get("checkpoint_map")
-                    if isinstance(checkpoint_map, dict):
-                        # Nested compiled segments use the map to resolve the
-                        # child checkpoint back to its parent thread.  Keeping
-                        # only namespace/id can reopen the parent head and
-                        # leave the same HUMAN interrupt pending (especially
-                        # for the post-L3 HITL segment).
-                        resume_config["configurable"]["checkpoint_map"] = dict(checkpoint_map)
                     logger.info(
-                        "[PlanningRuntimeService] [%s] HUMAN resume target ns=%s checkpoint=%s",
+                        "[PlanningRuntimeService] [%s] HUMAN resume target ns=%s checkpoint=%s via parent config",
                         session_id,
                         checkpoint_ns,
                         checkpoint_id,
@@ -769,6 +734,20 @@ class PlanningRuntimeService:
                     session_id,
                     exc,
                 )
+
+            # LangGraph accepts a bare resume value only when exactly one
+            # interrupt is pending in the selected graph.  Nested segment
+            # checkpoints can expose more than one pending interrupt even
+            # when the public projection surfaces one business event.  Bind
+            # the business decision to the actual LangGraph Interrupt.id so
+            # the runtime resumes the intended checkpoint instead of asking
+            # LangGraph to guess.
+            resume_value = (
+                {interrupt_id: resume_data}
+                if interrupt_id
+                else resume_data
+            )
+            command = Command(resume=resume_value, update=command_update)
 
             paused_stage = str(current.get("paused_stage") or "").lower()
             if paused_stage in {"l1", "l2", "l3", "ground", "select"}:
@@ -824,7 +803,6 @@ class PlanningRuntimeService:
                         raise RuntimeError(
                             f"cannot resume {paused_stage}: session data/KG restoration failed"
                         )
-                await cls._replay_l1_kg_enrichment(session_id, current)
 
             # A provider failure opens a session-scoped circuit breaker so a
             # parallel wave stops spending requests.  An explicit HUMAN

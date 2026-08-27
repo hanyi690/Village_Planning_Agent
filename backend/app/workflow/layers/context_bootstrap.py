@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from typing import Any, Dict
 
 from app.infrastructure.context.planning_context_factory import build_planning_context
@@ -124,84 +123,6 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
             )
             return
 
-        # A completed L1 grounding wave is a durable artifact.  On resume or
-        # after a process restart, restore it before considering a new
-        # hydration pass; otherwise the same anchors are recomputed merely
-        # because the in-process PlanningContext cache was lost.
-        persisted_anchors = []
-        try:
-            from app.contracts.spatial.grounding_contracts import GroundedAnchor
-
-            payload = load_artifact(state, "grounded_anchors")
-            if isinstance(payload, list):
-                persisted_anchors = [
-                    item if isinstance(item, GroundedAnchor) else GroundedAnchor.model_validate(item)
-                    for item in payload
-                    if isinstance(item, (dict, GroundedAnchor))
-                ]
-        except Exception as exc:
-            logger.debug("[bootstrap] persisted grounded anchors unavailable: %s", exc)
-        if persisted_anchors:
-            context.grounded_anchors = persisted_anchors
-            kg = getattr(context, "kg", None)
-            if kg is not None:
-                try:
-                    from app.domain.ground.anchors import _inject_anchors_into_kg
-
-                    _inject_anchors_into_kg(context, kg, persisted_anchors, session_id)
-                except Exception as exc:
-                    logger.warning("[bootstrap] persisted anchor KG replay failed: %s", exc)
-            try:
-                from app.evidence.retrieval.evidence_graph import EvidenceGraph
-
-                context.evidence_graph = EvidenceGraph.build(context)
-            except Exception as exc:
-                logger.warning("[bootstrap] persisted anchor evidence rebuild failed: %s", exc)
-            context.evidence_graph_key = hydration_key
-            logger.info(
-                "[bootstrap] restored %d persisted L1 anchors; skipped recomputation",
-                len(persisted_anchors),
-            )
-            return
-
-        # 统一接地核心（设计 §7）：回填/绑定/索引全部收敛到 domain/ground。
-        # 水合路径 bump=False（只准备证据，不写注解、不 bump kg_version）。
-        from app.domain.ground.anchors import ground_l1_anchors
-        from app.infrastructure.paths import session_run_dir
-        from app.spatial.grounding.call_budget import get_ground_llm_budget
-
-        cache_path = None
-        if session_id:
-            try:
-                cache_path = session_run_dir(session_id) / "grounded-anchor-cache.json"
-            except Exception:
-                cache_path = None
-        grounding_llm = None
-        llm_disabled = str(os.getenv("GROUND_LLM_ENABLED", "false")).strip().lower() not in {
-            "1", "true", "yes", "on"
-        } or any(
-            str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
-            for name in ("DISABLE_GROUND_LLM", "DISABLE_GROUND_REPORT_LLM")
-        )
-        if not llm_disabled:
-            try:
-                from app.spatial.grounding.report_grounder import create_grounding_llm
-
-                grounding_llm = create_grounding_llm()
-            except Exception as exc:
-                logger.debug("[bootstrap] grounding LLM unavailable: %s", exc)
-
-        await ground_l1_anchors(
-            context,
-            session_id,
-            cache_path=cache_path,
-            llm=grounding_llm,
-            bump=False,
-            ground_llm_budget=get_ground_llm_budget(
-                context,
-                scope_key=f"workflow:{session_id}",
-            ),
-        )
         context.evidence_graph_key = hydration_key
         gazetteer_entries = len(
             getattr(getattr(context, "gazetteer", None), "entries", []) or []

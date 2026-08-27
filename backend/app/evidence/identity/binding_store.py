@@ -21,7 +21,7 @@ class BindingStore:
         self.base_dir = base_dir
 
     @staticmethod
-    def from_context(context: Any, anchors: list[Any] | None = None) -> list[GroundedEntityBinding]:
+    def from_context(context: Any) -> list[GroundedEntityBinding]:
         def source_feature_ids(refs: list[str]) -> list[str]:
             return list(dict.fromkeys(
                 str(ref).strip()
@@ -39,16 +39,6 @@ class BindingStore:
                 str(observation.normalized_name or observation.mention).strip(),
                 observation,
             )
-        anchors_by_name = {}
-        for anchor in list(anchors or []):
-            name = str(
-                getattr(anchor, "normalized_name", "")
-                or getattr(anchor, "mention", "")
-                or ""
-            ).strip()
-            if name:
-                anchors_by_name.setdefault(name, anchor)
-
         graph = getattr(context, "evidence_graph", None)
         bindings: list[GroundedEntityBinding] = []
         for fact in facts:
@@ -61,9 +51,8 @@ class BindingStore:
                 continue
             observation = obs_by_name.get(name)
             observation_ref = observation.observation_id if observation else f"obs:{name}"
-            anchor = anchors_by_name.get(name)
             result = None
-            if anchor is None and graph is not None:
+            if graph is not None:
                 try:
                     result = graph.resolve_mention(
                         name,
@@ -77,44 +66,28 @@ class BindingStore:
                 except Exception:
                     result = None
 
-            if anchor is not None:
-                candidate_refs = [str(getattr(anchor, "entity_ref", "") or "")]
-                candidate_refs = [ref for ref in candidate_refs if ref]
-                entity_ref = candidate_refs[0] if candidate_refs else ""
-                source_bsms = list(getattr(anchor, "source_bsms", []) or [])
-                geometry_ref = getattr(anchor, "geometry_ref", None)
-                evidence_refs = list(getattr(anchor, "topology_evidence", []) or [])
-                relation_refs = list(getattr(anchor, "relation_refs", []) or [])
-                status = str(getattr(anchor, "status", "unresolved") or "unresolved")
-                confidence = float(getattr(anchor, "confidence", 0.0) or 0.0)
-                query_trace = list(getattr(anchor, "query_trace", []) or [])
-                binding_source_feature_ids = source_feature_ids(candidate_refs)
-                uncertainty_reason = (
-                    "best_effort_anchor" if getattr(anchor, "best_effort", False) else ""
-                )
-            else:
-                candidates = list(getattr(result, "candidates", []) or []) if result else []
-                selected = candidates[0] if result and getattr(result, "status", "") == "resolved" and candidates else None
-                candidate_refs = [str(getattr(c, "entity_ref", "") or "") for c in candidates]
-                candidate_refs = [ref for ref in candidate_refs if ref]
-                entity_ref = str(getattr(result, "selected_entity_ref", "") or "") if result else ""
-                source_bsms = list(getattr(selected, "source_bsms", []) or []) if selected else []
-                geometry_ref = getattr(selected, "geometry_ref", None) if selected else None
-                evidence_refs = [
-                    ref for candidate in candidates
-                    for ref in list(getattr(candidate, "evidence_refs", []) or [])
-                ]
-                relation_refs = [
-                    ref for candidate in candidates
-                    for ref in list(getattr(candidate, "relation_refs", []) or [])
-                ]
-                status = str(getattr(result, "status", "unresolved") or "unresolved") if result else "unresolved"
-                confidence = float(getattr(selected, "score", 0.0) or 0.0) if selected else 0.0
-                query_trace = list(getattr(result, "query_trace", []) or []) if result else []
-                uncertainty_reason = str(getattr(result, "unresolved_reason", "") or "") if result else "no_evidence_graph"
-                binding_source_feature_ids = source_feature_ids(
-                    [entity_ref] if status == "resolved" else []
-                )
+            candidates = list(getattr(result, "candidates", []) or []) if result else []
+            selected = candidates[0] if result and getattr(result, "status", "") == "resolved" and candidates else None
+            candidate_refs = [str(getattr(c, "entity_ref", "") or "") for c in candidates]
+            candidate_refs = [ref for ref in candidate_refs if ref]
+            entity_ref = str(getattr(result, "selected_entity_ref", "") or "") if result else ""
+            source_bsms = list(getattr(selected, "source_bsms", []) or []) if selected else []
+            geometry_ref = getattr(selected, "geometry_ref", None) if selected else None
+            evidence_refs = [
+                ref for candidate in candidates
+                for ref in list(getattr(candidate, "evidence_refs", []) or [])
+            ]
+            relation_refs = [
+                ref for candidate in candidates
+                for ref in list(getattr(candidate, "relation_refs", []) or [])
+            ]
+            status = str(getattr(result, "status", "unresolved") or "unresolved") if result else "unresolved"
+            confidence = float(getattr(selected, "score", 0.0) or 0.0) if selected else 0.0
+            query_trace = list(getattr(result, "query_trace", []) or []) if result else []
+            uncertainty_reason = str(getattr(result, "unresolved_reason", "") or "") if result else "no_evidence_graph"
+            binding_source_feature_ids = source_feature_ids(
+                [entity_ref] if status == "resolved" else []
+            )
 
             binding_seed = {
                 "observation_ref": observation_ref,

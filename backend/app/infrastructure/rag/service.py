@@ -66,11 +66,9 @@ class RagService:
             # the vector endpoint unless the operator explicitly opts into a
             # separately configured embedding service.
             from app.infrastructure.llm.factory import LLMProvider, get_provider
-            import os
+            from app.core.llm_config import get_llm_settings
 
-            embedding_opt_in = os.getenv("RAG_DASHSCOPE_ENABLED", "").lower() in {
-                "1", "true", "yes"
-            }
+            embedding_opt_in = get_llm_settings().rag_dashscope_enabled
             if get_provider() == LLMProvider.MINIMAX and not embedding_opt_in:
                 self._vector_store = None
                 self._cache = None
@@ -101,14 +99,22 @@ class RagService:
                             dependency_summaries: List[str],
                             dim_key: str = "",
                             village_context: str = "",
-                            extra_keywords: str = "") -> str:
+                            extra_keywords: str = "",
+                            cognition_context: str = "") -> str:
         """根据 Layer 和维度构建不同的 Prompt"""
+        cognition_line = (
+            "\n## 当前项目数据认知（仅用于生成检索词，不是分析材料）\n"
+            + cognition_context
+            + "\n"
+            if cognition_context
+            else ""
+        )
         # Special case: superior_planning needs planning documents, not tech standards
         if dim_key == "superior_planning" and layer == 1:
             loc_line = f"\n## 村庄位置\n{village_context}\n" if village_context else ""
             kw_line = f"\n## 已知上位规划关键词\n{extra_keywords}\n" if extra_keywords else ""
             return f"""你是一个专业的国土空间规划专家。为村庄规划的上位规划分析生成精准的检索查询。
-{loc_line}{kw_line}
+{loc_line}{kw_line}{cognition_line}
 ## 分析任务
 - 维度：{dim_name}
 - 关键词：{task_desc}
@@ -132,6 +138,8 @@ class RagService:
             # Layer 1: 现状分析 - 侧重分析方法和技术标准
             return f"""你是一个专业的村庄规划现状分析专家。为以下分析任务生成精准的检索查询。
 
+{cognition_line}
+
 ## 分析任务
 - 维度：{dim_name}
 - 关键词：{task_desc}
@@ -154,6 +162,8 @@ class RagService:
             # Layer 3: 详细规划 - 侧重规划编制标准和案例
             deps_text = chr(10).join(dependency_summaries[:3]) if dependency_summaries else "无"
             return f"""你是一个专业的村庄规划编制专家。根据以下背景信息，生成精准的检索查询。
+
+{cognition_line}
 
 ## 规划任务
 - 维度：{dim_name}
@@ -180,6 +190,8 @@ class RagService:
             # Layer 2 或其他：通用 Prompt
             deps_text = chr(10).join(dependency_summaries[:2]) if dependency_summaries else "无"
             return f"""你是一个专业的规划信息检索专家。根据以下信息生成检索查询。
+
+{cognition_line}
 
 ## 任务
 - 维度：{dim_name}
@@ -220,7 +232,6 @@ class RagService:
         self,
         cfg: Any,
         state: Dict[str, Any],
-        store: Any = None,
     ) -> List[str]:
         """
         使用 LLM-Flash 基于依赖信息动态生成多条 RAG 查询
@@ -228,21 +239,27 @@ class RagService:
         Args:
             cfg: Dimension config (has name, rag_query, depends_on, etc.)
             state: Current agent state (has session_id, completed_dimensions, etc.)
-            store: ReportReaderPort-compatible reader. Defaults to the
-                composition root's report store when omitted.
 
         Returns:
             多条检索查询字符串
         """
-        if store is None:
-            from app.infrastructure.registry import get_report_store_default
-
-            store = get_report_store_default()
-
         dim_key = cfg.key if hasattr(cfg, 'key') else "unknown"
         dim_name = cfg.name if hasattr(cfg, 'name') else dim_key
         task_desc = cfg.rag_query if hasattr(cfg, 'rag_query') else ""
         session_id = state.get("session_id", "")
+
+        from app.infrastructure.context.planning_context_factory import get_cached_context
+        from app.infrastructure.context.project_cognition import build_project_cognition
+
+        planning_context = get_cached_context(str(session_id or ""))
+        if planning_context is None:
+            raise RuntimeError(
+                "RAG_QUERY_CONTEXT_UNAVAILABLE: current PlanningContext is required"
+            )
+        cognition = build_project_cognition(
+            planning_context,
+            (state.get("project_scope") or (state.get("config") or {}).get("project_scope") or {}),
+        )
 
         # 获取 Layer 信息
         dim_layer = 1  # 默认 Layer 1
@@ -261,38 +278,78 @@ class RagService:
 
         all_deps = depends_on + layer_depends_on + phase_depends_on
 
-        # store resolved from generate_queries caller (composition root default)
-
-        # 批量加载依赖报告全文（避免 N+1 查询）
-        # Full text + content-derived metrics for better RAG queries
+        # Query generation may know which direct dependencies exist, but it
+        # must not read report bodies or derive facts from display text. Only
+        # typed artifact metadata is exposed in this retrieval-plane prompt.
+        dependency_summaries: list[str] = []
         if all_deps:
-            layer_reports = await store.get_layer_reports(session_id, 1)
-            layer_reports_2 = await store.get_layer_reports(session_id, 2) if phase_depends_on else {}
-            layer_reports_3 = await store.get_layer_reports(session_id, 3) if depends_on else {}
+            from app.infrastructure.llm.dependency_context import load_dependency_context
 
-            dependency_summaries = []
-            for dep_key in all_deps:
-                parts = []
-                # Full text (truncated to 2000 chars for prompt efficiency)
-                full_text = layer_reports.get(dep_key) or layer_reports_2.get(dep_key) or layer_reports_3.get(dep_key)
-                if full_text:
-                    parts.append(f"【{dep_key}】\n{full_text[:2000]}")
-                # Metrics/key_points supplement derived from the report content
-                # via deterministic regex extractors (no summary reads).
-                from app.data.ingestion.summary_generator import (
-                    _extract_key_points_regex,
-                    _extract_metrics_regex,
+            dependency_context = await load_dependency_context(
+                str(session_id or ""),
+                dim_key,
+                cfg,
+                dim_layer,
+            )
+            by_key = {
+                artifact.dimension_key: artifact
+                for artifact in dependency_context.artifacts
+            }
+            for dep_key in dict.fromkeys(all_deps):
+                artifact = by_key.get(dep_key)
+                if artifact is None:
+                    dependency_summaries.append(
+                        json.dumps(
+                            {"dimension_key": dep_key, "status": "missing"},
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        )
+                    )
+                    continue
+                instruction = artifact.instruction
+                instruction_fields = (
+                    sorted(str(key) for key in instruction.keys())[:16]
+                    if isinstance(instruction, dict)
+                    else []
                 )
-                metrics = _extract_metrics_regex(full_text or "")
-                key_points = _extract_key_points_regex(full_text or "")
-                if metrics:
-                    parts.append(f"关键指标: {json.dumps(metrics, ensure_ascii=False)}")
-                if key_points:
-                    parts.append(f"核心发现: {'; '.join(key_points[:3])}")
-                if parts:
-                    dependency_summaries.append("\n".join(parts))
-        else:
-            dependency_summaries = []
+                summary_status = ""
+                try:
+                    summary_payload = (
+                        artifact.summary
+                        if isinstance(artifact.summary, dict)
+                        else json.loads(str(artifact.summary or ""))
+                    )
+                    if isinstance(summary_payload, dict):
+                        summary_status = str(summary_payload.get("summary_status") or "")
+                except (TypeError, ValueError, AttributeError):
+                    summary_status = ""
+                dependency_summaries.append(
+                    json.dumps(
+                        {
+                            "dimension_key": artifact.dimension_key,
+                            "layer": artifact.layer,
+                            "version": artifact.version,
+                            "summary_status": summary_status,
+                            "instruction_status": artifact.instruction_status,
+                            "instruction_fields": instruction_fields,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                )
+
+        cognition_context = json.dumps(
+            {
+                "project_ref": cognition.project_ref,
+                "spatial_scope": cognition.spatial_scope,
+                "time_scope": cognition.time_scope,
+                "snapshots": cognition.snapshots,
+                "available_data": cognition.available_data,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
 
         # Extract village location context from state config (structured fields)
         village_context = ""
@@ -311,21 +368,54 @@ class RagService:
                 village_context = village_name
 
         # 使用分 Layer Prompt
-        prompt = self._build_query_prompt(dim_name, task_desc, dim_layer, dependency_summaries,
-                                          dim_key=dim_key, village_context=village_context,
-                                          extra_keywords=extra_keywords)
+        prompt = self._build_query_prompt(
+            dim_name,
+            task_desc,
+            dim_layer,
+            dependency_summaries,
+            dim_key=dim_key,
+            village_context=village_context,
+            extra_keywords=extra_keywords,
+            cognition_context=cognition_context,
+        )
 
         # 使用 Flash LLM 生成查询
         llm = create_flash_llm(max_tokens=200, temperature=0.3)
 
         try:
-            response = await llm.ainvoke(prompt)
-            queries = [q.strip() for q in response.content.split("\n") if q.strip()]
+            from app.contracts.llm.rag_contracts import RagQueryBatch
+            from app.core.llm_config import get_llm_settings
+            from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
+
+            settings = get_llm_settings()
+            proposal = await get_llm_manager().run_structured(
+                LLMCallSpec(
+                    stage="RAG",
+                    contract_key="rag.query_batch",
+                    response_model=RagQueryBatch,
+                    call_type="retrieval",
+                    max_retries=0,
+                    timeout_s=settings.request_timeout_seconds(),
+                    max_tokens=200,
+                    temperature=0.3,
+                    max_concurrent=settings.provider_concurrency(),
+                    semaphore_scope="rag",
+                    allow_content_json=True,
+                ),
+                [{"role": "user", "content": prompt}],
+                context={"stage": "RAG_QUERY_GENERATION", "dimension": dim_key},
+                llm=llm,
+            )
+            queries = [
+                str(query).strip()[:160]
+                for query in proposal.queries
+                if str(query).strip()
+            ]
             logger.info(f"[RagService] Generated {len(queries)} queries for {dim_key} (layer={dim_layer}): {queries[:3]}...")
             return queries[:8]
         except Exception as e:
             logger.error(f"[RagService] Query generation failed: {e}")
-            return [f"{dim_name} 规划 技术标准"]
+            raise RuntimeError("rag_query_generation_failed") from e
 
     async def generate_query(
         self,
@@ -333,7 +423,7 @@ class RagService:
         state: Dict[str, Any]
     ) -> str:
         """
-        Generate single search query (backward compatible)
+        Generate one query from the current typed query batch.
 
         Args:
             cfg: Dimension config
@@ -343,7 +433,9 @@ class RagService:
             Single search query string
         """
         queries = await self.generate_queries(cfg, state)
-        return queries[0] if queries else f"{cfg.name if hasattr(cfg, 'name') else 'unknown'} 规划 技术标准"
+        if not queries:
+            raise RuntimeError("rag_query_generation_empty")
+        return queries[0]
 
     async def search(
         self,

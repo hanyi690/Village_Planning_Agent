@@ -16,7 +16,7 @@ from typing import Any, Dict, Iterable, List, Optional, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.domain.validation.closed_set import (
+from app.contracts.llm.closed_set_contracts import (
     CandidateDescriptor,
     ExactBatchMembershipResult,
     candidate_set_digest,
@@ -66,9 +66,9 @@ def render_candidate_selection_contract(candidate_ids: Iterable[str]) -> str:
         "【结构化闭集候选选择契约】",
         "候选 ID 集合是输入约束，不是输出字段；不要把它复制到 JSON 中。",
         f"本次允许选择的候选 ID 集合（仅供判断）：{allowed}",
-        "输出 JSON 的键必须且只能是：status、selected_candidate_id、input_digest。",
+        "响应字段必须且只能是：status、selected_candidate_id、input_digest；字段以 typed schema 为准。",
         "禁止输出 allowed_candidate_ids、candidate_ids、candidates 或任何其他键。",
-        "只返回一个 JSON 对象，不要输出 Markdown、解释、序号或额外字段。",
+        "只填写声明的 typed response contract，不要输出 Markdown、解释、序号或额外字段；不要把 JSON 写入 message.content。",
         "status 只能是 selected、abstain 或 ambiguous。",
         "selected_candidate_id 必须逐字复制上面集合中的一个 ID；",
         "status 为 abstain 或 ambiguous 时 selected_candidate_id 必须是空字符串。",
@@ -207,7 +207,7 @@ def render_candidate_selection_batch_contract() -> str:
     return "\n".join((
         "【结构化闭集批量候选选择契约】",
         "每个 decision_id 都是相互独立的选择任务；候选集合只在对应任务中作为输入约束。",
-        "只返回一个 JSON 对象，顶层键必须且只能是 decisions。",
+        "只填写声明的 typed batch response contract，顶层字段必须且只能是 decisions；不要把 JSON 写入 message.content。",
         "decisions 必须是数组；每个数组项的键必须且只能是：decision_id、status、selected_candidate_id、input_digest。",
         "禁止在顶层或数组项输出 allowed_candidate_ids、candidate_ids、candidates 或任何其他键。",
         "每个 decision_id 必须逐字复制任务输入；每个 input_digest 必须逐字复制同一任务输入。",

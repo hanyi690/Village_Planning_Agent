@@ -15,11 +15,11 @@ provider 类型上浮为业务事实；领域层不反向依赖这里的具体�
 | `artifacts/` | 内容寻址 artifact 仓库 | `repository.ContentAddressedArtifactRepository`（CAS：digest/blob/named ref）、`runtime.py`（`ARTIFACT_KEYS`、store/load/fork）、`fingerprint.py`（语义指纹） |
 | `events/` | 事件持久化与 SSE | `repository.EventRepository`（SQLite run_events）、`connection_hub.EventConnectionHub`（在线队列）、`sse_publisher`（发事件/工具状态/GIS 事件）、`sse_events.py`（GIS 事件模型）、`event_factory` |
 | `runtime/` | 规划运行时 | `planning_runtime_service.PlanningRuntimeService`：graph 单例、`trigger_planning_execution`、`resume_from_interrupt`、`fork_checkpoint`、`aget_state` |
-| `llm/` | LLM 适配 | `factory.create_llm`（openai/zhipuai/minimax）、`instructor_client`、`dimension_runtime`（RAG/依赖加载）、`planning_claims.PlanningClaimGenerator`、`rate_limiter`、`retry`、`stats_collector`、`tracing`；`prompts/`；`tools/`（ToolRegistry + access/bundle/knowledge/rag/reports 工具） |
-| `kg/` | 知识图谱 | `builder/`（KGBuilder + layer1-4）、`service.build_knowledge_graph_data`、`session_kg`（进程池 + CAS）、`manager`（LRU 缓存）、`queries/`（SPARQL/模板查询）、`enrichment/`（name_backfill/relations）、`gazetteer/`、`adapters/`、`dlq`、`memory`、`ontology` |
+| `llm/` | LLM 适配 | `factory.create_llm`（openai/zhipuai/minimax）、`instructor_client`、`manager`（统一调用/上下文/输出边界）、`dimension_runtime`（RAG/依赖加载）、`planning_claims.PlanningClaimGenerator`、`retry`、`stats_collector`、`tracing`；`prompts/`；`tools/`（ToolRegistry + access/bundle/knowledge/rag/reports 工具） |
+| `kg/` | 知识图谱 | `builder/`（KGBuilder + layer1-4）、`service.build_knowledge_graph_data`、`session_kg`（进程池 + CAS）、`manager`（LRU 缓存）、`queries/`（SPARQL/模板查询）、`enrichment/`（bindings/descriptions/relations/report_entity_enrichment）、`gazetteer/`、`adapters/`、`dlq`、`memory`、`ontology` |
 | `rag/` | RAG 检索 | `service.RagService`、`vector_store`（chroma/faiss/qdrant + Aliyun embeddings）、`chunker`、`cli`（管理命令）、`context`、`utils/` |
 | `rendering/` | 交付渲染 | `html_render.render_interactive_map`、`static_render`（PNG）、`map_layers.build_map_layers`、`colors` |
-| `export/` | 交付导出 | `delivery_snapshot`（快照→GeoJSON 图层）、`export_package.export_delivery_package`、`gdb`、`tables` |
+| `export/` | 交付导出 | `delivery_snapshot`（快照→GeoJSON 图层）、`export_package.export_delivery_package`、`gdb` |
 | `reports/` | 阶段/步骤报告 | `stage_report`（markdown 报告）、`step_report.StepReport`（审计）、`review_package`（人工审核包）、`report_store` |
 | `context/` | 规划上下文 | `planning_context.PlanningContext`、`planning_context_factory`（构建/缓存/失效） |
 | `checkpoint/` | checkpoint 分类 | `checkpoint_policy`（has_pending_interrupt/classify_checkpoint） |

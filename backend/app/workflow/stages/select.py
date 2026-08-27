@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, Dict
 
 from app.core.settings import GIS_TIMEOUT
@@ -22,6 +23,168 @@ from app.workflow.stages.support import (
 )
 
 logger = get_logger(__name__)
+
+
+def _scenario_card(scenario: Any) -> dict[str, Any]:
+    """Project one scenario into the bounded SELECT reasoning context."""
+
+    return {
+        "scenario_id": str(getattr(scenario, "scenario_id", "") or ""),
+        "status": str(getattr(scenario, "status", "") or ""),
+        "target_selections": [
+            {
+                "target_id": str(getattr(selection, "target_id", "") or ""),
+                "selection_mode": str(
+                    getattr(selection, "selection_mode", "") or ""
+                ),
+                "candidate_ids": [
+                    str(value)
+                    for value in list(getattr(selection, "candidate_ids", None) or [])[:16]
+                ],
+            }
+            for selection in list(getattr(scenario, "target_selections", None) or [])[:32]
+        ],
+        "objective_vector": {
+            str(key): float(value)
+            for key, value in list(
+                (getattr(scenario, "objective_vector", None) or {}).items()
+            )[:16]
+        },
+        "metrics": {
+            str(key): float(value)
+            for key, value in list(
+                (getattr(scenario, "metrics", None) or {}).items()
+            )[:16]
+        },
+        "findings": [
+            {
+                "code": str(getattr(finding, "code", "") or ""),
+                "severity": str(getattr(finding, "severity", "") or ""),
+                "relation_id": str(getattr(finding, "relation_id", "") or ""),
+                "target_id": str(getattr(finding, "target_id", "") or ""),
+            }
+            for finding in list(getattr(scenario, "findings", None) or [])[:24]
+        ],
+    }
+
+
+async def _reason_select_scenario(
+    scenario_set: Any,
+    *,
+    llm: Any | None = None,
+) -> dict[str, Any] | None:
+    """Ask one closed-set question about solver-produced scenario cards.
+
+    This is advisory reasoning only.  The solver certificate and SELECT gate
+    remain authoritative, so a provider failure cannot manufacture or remove a
+    scenario.  The prompt contains no geometry, report body or raw evidence.
+    """
+
+    from app.core.llm_config import get_llm_settings
+    from app.contracts.spatial.spatial_reference_contracts import (
+        CandidateSelectionProposal,
+        render_candidate_selection_contract,
+        spatial_candidate_input_digest,
+        validate_spatial_candidate_proposal,
+    )
+    from app.contracts.llm.closed_set_contracts import CandidateDescriptor
+    from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
+
+    settings = get_llm_settings()
+    if settings.disable_llm:
+        return None
+    scenarios = list(getattr(scenario_set, "scenarios", None) or [])
+    if not scenarios:
+        return None
+    descriptors = [
+        CandidateDescriptor(
+            candidate_id=str(getattr(scenario, "scenario_id", "") or ""),
+            kind="planning_scenario",
+            label=str(getattr(scenario, "status", "") or ""),
+            metadata=_scenario_card(scenario),
+        )
+        for scenario in scenarios
+        if str(getattr(scenario, "scenario_id", "") or "").strip()
+    ]
+    if not descriptors:
+        return None
+    decision_id = f"select:scenario-set:{getattr(scenario_set, 'set_id', '')}"
+    query_text = json.dumps(
+        {
+            "set_id": str(getattr(scenario_set, "set_id", "") or ""),
+            "problem_fingerprint": str(
+                getattr(scenario_set, "problem_fingerprint", "") or ""
+            ),
+            "recommendation_policy": str(
+                getattr(scenario_set, "recommendation_policy", "") or ""
+            ),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    input_digest = spatial_candidate_input_digest(
+        decision_id=decision_id,
+        query_text=query_text,
+        candidates=descriptors,
+    )
+    prompt = "\n".join((
+        render_candidate_selection_contract(item.candidate_id for item in descriptors),
+        "这是 SELECT 的场景卡 advisory reasoning。只能从 solver 已生成的场景闭集中选择；"
+        "不得生成候选、改写约束、改变指标或输出 geometry。solver certificate 和 gate 才是最终权威。",
+        f"场景集合语义={query_text}",
+        f"input_digest={input_digest}",
+        "场景卡：",
+        "\n".join(
+            json.dumps(item.metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            for item in descriptors
+        ),
+    ))
+    try:
+        if llm is None:
+            from app.infrastructure.llm.factory import create_flash_llm
+
+            llm = create_flash_llm(max_tokens=512, temperature=0.1)
+        response = await get_llm_manager().run_structured(
+            LLMCallSpec(
+                stage="SELECT",
+                contract_key="select.scenario_selection",
+                response_model=CandidateSelectionProposal,
+                call_type="closed_set",
+                max_retries=0,
+                timeout_s=settings.request_timeout_seconds(),
+                max_tokens=512,
+                incomplete_output_max_tokens=2048,
+                max_concurrent=settings.provider_concurrency(),
+                semaphore_scope="select",
+                temperature=0.1,
+                allow_content_json=True,
+                timeout_includes_queue=False,
+            ),
+            [{"role": "user", "content": prompt}],
+            context={
+                "scenario_set_id": str(getattr(scenario_set, "set_id", "") or ""),
+                "scenario_count": len(descriptors),
+            },
+            llm=llm,
+        )
+        decision = validate_spatial_candidate_proposal(
+            decision_id=decision_id,
+            query_text=query_text,
+            candidates=descriptors,
+            proposal=response,
+        )
+        return {
+            "decision_id": decision_id,
+            "status": decision.status,
+            "selected_candidate_id": decision.selected_candidate_id or "",
+            "candidate_set_digest": decision.candidate_set_digest,
+            "input_digest": input_digest,
+            "reason": decision.reason,
+        }
+    except Exception as exc:
+        logger.warning("[workflow:select] scenario reasoning failed: %s", type(exc).__name__)
+        return None
 
 
 def _to_typed(data: Any, cls: type) -> Any:
@@ -390,6 +553,7 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     approval_candidate_kwargs = None
     solver_subproblem_plan = None
     use_solver_subproblem_merge = False
+    select_reasoning = None
     if problem is not None:
         from app.domain.allocation.scenario_optimizer import optimize_scenarios
         from app.domain.allocation.subproblem_compiler import (
@@ -549,6 +713,14 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
             scenario = scenario_set.recommended or (
                 scenario_set.scenarios[0] if scenario_set.scenarios else None
             )
+        if scenario_set is not None:
+            select_reasoning = await _reason_select_scenario(scenario_set)
+            if select_reasoning is not None:
+                logger.info(
+                    "[workflow:select] advisory scenario reasoning status=%s selected=%s",
+                    select_reasoning.get("status", ""),
+                    select_reasoning.get("selected_candidate_id", ""),
+                )
         scenario_set_ref = persist_stage_artifact(
             artifact_state, "select", "ScenarioSet", scenario_set
         )

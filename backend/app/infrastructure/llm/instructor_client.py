@@ -21,19 +21,16 @@ _cached_async_clients: dict[tuple[str, str, str], instructor.AsyncInstructor] = 
 
 def _provider_connection() -> tuple[str, str, str]:
     """Return provider name, API key, and base URL without exposing the key."""
-    from app.core import settings
+    from app.core.llm_config import get_llm_settings
     from app.infrastructure.llm.factory import LLMProvider, get_provider
 
     provider = get_provider()
-    if provider is LLMProvider.MINIMAX:
-        name, api_key, base_url = "minimax", settings.MINIMAX_API_KEY, settings.MINIMAX_API_BASE
-    elif provider is LLMProvider.OPENCODE_GO:
-        name, api_key, base_url = "opencode-go", settings.OPENCODE_GO_API_KEY, settings.OPENCODE_GO_API_BASE
-    else:
-        name, api_key, base_url = provider.value, settings.DASHSCOPE_API_KEY, settings.DASHSCOPE_API_BASE
-    if not api_key:
-        raise ValueError(f"API key not set for {name} Instructor client")
-    return name, api_key, base_url
+    connection = get_llm_settings().connection(provider.value)
+    return (
+        connection.provider.value,
+        connection.require_api_key(),
+        str(connection.base_url or ""),
+    )
 
 
 def _structured_mode(provider_name: str) -> instructor.Mode:
@@ -45,15 +42,17 @@ def _structured_mode(provider_name: str) -> instructor.Mode:
     instruction.  Deployments can still opt into JSON/markdown-JSON explicitly
     for a model that does not support tool calls.
     """
-    configured = os.getenv("LLM_STRUCTURED_MODE", "").strip().lower()
-    if configured in {"tools", "tool", "function", "function_call", "function_calling"}:
+    from app.core.llm_config import get_llm_settings
+
+    configured = get_llm_settings().typed_mode(provider_name)
+    if configured.value == "tools":
         return instructor.Mode.TOOLS
-    if configured in {"json", "json_mode", "json-schema", "json_schema"}:
+    if configured.value == "json_schema":
+        return instructor.Mode.JSON_SCHEMA
+    if configured.value == "json":
         return instructor.Mode.JSON
-    if configured in {"md_json", "markdown_json", "markdown-json"}:
+    if configured.value == "md_json":
         return instructor.Mode.MD_JSON
-    if provider_name in {"minimax", "minimaxai", "mini-max"}:
-        return instructor.Mode.TOOLS
     return instructor.Mode.TOOLS
 
 
@@ -84,7 +83,9 @@ def get_instructor_client() -> instructor.Instructor:
     return client
 
 
-def get_async_instructor_client() -> instructor.AsyncInstructor:
+def get_async_instructor_client(
+    mode_override: instructor.Mode | None = None,
+) -> instructor.AsyncInstructor:
     """Create or return the async Instructor client for the active provider.
 
     Structured calls run inside LangGraph's event loop.  Keeping the OpenAI
@@ -93,7 +94,7 @@ def get_async_instructor_client() -> instructor.AsyncInstructor:
     the actual HTTP boundary.
     """
     provider_name, api_key, base_url = _provider_connection()
-    mode = _structured_mode(provider_name)
+    mode = mode_override or _structured_mode(provider_name)
     cache_key = (provider_name, base_url, mode.value)
     cached = _cached_async_clients.get(cache_key)
     if cached is not None:
@@ -157,36 +158,35 @@ def _provider_max_retries() -> int:
     # Transport retries duplicate a long-running non-streaming request.  A
     # workflow-level resume is the auditable retry boundary; keep the HTTP
     # client single-shot unless deployment explicitly opts in.
-    return max(0, int(os.getenv("LLM_PROVIDER_MAX_RETRIES", "0")))
+    from app.core.llm_config import get_llm_settings
+
+    return max(0, int(get_llm_settings().provider_max_retries))
 
 
 def _provider_timeout() -> float:
-    from app.core.settings import LLM_STREAM_TIMEOUT
+    from app.core.llm_config import get_llm_settings
 
-    return float(os.getenv("LLM_PROVIDER_REQUEST_TIMEOUT", str(LLM_STREAM_TIMEOUT)))
+    return get_llm_settings().request_timeout_seconds()
 
 
 def _http_client(*, async_client: bool) -> httpx.Client | httpx.AsyncClient:
     """Build a bounded keep-alive pool for the configured provider budget."""
-    from app.core.settings import LLM_MAX_CONCURRENT
+    from app.core.llm_config import get_llm_settings
 
+    config = get_llm_settings()
     request_timeout = _provider_timeout()
-    budgets = [LLM_MAX_CONCURRENT]
-    for name in (
-        "L1_LLM_MAX_CONCURRENT",
-        "L2_LLM_MAX_CONCURRENT",
-        "L3_LLM_MAX_CONCURRENT",
-        "GROUND_LLM_MAX_CONCURRENT",
-    ):
-        try:
-            budgets.append(int(os.getenv(name, "0")))
-        except (TypeError, ValueError):
-            continue
+    budgets = [
+        config.provider_concurrency(),
+        config.stage_concurrency("l1"),
+        config.stage_concurrency("l2"),
+        config.stage_concurrency("l3"),
+        config.stage_concurrency("ground"),
+    ]
     provider_budget = max(1, max(budgets))
     default_connections = max(8, provider_budget * 2 + 4)
     max_connections = max(
         4,
-        int(os.getenv("LLM_HTTP_MAX_CONNECTIONS", str(default_connections))),
+        int(config.http_max_connections or default_connections),
     )
     limits = httpx.Limits(
         max_connections=max_connections,
@@ -209,14 +209,10 @@ def _http_client(*, async_client: bool) -> httpx.Client | httpx.AsyncClient:
 
 def get_structured_model(model: str | None = None) -> str:
     """Resolve the model id used for typed structured calls."""
-    from app.core import settings
+    from app.core.llm_config import get_llm_settings
     from app.infrastructure.llm.factory import LLMProvider, get_provider
 
     if model:
         return model.removeprefix("opencode-go/")
     provider = get_provider()
-    if provider is LLMProvider.MINIMAX:
-        return settings.MINIMAX_MODEL
-    if provider is LLMProvider.OPENCODE_GO:
-        return settings.OPENCODE_GO_MODEL.removeprefix("opencode-go/")
-    return settings.FLASH_MODEL_NAME
+    return get_llm_settings().connection(provider.value).model.removeprefix("opencode-go/")

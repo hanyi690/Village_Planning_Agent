@@ -14,18 +14,10 @@ from enum import Enum
 from typing import Dict, Any, List
 from langchain_core.messages import AIMessage
 from app.config import get_dimension_config, get_dimension_layer, list_dimensions
-from app.core.settings import (
-    LLM_INCOMPLETE_OUTPUT_MAX_TOKENS,
-    L1_LLM_MAX_CONCURRENT,
-    L1_LLM_TIMEOUT_S,
-    L1_MAX_TOKENS,
-    L1_TRANSIENT_RETRIES,
-    L1_TRANSIENT_RETRY_BACKOFF_S,
-)
+from app.core.llm_config import get_llm_settings
 from app.contracts.events import SSEEventType
 from app.infrastructure.logging import get_logger
 from app.infrastructure.llm.dimension_runtime import (
-    load_dependency_reports,
     publish_dimension_complete,
     publish_dimension_delta,
     publish_dimension_start,
@@ -33,10 +25,10 @@ from app.infrastructure.llm.dimension_runtime import (
     trip_provider_failure,
     dimension_failure_attempt,
     run_rag,
-    run_targeted_evidence,
     save_report_immediate,
     save_step_report,
 )
+from app.infrastructure.llm.dependency_context import load_dependency_context
 
 logger = get_logger(__name__)
 
@@ -138,6 +130,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     dim_name = getattr(cfg, 'name', dim_key)
     prefer_doc_types = getattr(cfg, "prefer_doc_types", None) or None
     dim_layer = getattr(cfg, 'layer', get_dimension_layer(dim_key) or 3)
+    l1_stage_policy = get_llm_settings().stage_policy("l1")
     source_index = _l1_source_index_for_state(state) if dim_layer == 1 else None
     source_index_ref = None
     if source_index is not None and source_index.source_segments:
@@ -176,11 +169,45 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         )
         rag_context, rag_log = "", None
 
-    # 4. 从数据库加载依赖报告（按配置过滤）
+    # 4. Resolve only typed dependency artifacts.  L1 facts are supplied by
+    # the snapshot/catalog boundary; report bodies and audit traces never
+    # enter this prompt.
     store = ReportStore.get_instance()
-    deps, same_layer_contexts = await load_dependency_reports(
-        dim_key, cfg, dim_layer, session_id, is_revision,
+    dependency_context = await load_dependency_context(
+        session_id,
+        dim_key,
+        cfg,
+        dim_layer,
     )
+    same_layer_deps = tuple(getattr(cfg, "depends_on", ()) or ())
+    layer1_deps = tuple(getattr(cfg, "layer_depends_on", ()) or ())
+    layer2_deps = tuple(getattr(cfg, "phase_depends_on", ()) or ())
+    missing_same = [key for key in same_layer_deps if key in dependency_context.missing_keys]
+    if missing_same:
+        raise RuntimeError(
+            f"维度 {dim_key} 的同层依赖产物缺失: {', '.join(missing_same)}"
+        )
+    same_layer_contexts = (
+        dependency_context.render_for_prompt(
+            include_keys=same_layer_deps,
+            include_summary=False,
+        )
+        if same_layer_deps
+        else ""
+    )
+    deps = ""
+    if layer1_deps:
+        deps = dependency_context.render_for_prompt(
+            include_keys=layer1_deps,
+            include_summary=False,
+            include_instruction=False,
+        )
+    if layer2_deps:
+        l2_dependency_context = dependency_context.render_for_prompt(
+            include_keys=layer2_deps,
+            include_summary=False,
+        )
+        deps = "\n\n".join(value for value in (deps, l2_dependency_context) if value)
 
     # 5. DataPipeline: execute tools and format professional data
     professional_data_section = ""
@@ -252,8 +279,8 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     if rag_log:
         stats.record_rag_time(session_id, dim_key, rag_log.retrieval_latency_ms, rag_log.total_results)
 
-    # 7. Typed dimension response: L1 carries observations; L2/L3 may use a
-    # bounded report-only recovery when the provider emits正文 without a tool call.
+    # 7. L1 semantic output is produced only by the bounded observe/report
+    # loop; no prose fallback is allowed when a typed call fails.
     if provider_failure_open(session_id):
         return {
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
@@ -278,15 +305,18 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         # failure trips the existing circuit path instead of stalling the whole
         # L1 layer for unbounded retries.
         runner_kwargs = {
-            "max_retries": 1,
-            "timeout": L1_LLM_TIMEOUT_S,
+            "max_retries": l1_stage_policy.parse_retries,
+            "timeout": l1_stage_policy.timeout_s,
             "temperature": 0.3,
-            "max_tokens": L1_MAX_TOKENS,
-            "incomplete_output_max_tokens": LLM_INCOMPLETE_OUTPUT_MAX_TOKENS,
-            "max_concurrent": L1_LLM_MAX_CONCURRENT,
+            "max_tokens": l1_stage_policy.max_tokens,
+            "report_max_tokens": l1_stage_policy.report_max_tokens,
+            "incomplete_output_max_tokens": l1_stage_policy.incomplete_output_max_tokens,
+            "max_concurrent": l1_stage_policy.max_concurrent,
             "semaphore_scope": "l1",
-            "transient_retries": L1_TRANSIENT_RETRIES,
-            "transient_retry_backoff_s": L1_TRANSIENT_RETRY_BACKOFF_S,
+            "timeout_includes_queue": False,
+            "transient_retries": l1_stage_policy.transient_retries,
+            "transient_retry_backoff_s": l1_stage_policy.transient_retry_backoff_s,
+            "allow_content_json": True,
         }
         if dim_layer == 1:
             from app.domain.assessment.l1_extraction_loop import run_l1_dimension_loop
@@ -361,22 +391,40 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             l1_retrieval_trace.extend(loop_result.retrieval_trace)
     except asyncio.TimeoutError:
         trip_provider_failure(session_id)
-        logger.error(f"[analyze_dimension] {dim_key}: L1 LLM timeout after {L1_LLM_TIMEOUT_S}s")
+        timeout_shape = {
+            "stage": "l1",
+            "dimension_key": dim_key,
+            "structured_mode": str(get_llm_settings().typed_mode().value),
+            "max_retries": l1_stage_policy.parse_retries,
+            "max_tokens": l1_stage_policy.max_tokens,
+            "report_max_tokens": l1_stage_policy.report_max_tokens,
+            "max_concurrent": l1_stage_policy.max_concurrent,
+            "source_passes": "paged_observe_then_report",
+        }
+        logger.error(
+            "[analyze_dimension] %s: L1 LLM timeout after %ss; "
+            "request_shape=%s",
+            dim_key,
+            l1_stage_policy.timeout_s,
+            json.dumps(timeout_shape, ensure_ascii=False, sort_keys=True),
+        )
         await sse_manager.publish(session_id, {
             "type": SSEEventType.DIMENSION_ERROR,
             "dimension_key": dim_key,
             "dimension_name": dim_name,
             "layer": dim_layer,
-            "error": f"L1 LLM timeout ({L1_LLM_TIMEOUT_S}s)",
+            "error": f"L1 LLM timeout ({l1_stage_policy.timeout_s}s)",
         })
         return {
-            "messages": [AIMessage(content=f"[执行失败] L1 LLM超时({L1_LLM_TIMEOUT_S}s)")],
+            "messages": [
+                AIMessage(content=f"[执行失败] L1 LLM超时({l1_stage_policy.timeout_s}s)")
+            ],
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
             "provider_failures": [{
                 "stage": f"L{dim_layer}",
                 "dimension": dim_key,
                 "code": "TIMEOUT",
-                "message": f"L1 LLM timeout ({L1_LLM_TIMEOUT_S}s)",
+                "message": f"L1 LLM timeout ({l1_stage_policy.timeout_s}s)",
             }],
         }
     except Exception as e:
@@ -410,16 +458,14 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     llm_response = report_body
+    # The persisted instruction is the semantic dependency artifact.  Page
+    # cursors, source indexes, diagnostics and retrieval traces stay in step
+    # audit records and are never replayed into another dimension prompt.
     instruction_payload = {
         "observations": [
             item.model_dump(mode="json") if hasattr(item, "model_dump") else item
             for item in observations
         ],
-        "source_documents": list(getattr(source_index, "source_documents", []) or []),
-        "source_digest": str(getattr(source_index, "source_digest", "") or ""),
-        "pass_cursor": l1_pass_cursor,
-        "diagnostics": list(l1_diagnostics),
-        "retrieval_trace": list(l1_retrieval_trace)[-24:],
     }
     observations_json = json.dumps(instruction_payload, ensure_ascii=False)
     # 7.6 Observation quality validation (design: validation step after every
@@ -623,7 +669,7 @@ def _l1_summary_projection(
             "evidence_ref_count": len(evidence_refs),
         },
         evidence_refs=sorted(evidence_refs),
-        summary_status="resolved",
+        summary_status="pending",
     )
 
 

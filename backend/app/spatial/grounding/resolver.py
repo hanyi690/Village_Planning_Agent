@@ -20,7 +20,6 @@ or ``app.api``.
 from __future__ import annotations
 
 import hashlib
-import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import Any, Dict, List, Optional
 
@@ -33,7 +32,7 @@ from app.contracts.spatial.spatial_reference_contracts import (
     stable_spatial_candidate_id,
     validate_spatial_candidate_proposal,
 )
-from app.domain.validation.closed_set import validate_exact_batch_membership
+from app.contracts.llm.closed_set_contracts import validate_exact_batch_membership
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
@@ -168,114 +167,6 @@ def _authoritative_geometry_refs(
     return refs
 
 
-def _extract_location_tokens(location: str) -> List[str]:
-    """位置文本 → 候选 token：'肩丰、田坑' / '肩丰至炉池段' / '园寨自然村'。"""
-    tokens = []
-    for part in _split_by_separators(location, _LOCATION_SEPARATORS):
-        part = part.strip()
-        for suffix in _LOCATION_STRIP:
-            part = part.rstrip(suffix)
-        part = part.strip()
-        if part and not any(ch.isdigit() for ch in part):
-            tokens.append(part)
-    return list(dict.fromkeys(tokens))
-
-
-def _resolve_gazetteer_bsms(token: str, gazetteer: Any) -> List[str]:
-    """token → gazetteer 解析 → BSM 列表（精确 → 村后缀 → fuzzy）。"""
-    if gazetteer is None:
-        return []
-    for candidate in (token, f"{token}村", f"{token}自然村", f"{token}组"):
-        entry = gazetteer.resolve(candidate, fuzzy=False)
-        if entry is not None and entry.bsms:
-            return list(entry.bsms)
-    entry = gazetteer.resolve(token, fuzzy=True)
-    if entry is not None and entry.bsms:
-        return list(entry.bsms)
-    return []
-
-
-def _resolve_gazetteer_entry(token: str, gazetteer: Any):
-    """token → gazetteer entry (BSMs + centroid), with village-suffix probes."""
-    if gazetteer is None:
-        return None
-    for candidate in (token, f"{token}村", f"{token}自然村", f"{token}组"):
-        entry = gazetteer.resolve(candidate, fuzzy=False)
-        if entry is not None and (getattr(entry, "bsms", None) or []):
-            return entry
-    entry = gazetteer.resolve(token, fuzzy=True)
-    if entry is not None and (getattr(entry, "bsms", None) or []):
-        return entry
-    return None
-
-
-_DIRECTION_WORDS = ("东北", "东南", "西北", "西南", "北", "南", "东", "西")
-
-
-def _direction_from_connects(token: str) -> Optional[str]:
-    """村北 -> north; 东北 -> northeast; empty when no direction word."""
-    text = (token or "").strip()
-    if not text:
-        return None
-    for word in ("东北", "东南", "西北", "西南"):
-        if word in text:
-            return word
-    for word in ("北", "南", "东", "西"):
-        if word in text:
-            return word
-    return None
-
-
-def _first_village_center(kg_anchors: List[Dict[str, Any]]) -> Optional[tuple]:
-    """First non-zero village anchor as the bundle centre for direction math."""
-    for anchor in kg_anchors or []:
-        lon = anchor.get("lon")
-        lat = anchor.get("lat")
-        if lon and lat and not (float(lon) == 0.0 and float(lat) == 0.0):
-            return (float(lon), float(lat))
-    return None
-
-
-def _village_cluster_for(
-    token: str,
-    gazetteer: Any,
-    village_cluster_map: Optional[Dict[str, Dict[str, Any]]],
-) -> Optional[Dict[str, Any]]:
-    """Gazetteer entry first; bundle cluster fallback for a natural village."""
-    entry = _resolve_gazetteer_entry(token, gazetteer)
-    if entry is not None:
-        return {
-            "centroid": list(getattr(entry, "centroid", None) or ())
-            if getattr(entry, "centroid", None)
-            else None,
-            "bsms": list(getattr(entry, "bsms", None) or []),
-            "source": "gazetteer",
-            "confidence": float(getattr(entry, "confidence", 0.0) or 0.0),
-            "entity_ref": str(getattr(entry, "entity_uri", "") or ""),
-            "provenance_refs": [f"gazetteer:{getattr(entry, 'source', 'unknown')}"],
-        }
-    if not village_cluster_map:
-        return None
-    for key in (token, f"{token}村", f"{token}自然村"):
-        if key in village_cluster_map:
-            item = village_cluster_map[key]
-            return {
-                "centroid": list(item.get("centroid") or ()),
-                "bsms": list(item.get("bsms") or []),
-                "source": "village_cluster",
-                "confidence": float(item.get("confidence", 0.4) or 0.4),
-                "entity_ref": str(item.get("entity_ref") or ""),
-                "provenance_refs": list(item.get("provenance_refs") or []),
-                "source_artifact_ref": str(item.get("source_artifact_ref") or ""),
-                "source_feature_id": str(item.get("source_feature_id") or ""),
-                "coordinate_crs": str(item.get("coordinate_crs") or "EPSG:4326"),
-            }
-    return None
-
-
-_VILLAGE_ALL_MARKER = "__VILLAGE_ALL__"
-
-
 _MENTION_SEPARATORS = ("、", "，", ",", "；", ";", "及", "和", "与")
 
 
@@ -301,14 +192,6 @@ def _split_mentions(label: str) -> list[str]:
     return _split_by_separators(label, frozenset(_MENTION_SEPARATORS))
 
 
-def _is_village_count_token(token: str) -> bool:
-    value = str(token or "")
-    if value.startswith("全村"):
-        value = value[2:]
-    suffix = "个自然村"
-    return value.endswith(suffix) and value[: -len(suffix)].isdigit()
-
-
 def _normalize_spec_mention(label: str) -> str:
     """Normalize PARSE label_contains into a resolver-friendly mention.
 
@@ -320,12 +203,6 @@ def _normalize_spec_mention(label: str) -> str:
     token = (label or "").strip()
     if not token:
         return ""
-    if (
-        token in {"全村域", "全村", "村域"}
-        or token.startswith("全村")
-        or _is_village_count_token(token)
-    ):
-        return _VILLAGE_ALL_MARKER
     for suffix in (
         "沿线", "两岸", "附近", "周边",
         "一带", "区域", "范围内", "流域", "域",
@@ -544,7 +421,6 @@ class SpatialResolver:
     def resolve_spec(
         self,
         spec: Any,
-        mention_enhancements: Optional[Dict[str, List[str]]] = None,
         evidence_packet: Any = None,
     ) -> "ResolvedSpatialRef":
         """Resolve a closed-set SpatialReferenceSpec to candidate BSMs.
@@ -553,11 +429,6 @@ class SpatialResolver:
         applies a directional bbox refinement when the spec carries a direction
         (replacing the village-center bbox fallback used by EXPLORE grounding).
 
-        ``mention_enhancements`` maps ``target_id -> [mention, ...]`` and is
-        produced by the GROUND flash-LLM mention enhancer.  When the primary
-        mention cannot bind any BSM, each enhanced mention is resolved through
-        the same EvidenceGraph and the BSMs are merged - the LLM only supplies
-        text, never BSMs/coordinates.
 
         ``evidence_packet`` is an optional canonical retrieval result for this
         target.  Its opaque feature refs are resolved back through the current
@@ -728,51 +599,10 @@ class SpatialResolver:
         reference = getattr(spec, "reference", None)
         if getattr(reference, "kind", "") == "bsm":
             return self._resolve_direct_bsm_reference(spec, reference)
-        if getattr(reference, "kind", "") == "village":
-            raw_label = (
-                str(getattr(reference, "name", "") or "")
-                or str((getattr(reference, "filter", None) or {}).get("label_contains") or "")
-            )
-            cluster = self._resolve_village_cluster(
-                raw_label,
-                allow_session_fallback=not bool(raw_label.strip()),
-            )
-            if cluster is not None:
-                cluster_bsms, village_token = cluster
-                return self._coarse_scope_resolution(
-                    scope_bsms=cluster_bsms,
-                    bbox=self._parcel_bbox(cluster_bsms),
-                    scope_type="village_scope",
-                    source="village_cluster:gazetteer",
-                    reason="village_coarse",
-                    confidence=0.35,
-                    uncertainty_radius_m=250.0,
-                    provenance={
-                        "path": "village_cluster:gazetteer",
-                        "village": village_token,
-                        "bsm_count": len(cluster_bsms),
-                    },
-                    diagnostics={
-                        "village": village_token,
-                        "bsm_count": len(cluster_bsms),
-                    },
-                )
-            evidence_scope = self._village_scope_from_evidence_packet(
-                spec,
-                evidence_packet,
-            )
-            if evidence_scope is not None:
-                return evidence_scope
-            return ResolvedSpatialRef(
-                final_bsms=[],
-                confidence=0.0,
-                uncertainty_radius_m=0.0,
-                uncertainty_reason="unresolved",
-                provenance={
-                    "path": "unresolved:village_reference",
-                    "reason": "village boundary cannot become a parcel candidate pool",
-                    },
-                )
+        binding_candidates = self._candidate_set_from_l1_binding(spec, evidence_lineage)
+        if binding_candidates is not None:
+            candidates = binding_candidates
+            provenance["path"] += "+l1_binding"
 
         packet_candidates, packet_selection, packet_meta = (
             self._selected_candidate_set_from_evidence_packet(
@@ -808,42 +638,6 @@ class SpatialResolver:
                 and self.evidence_graph is not None
             ):
                 mention = self._spec_mention(spec)
-                if mention == _VILLAGE_ALL_MARKER:
-                    raw_label = (
-                        str(getattr(reference, "name", "") or "")
-                        or str((getattr(reference, "filter", None) or {}).get("label_contains") or "")
-                    )
-                    cluster = self._resolve_village_cluster(raw_label)
-                    if cluster is not None:
-                        cluster_bsms, village_token = cluster
-                        return self._coarse_scope_resolution(
-                            scope_bsms=cluster_bsms,
-                            bbox=self._parcel_bbox(cluster_bsms),
-                            scope_type="village_scope",
-                            source="village_cluster:gazetteer",
-                            reason="village_coarse",
-                            confidence=0.35,
-                            uncertainty_radius_m=250.0,
-                            provenance={
-                                "path": "village_cluster:gazetteer",
-                                "village": village_token,
-                                "bsm_count": len(cluster_bsms),
-                            },
-                            diagnostics={
-                                "village": village_token,
-                                "bsm_count": len(cluster_bsms),
-                            },
-                        )
-                    return ResolvedSpatialRef(
-                        final_bsms=[],
-                        confidence=0.0,
-                        uncertainty_radius_m=0.0,
-                        uncertainty_reason="unresolved",
-                        provenance={
-                            "path": "unresolved:village_all",
-                            "reason": "whole-village text is not target-bound parcel evidence",
-                        },
-                    )
                 if mention:
                     # Combined cells (e.g. 'Y122+X038') are split and
                     # each part resolved against EvidenceGraph; BSMs are
@@ -852,52 +646,6 @@ class SpatialResolver:
                     parts = _split_mentions(mention)
                     for part in parts:
                         part_mention = _normalize_spec_mention(part)
-                        if part_mention == _VILLAGE_ALL_MARKER:
-                            # A whole-village part inside a combined mention is
-                            # not itself parcel evidence; keep the other parts.
-                            continue
-                        if not part_mention:
-                            continue
-                        # A named natural village may exist only in report
-                        # evidence and not as a standalone KG entity.  The
-                        # GROUND stage may have produced an evidence-constrained
-                        # mapping from that name to Bundle-derived residential
-                        # clusters.  Consume the mapping as parcel references,
-                        # never as geometry; Bundle remains the only geometry
-                        # authority below in ``_filter_to_bundle``.
-                        cluster_map = getattr(
-                            self.context, "village_cluster_map", None
-                        ) or {}
-                        cluster = _village_cluster_for(
-                            part_mention,
-                            self.gazetteer,
-                            cluster_map,
-                        )
-                        if cluster is not None:
-                            cluster_bsms = [
-                                str(value).strip()
-                                for value in (cluster.get("bsms") or [])
-                                if str(value).strip()
-                            ]
-                            if cluster_bsms:
-                                evidence_bsms.extend(cluster_bsms)
-                                provenance.setdefault(
-                                    "village_cluster_evidence", []
-                                ).append(
-                                    {
-                                        "mention": part_mention,
-                                        "source": cluster.get("source", "village_cluster"),
-                                        "entity_ref": str(
-                                            cluster.get("entity_ref") or ""
-                                        ),
-                                        "confidence": float(
-                                            cluster.get("confidence", 0.0) or 0.0
-                                        ),
-                                        "provenance_refs": list(
-                                            cluster.get("provenance_refs") or []
-                                        ),
-                                    }
-                                )
                         evidence_bsms.extend(
                             self.evidence_graph.candidate_bsms(
                                 part_mention,
@@ -950,39 +698,6 @@ class SpatialResolver:
                         candidates = CandidateSet(
                             bsms=list(dict.fromkeys(evidence_bsms))
                         )
-                # GROUND flash-LLM mention enhancement: when the primary
-                # mention cannot bind, try each enhanced sub-mention through
-                # the same EvidenceGraph.  The LLM only supplied text.
-                if (
-                    not candidates.bsms
-                    and not candidates.ref_bsms
-                    and mention_enhancements
-                ):
-                    enhanced = (
-                        mention_enhancements.get(getattr(spec, "target_id", ""))
-                        or []
-                    )
-                    enhanced_bsms: list[str] = []
-                    for sub in enhanced:
-                        sub_mention = _normalize_spec_mention(str(sub))
-                        if not sub_mention:
-                            continue
-                        enhanced_bsms.extend(
-                            self.evidence_graph.candidate_bsms(
-                                sub_mention,
-                                include_ambiguous=True,
-                                max_candidates=64,
-                                hints=self._spec_hints(spec),
-                            )
-                            if self.evidence_graph is not None
-                            else []
-                        )
-                    if enhanced_bsms:
-                        candidates = CandidateSet(
-                            bsms=list(dict.fromkeys(enhanced_bsms))
-                        )
-                        provenance["path"] += "+flash_mention"
-                        provenance["enhanced_mentions"] = list(enhanced)
             if not candidates.bsms and not candidates.ref_bsms:
                 port = getattr(self.context.ports, "spatial_query", None)
                 if port is not None:
@@ -1061,54 +776,6 @@ class SpatialResolver:
 
         search_scope = None
 
-        # KG relation materialization does not always contain a nearby edge
-        # from a named natural village to its parcels. When PARSE gives an
-        # explicit village label, use the session gazetteer as the same
-        # coarse-reference fallback; this still resolves only existing BSMs
-        # from the uploaded bundle and never fabricates geometry.
-        if not final_bsms and self.gazetteer is not None:
-            try:
-                filt = getattr(spec.reference, "filter", None) or {}
-                label = str(filt.get("label_contains") or "")
-                token = label
-                for suffix in ("自然村", "村", "组"):
-                    token = token.rstrip(suffix)
-                location_facts = list(getattr(self.context, "location_facts", []) or [])
-                fact_match = next(
-                    (
-                        fact
-                        for fact in location_facts
-                        if str(getattr(fact, "normalized_name", "")) in {label, f"{token}村"}
-                    ),
-                    None,
-                )
-                if fact_match is not None:
-                    provenance["path"] += "+l1_location_fact"
-                gazetteer_bsms = _resolve_gazetteer_bsms(token, self.gazetteer)
-                gazetteer_scope_bsms = self._filter_to_bundle(gazetteer_bsms)
-                if gazetteer_scope_bsms:
-                    provenance["path"] += "+gazetteer:village"
-                    provenance["gazetteer_count"] = len(gazetteer_scope_bsms)
-                    search_scope = self._build_search_scope(
-                        scope_bsms=gazetteer_scope_bsms,
-                        bbox=self._parcel_bbox(gazetteer_scope_bsms),
-                        scope_type="village_scope",
-                        source="gazetteer:village",
-                        reason="gazetteer_village_scope",
-                        missing_requirements=self._search_scope_requirements(
-                            has_feature_identity=False,
-                            has_source_snapshot=bool(self._bundle_snapshot_digest()),
-                        ),
-                        bundle_snapshot_digest=self._bundle_snapshot_digest(),
-                        diagnostics={
-                            "scope_label": label,
-                            "gazetteer_scope_bsms": gazetteer_scope_bsms,
-                            "matched_location_fact": bool(fact_match is not None),
-                        },
-                    )
-            except Exception as exc:
-                logger.debug("[SpatialResolver] gazetteer fallback failed: %s", exc)
-
         bbox = None
         direction = getattr(spec, "direction", None)
         if direction:
@@ -1134,7 +801,6 @@ class SpatialResolver:
                 ambiguous = self._llm_resolve_ambiguous(
                     spec,
                     self._spec_mention(spec),
-                    mention_enhancements,
                 )
                 if ambiguous is not None:
                     return ambiguous
@@ -1148,36 +814,9 @@ class SpatialResolver:
             fallback = self._llm_reason_fallback(
                 spec,
                 self._spec_mention(spec),
-                mention_enhancements,
             )
             if fallback is not None:
                 return fallback
-            # 最后一步：会话村地块簇粗兜底。只有模糊村/区域提示的目标不应被
-            # 直接丢弃：把会话村聚落地块集合作为有界候选池（带不确定性），由
-            # 适宜性/LLM 去判别。几何/BSM 仍只来自 bundle gazetteer。
-            cluster = self._resolve_village_cluster("")
-            if cluster is not None:
-                cluster_bsms, village_token = cluster
-                return self._coarse_scope_resolution(
-                    scope_bsms=cluster_bsms,
-                    bbox=self._parcel_bbox(cluster_bsms),
-                    scope_type="village_scope",
-                    source="village_cluster:gazetteer:coarse_fallback",
-                    reason="village_coarse_fallback",
-                    confidence=0.3,
-                    uncertainty_radius_m=250.0,
-                    provenance={
-                        "path": "village_cluster:gazetteer:coarse_fallback",
-                        "village": village_token,
-                        "bsm_count": len(cluster_bsms),
-                        "prior": provenance,
-                    },
-                    diagnostics={
-                        "village": village_token,
-                        "bsm_count": len(cluster_bsms),
-                        "prior_path": str(provenance.get("path", "") or ""),
-                    },
-                )
             return ResolvedSpatialRef(
                 final_bsms=[],
                 bbox=None,
@@ -1232,25 +871,6 @@ class SpatialResolver:
             )
             confidence = 0.8
 
-        path = str(provenance.get("path", "") or "")
-        if not reference_geometries and final_bsms and "+flash_mention" in path:
-            search_scope = self._build_search_scope(
-                scope_bsms=final_bsms,
-                bbox=self._parcel_bbox(final_bsms),
-                scope_type="parcel_set" if len(final_bsms) > 1 else "parcel_extent",
-                source="flash_mention",
-                reason="flash_mention_scope",
-                missing_requirements=self._search_scope_requirements(
-                    has_feature_identity=False,
-                    has_source_snapshot=bool(self._bundle_snapshot_digest()),
-                ),
-                bundle_snapshot_digest=self._bundle_snapshot_digest(),
-                diagnostics={
-                    "enhanced_mentions": list(provenance.get("enhanced_mentions", []) or []),
-                    "scope_seed_parcel_bsms": list(final_bsms),
-                },
-            )
-            final_bsms = []
         uncertainty_reason = ""
         uncertainty_radius_m = 0.0
         if not final_bsms and search_scope is not None and not reference_geometries:
@@ -1439,6 +1059,53 @@ class SpatialResolver:
             },
         )
 
+    def _candidate_set_from_l1_binding(
+        self,
+        spec: Any,
+        evidence_lineage: Dict[str, Any],
+    ) -> Any:
+        """Return current L1-bound parcel identities for an exact mention."""
+        from app.contracts.spatial.spatial_reference_contracts import CandidateSet
+
+        mention = self._spec_mention(spec).strip().casefold()
+        if not mention:
+            return None
+        observations = {
+            str(getattr(item, "observation_id", "") or ""): item
+            for item in getattr(self.context, "evidence_observations", []) or []
+        }
+        matches = []
+        for binding in getattr(self.context, "grounded_bindings", []) or []:
+            if str(getattr(binding, "status", "") or "") != "resolved":
+                continue
+            names = []
+            for ref in getattr(binding, "observation_refs", []) or []:
+                observation = observations.get(str(ref))
+                if observation is None:
+                    continue
+                names.extend((
+                    str(getattr(observation, "mention", "") or ""),
+                    str(getattr(observation, "normalized_name", "") or ""),
+                    *(str(value) for value in (getattr(observation, "aliases", []) or [])),
+                ))
+            if any(name.strip().casefold() == mention for name in names if name.strip()):
+                matches.append(binding)
+        if len(matches) != 1:
+            return None
+        binding = matches[0]
+        bsms = self._filter_to_bundle(list(getattr(binding, "source_bsms", []) or []))
+        if not bsms:
+            return None
+        evidence_lineage["entity_refs"].extend(
+            str(getattr(binding, "canonical_entity_ref", "") or ""),
+        )
+        evidence_lineage["relation_refs"].extend(
+            str(value) for value in (getattr(binding, "relation_evidence_refs", []) or [])
+        )
+        evidence_lineage["l1_fact_refs"].extend(
+            str(value) for value in (getattr(binding, "observation_refs", []) or [])
+        )
+        return CandidateSet(bsms=list(dict.fromkeys(bsms)))
     def _selected_candidate_set_from_evidence_packet(
         self,
         spec: Any,
@@ -1563,16 +1230,9 @@ class SpatialResolver:
                 unique_refs,
             )
             if picked is None:
-                llm_enabled = str(
-                    os.getenv("GROUND_LLM_ENABLED", "false")
-                ).strip().lower() in {"1", "true", "yes", "on"}
-                llm_disabled = (
-                    not llm_enabled
-                    or str(os.getenv("DISABLE_GROUND_LLM", "")).strip().lower()
-                    in {"1", "true", "yes", "on"}
-                    or str(os.getenv("DISABLE_LLM", "")).strip().lower()
-                    in {"1", "true", "yes", "on"}
-                )
+                from app.core.llm_config import get_llm_settings
+
+                llm_disabled = get_llm_settings().ground_llm_is_disabled()
                 meta.update({
                     "packet_selection_status": "selection_unresolved",
                     "selection_contract_status": "ambiguous",
@@ -2445,7 +2105,6 @@ class SpatialResolver:
         self,
         spec: Any,
         mention: str,
-        mention_enhancements: Optional[Dict[str, List[str]]] = None,
         extra_candidates: Optional[List[Any]] = None,
     ) -> Optional["ResolvedSpatialRef"]:
         """有界 LLM best-effort（设计 §4.3）：在 Recall 候选内判别，不新增 BSM/几何。
@@ -2456,7 +2115,7 @@ class SpatialResolver:
         绝不降级为第一个候选，也绝不伪造几何/BSM。
         """
         ordered = extra_candidates or self._collect_llm_candidates(
-            spec, mention, mention_enhancements
+            spec, mention
         )
         if not ordered:
             return None
@@ -2504,8 +2163,6 @@ class SpatialResolver:
         if self.evidence_graph is None:
             return []
         sub_mentions = [mention]
-        for sub in (mention_enhancements or {}).get(getattr(spec, "target_id", ""), []) or []:
-            sub_mentions.append(_normalize_spec_mention(str(sub)))
         hints = self._spec_hints(spec)
         for sub in sub_mentions:
             if not sub:
@@ -2583,18 +2240,9 @@ class SpatialResolver:
 
     @staticmethod
     def _ground_llm_disabled() -> bool:
-        enabled = str(os.getenv("GROUND_LLM_ENABLED", "false")).strip().lower() in {
-            "1", "true", "yes", "on",
-        }
-        disabled = any(
-            str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
-            for name in (
-                "DISABLE_LLM",
-                "DISABLE_GROUND_LLM",
-                "DISABLE_GROUND_REPORT_LLM",
-            )
-        )
-        return not enabled or disabled
+        from app.core.llm_config import get_llm_settings
+
+        return get_llm_settings().ground_llm_is_disabled()
 
     def _llm_select_candidate_id(
         self,
@@ -2641,8 +2289,10 @@ class SpatialResolver:
             return None
         try:
             from app.infrastructure.llm.factory import create_flash_llm
+            from app.core.llm_config import get_llm_settings
 
             llm = create_flash_llm(max_tokens=800, temperature=0.1)
+            ground_settings = get_llm_settings()
             lines = chr(10).join(candidate_lines)
             hint_clause = f"《{hints}》" if hints else ""
             prompt = (
@@ -2656,12 +2306,13 @@ class SpatialResolver:
                 f"本次 input_digest={input_digest};"
                 "不要输出序号或新 ID：\n" + lines
             )
-            from app.infrastructure.llm.structured import run_structured_output_sync
+            from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
 
             # This resolver is intentionally synchronous at the spatial
             # aggregate boundary. Bound the typed provider call in a
             # short-lived worker and keep the shared grounding gate around it;
-            # the async L1 fan-out is implemented in ground_l1_anchors.
+            # the async candidate-selection fan-out is implemented by the
+            # current GROUND stage.
             executor = ThreadPoolExecutor(max_workers=1)
             sync_gate = ground_llm_sync_semaphore(self._ground_llm_budget)
 
@@ -2673,12 +2324,28 @@ class SpatialResolver:
                 if not acquired:
                     raise TimeoutError("grounding LLM semaphore queue timeout")
                 try:
-                    return run_structured_output_sync(
-                        CandidateSelectionProposal,
+                    return get_llm_manager().run_structured_sync(
+                        LLMCallSpec(
+                            stage="GROUND",
+                            contract_key="ground.candidate_selection",
+                            response_model=CandidateSelectionProposal,
+                            call_type="closed_set",
+                            max_retries=ground_settings.ground_parse_retries,
+                            timeout_s=call_timeout,
+                            max_tokens=ground_settings.ground_max_tokens,
+                            incomplete_output_max_tokens=ground_settings.incomplete_output_max_tokens,
+                            max_concurrent=ground_settings.stage_concurrency("ground"),
+                            semaphore_scope="ground",
+                            temperature=0.1,
+                            allow_content_json=True,
+                            timeout_includes_queue=False,
+                        ),
                         [{"role": "user", "content": prompt}],
                         llm=llm,
-                        max_retries=1,
-                        timeout=call_timeout,
+                        context={
+                            "candidate_kind": candidate_kind,
+                            "decision_id": decision_id,
+                        },
                     )
                 finally:
                     sync_gate.release()
@@ -2996,51 +2663,6 @@ class SpatialResolver:
         )
 
 
-    def _resolve_village_cluster(
-        self,
-        label: str,
-        *,
-        allow_session_fallback: bool = True,
-    ):
-        """Village-level reference -> village parcel cluster via the gazetteer.
-
-        Design 4.3 / spatial reasoning: a target located only by its village
-        (kind==village, whole-village mention, or sfWithin the session village)
-        must not be dropped.  Resolve the named village to its parcel cluster
-        from the uploaded-bundle gazetteer as a coarse candidate pool; the
-        geometry/BSM are always real bundle parcels, never fabricated.  Falls
-        back to the session village when the spec carries no label.
-        """
-        if self.gazetteer is None:
-            return None
-
-        def _candidates_for(token: str):
-            if not token:
-                return None
-            bsms = _resolve_gazetteer_bsms(token, self.gazetteer)
-            if not bsms:
-                return None
-            final = self._filter_to_bundle(bsms)
-            if not final:
-                return None
-            return final, token
-
-        token = str(label or "").strip()
-        for suffix in ("\u81ea\u7136\u6751", "\u6751", "\u7ec4"):
-            token = token.rstrip(suffix)
-        result = _candidates_for(token)
-        if result is not None:
-            return result
-        if not allow_session_fallback:
-            return None
-        # The label is often a whole-village phrase (e.g. "全村40处隐患点")
-        # that the gazetteer cannot name-match.  Fall back to the session
-        # village parcel cluster so the target still gets a bounded pool.
-        village = str(getattr(self.context, "village_name", "") or "").strip()
-        for suffix in ("\u81ea\u7136\u6751", "\u6751", "\u7ec4"):
-            village = village.rstrip(suffix)
-        return _candidates_for(village)
-
     def _spec_mention(self, spec: Any) -> str:
         ref = getattr(spec, "reference", None)
         if ref is None:
@@ -3065,26 +2687,6 @@ class SpatialResolver:
             return None
         return resolve_directional_bbox(center, direction)
 
-    # ── 3. Intent anchors (PARSE location hints) ───────────────────
-
-    def resolve_anchors(
-        self,
-        intent: Any,
-        village_cluster_map: Optional[Dict[str, Dict[str, Any]]] = None,
-    ) -> int:
-        """Fill intent target candidate_bsms / anchors from gazetteer + KG anchors."""
-        snapshot = getattr(getattr(self.context, "workspace", None), "snapshot", None)
-        return resolve_intent_anchors(
-            intent,
-            gazetteer=self.gazetteer,
-            village_anchors=self.context.village_anchors,
-            village_name=self.context.village_name,
-            village_cluster_map=village_cluster_map,
-            bundle_snapshot_ref=(
-                f"bundle-snapshot:{snapshot.snapshot_id}" if snapshot else ""
-            ),
-        )
-
     # ── 4. Deterministic bundle binding (BSM-first) ────────────────
 
     def bind(self, instructions: Any) -> Dict[str, Any]:
@@ -3099,258 +2701,4 @@ class SpatialResolver:
         return binder.bind(instructions, gazetteer=self.gazetteer)
 
 
-# ── Module-level anchor resolution (context-free convenience) ──────────
-# Owned by the resolver package so ``parse/agent.py`` delegates to it instead
-# of reimplementing gazetteer token matching.
-
-
-def resolve_intent_anchors(
-    intent: Any,
-    *,
-    gazetteer: Any = None,
-    village_anchors: Optional[List[Dict[str, Any]]] = None,
-    village_name: str = "",
-    village_cluster_map: Optional[Dict[str, Dict[str, Any]]] = None,
-    bundle_snapshot_ref: str = "",
-) -> int:
-    """Resolve intent location hints into candidate BSMs / coordinate anchors.
-
-    Mirrors the previous ``parse/agent.py:resolve_spatial_anchors`` contract,
-    moved into grounding so GROUND owns all gazetteer/KG anchor resolution.
-    Only reads gazetteer + KG anchors; never writes. Returns resolved count.
-    ``village_cluster_map`` maps a natural-village name to a bundle-derived
-    residential cluster {centroid, bsms, confidence}; it is a deterministic
-    fallback when the gazetteer lacks a named village entry.
-    """
-    if gazetteer is None and not village_anchors:
-        return 0
-
-    resolved = 0
-    kg_anchors: List[Dict[str, Any]] = []
-    for anchor in village_anchors or []:
-        try:
-            lon = float(anchor.get("lon"))
-            lat = float(anchor.get("lat"))
-        except (TypeError, ValueError, AttributeError):
-            continue
-        if lon == 0 and lat == 0:
-            continue
-        kg_anchors.append({"name": str(anchor.get("name") or ""), "lon": lon, "lat": lat})
-
-    for zt in (getattr(intent, "zone_targets", None) or []):
-        location = ""
-        if getattr(zt, "spatial_preference", None) is not None:
-            location = zt.spatial_preference.reference or ""
-        if not location and getattr(zt, "semantic", None) is not None:
-            location = getattr(zt.semantic, "spatial_hint", "") or ""
-        for token in _extract_location_tokens(location):
-            hit = _village_cluster_for(token, gazetteer, village_cluster_map)
-            bsms = (hit.get("bsms") if hit else None) or []
-            if bsms and not any(b in (zt.candidate_bsms or []) for b in bsms):
-                zt.candidate_bsms.extend(bsms)
-                resolved += 1
-
-    for ft in (getattr(intent, "facilities", None) or []):
-        location = (getattr(ft, "location_hint", "") or getattr(ft, "anchor_village", "")) or ""
-        for token in _extract_location_tokens(location):
-            hit = _village_cluster_for(token, gazetteer, village_cluster_map)
-            bsms = (hit.get("bsms") if hit else None) or []
-            if bsms and not any(b in (ft.candidate_bsms or []) for b in bsms):
-                ft.candidate_bsms.extend(bsms)
-                resolved += 1
-        if getattr(ft, "anchor_point", None) is None and kg_anchors:
-            matched = next(
-                (a for a in kg_anchors if a["name"] and a["name"] in location),
-                None,
-            )
-            if matched:
-                ft.anchor_point = (matched["lon"], matched["lat"])
-                ft.semantic.reasoning_trace = "KG village anchor matched by location hint"
-                resolved += 1
-
-    for ax in (getattr(intent, "development_axes", None) or []):
-        location = (getattr(ax, "reference_feature", "")
-                    or (getattr(getattr(ax, "semantic", None), "spatial_hint", "") or ""))
-        for token in _extract_location_tokens(location):
-            bsms = _resolve_gazetteer_bsms(token, gazetteer)
-            if bsms and not any(b in (ax.corridor_bsms or []) for b in bsms):
-                ax.corridor_bsms.extend(bsms)
-                resolved += 1
-
-    for rt in [
-        *(getattr(intent, "road_targets", None) or []),
-        *(getattr(intent, "linear_targets", None) or []),
-    ]:
-        location = (
-            getattr(rt, "location_hint", "")
-            or (getattr(getattr(rt, "semantic", None), "spatial_hint", "") or "")
-        )
-        connects = list(getattr(rt, "connects", None) or [])
-        text = " ".join([str(location or ""), " ".join(connects)])
-        anchors: List[tuple] = []
-        endpoint_hits: List[Dict[str, Any] | None] = []
-        seen_tokens: set = set()
-        for token in _extract_location_tokens(text):
-            if token in seen_tokens:
-                continue
-            seen_tokens.add(token)
-            if _direction_from_connects(token) is not None:
-                continue
-            hit = _village_cluster_for(token, gazetteer, village_cluster_map)
-            if hit is None:
-                continue
-            bsms = list(hit.get("bsms") or [])
-            for b in bsms:
-                if str(b) not in (rt.candidate_bsms or []):
-                    rt.candidate_bsms.append(str(b))
-                    resolved += 1
-            centroid = hit.get("centroid")
-            if centroid and len(anchors) < 2:
-                anchors.append((float(centroid[0]), float(centroid[1])))
-                endpoint_hits.append(hit)
-        # Raw connect values may be numbered roads (122乡道) or natural
-        # villages that token stripping removed; try them verbatim too.
-        for conn in connects:
-            key = str(conn or "").strip()
-            if not key or key in seen_tokens:
-                continue
-            seen_tokens.add(key)
-            hit = _village_cluster_for(key, gazetteer, village_cluster_map)
-            if hit is None:
-                continue
-            for b in (hit.get("bsms") or []):
-                if str(b) not in (rt.candidate_bsms or []):
-                    rt.candidate_bsms.append(str(b))
-                    resolved += 1
-            centroid = hit.get("centroid")
-            if centroid and len(anchors) < 2:
-                anchors.append((float(centroid[0]), float(centroid[1])))
-                endpoint_hits.append(hit)
-        center = _first_village_center(kg_anchors)
-        if center is not None:
-            for conn in connects:
-                direction = _direction_from_connects(str(conn))
-                if not direction:
-                    continue
-                from .grounding import resolve_directional_bbox
-
-                bbox = resolve_directional_bbox(center, direction, radius_m=800)
-                if bbox:
-                    lon0, lat0, lon1, lat1 = bbox
-                    anchors.append(((lon0 + lon1) / 2.0, (lat0 + lat1) / 2.0))
-                    endpoint_hits.append(None)
-        if anchors and getattr(rt, "start_anchor", None) is None:
-            rt.start_anchor = anchors[0]
-            resolved += 1
-        if len(anchors) > 1 and getattr(rt, "end_anchor", None) is None:
-            rt.end_anchor = anchors[1]
-            resolved += 1
-        if len(anchors) >= 2:
-            from app.contracts.domain.road_planning import RoadEndpointEvidence
-
-            for role, field_name, coordinate, hit in (
-                ("start", "start_endpoint", anchors[0], endpoint_hits[0]),
-                ("end", "end_endpoint", anchors[1], endpoint_hits[1]),
-            ):
-                if getattr(rt, field_name, None) is not None or hit is None:
-                    continue
-                bsms = list(hit.get("bsms") or [])
-                source_ref = str(hit.get("source_artifact_ref") or bundle_snapshot_ref)
-                feature_id = str(hit.get("source_feature_id") or (bsms[0] if bsms else ""))
-                evidence_refs = list(hit.get("provenance_refs") or [])
-                evidence_refs.extend(f"bundle-parcel:{bsm}" for bsm in bsms)
-                entity_ref = str(hit.get("entity_ref") or "")
-                if not source_ref or not (feature_id or entity_ref) or not evidence_refs:
-                    continue
-                setattr(
-                    rt,
-                    field_name,
-                    RoadEndpointEvidence(
-                        role=role,
-                        resolution_status="resolved",
-                        entity_ref=entity_ref or None,
-                        coordinate=coordinate,
-                        coordinate_crs=str(hit.get("coordinate_crs") or "EPSG:4326"),
-                        source_artifact_ref=source_ref,
-                        source_feature_id=feature_id,
-                        evidence_refs=list(dict.fromkeys(evidence_refs)),
-                    ),
-                )
-                resolved += 1
-
-    for prj in (getattr(intent, "site_area_targets", None) or []):
-        location = (getattr(prj, "location_hint", "")
-                    or (getattr(getattr(prj, "semantic", None), "spatial_hint", "") or ""))
-        for token in _extract_location_tokens(location):
-            bsms = _resolve_gazetteer_bsms(token, gazetteer)
-            if bsms and not any(b in (prj.candidate_bsms or []) for b in bsms):
-                prj.candidate_bsms.extend(bsms)
-                resolved += 1
-        if not (prj.candidate_bsms or []) and kg_anchors:
-            text = f"{prj.name} {location}"
-            matched = next(
-                (a for a in kg_anchors if a["name"] and a["name"] in text),
-                None,
-            )
-            if matched:
-                prj.semantic.reasoning_trace = "KG village anchor matched by project location hint"
-
-    for rt in [
-        *(getattr(intent, "road_targets", None) or []),
-        *(getattr(intent, "linear_targets", None) or []),
-    ]:
-        if not kg_anchors:
-            continue
-        text = " ".join([
-            str(getattr(rt, "road_level", "") or ""),
-            str(getattr(rt, "connects", "") or ""),
-            str(getattr(getattr(rt, "semantic", None), "natural_language_description", "") or ""),
-        ])
-        candidates = [a for a in kg_anchors if a["name"] and a["name"] in text]
-        if len(candidates) < 2:
-            continue
-        if "南北" in text:
-            start, end = min(candidates, key=lambda a: a["lat"]), max(candidates, key=lambda a: a["lat"])
-        elif "东西" in text:
-            start, end = min(candidates, key=lambda a: a["lon"]), max(candidates, key=lambda a: a["lon"])
-        else:
-            start, end = min(candidates, key=lambda a: (a["lon"], a["lat"])), max(candidates, key=lambda a: (a["lon"], a["lat"]))
-        if getattr(rt, "start_anchor", None) is None:
-            rt.start_anchor = (start["lon"], start["lat"])
-        if getattr(rt, "end_anchor", None) is None:
-            rt.end_anchor = (end["lon"], end["lat"])
-        if not getattr(rt, "connects", None):
-            rt.connects = [start["name"], end["name"]]
-        rt.semantic.reasoning_trace = "KG village anchors inferred road endpoints; requires route validation"
-        resolved += 1
-
-    if resolved:
-        logger.info("[SpatialResolver] anchors resolved: %d entities", resolved)
-    return resolved
-
-
-def resolve_spatial_anchors(
-    intent: Any,
-    village_name: str = "",
-    village_anchors: Optional[List[Dict[str, Any]]] = None,
-    gazetteer: Any = None,
-) -> int:
-    """将 intent 中位置文本解析为具体 BSM 集。
-
-    Thin wrapper around resolve_intent_anchors. The gazetteer should be
-    passed by the caller (loaded via PlanningContext). If not provided,
-    resolution is skipped (returns 0).
-    Migrated from the legacy select parse agent's resolve_spatial_anchors (Wave M2).
-    """
-    if gazetteer is None and not village_anchors:
-        return 0
-
-    return resolve_intent_anchors(
-        intent,
-        gazetteer=gazetteer,
-        village_anchors=village_anchors,
-        village_name=village_name,
-    )
-
-
-__all__ = ["SpatialResolver", "resolve_intent_anchors", "resolve_spatial_anchors"]
+__all__ = ["SpatialResolver"]

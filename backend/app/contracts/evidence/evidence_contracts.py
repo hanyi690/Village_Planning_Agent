@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from app.contracts.artifacts.contract_meta import ContractMeta
@@ -29,6 +31,8 @@ class ExplorationRequest(BaseModel):
     project_wide: bool = False
     candidate_offset: int = Field(default=0, ge=0)
     candidate_limit: int = Field(default=12, ge=1, le=64)
+    project_cognition_digest: str = ""
+    project_scope: dict[str, Any] = Field(default_factory=dict)
     requirements: list[EvidenceRequirement] = Field(default_factory=list)
 
 

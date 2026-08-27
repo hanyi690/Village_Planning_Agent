@@ -9,7 +9,6 @@ not a summary model and never becomes authoritative planning input.
 
 from __future__ import annotations
 
-import asyncio
 import re
 from functools import lru_cache
 from typing import Any, Dict, List, Literal, Optional
@@ -114,6 +113,8 @@ async def generate_summary_model(
     dimension_key: str,
     layer: int,
     content: str,
+    *,
+    source_artifact: Any,
 ) -> BaseDimensionSummary:
     """Generate a strict, display-only summary object.
 
@@ -124,17 +125,24 @@ async def generate_summary_model(
 
     from app.core.settings import BACKGROUND_SUMMARY_ENRICHMENT
 
-    if not BACKGROUND_SUMMARY_ENRICHMENT or not content:
+    if source_artifact is None:
+        raise TypeError("source_artifact is required for display summary generation")
+    if not BACKGROUND_SUMMARY_ENRICHMENT:
         return build_derived_summary(
             dimension_key,
             layer,
             word_count=len(content or ""),
-            text_summary="" if not content else str(content)[:200],
-            summary_status="resolved" if not content else "deterministic",
+            text_summary="",
+            summary_status="disabled",
         )
 
     try:
-        result = await _instructor_generate(dimension_key, layer, content)
+        result = await _instructor_generate(
+            dimension_key,
+            layer,
+            content,
+            source_artifact=source_artifact,
+        )
         if result is not None:
             return result
     except Exception as exc:
@@ -153,18 +161,25 @@ async def _instructor_generate(
     dimension_key: str,
     layer: int,
     content: str,
+    *,
+    source_artifact: Any,
 ) -> Optional[BaseDimensionSummary]:
     """Use the dimension-specific strict schema and return the typed object."""
-    from app.infrastructure.llm.instructor_client import get_instructor_client, get_structured_model
-
     dim_schema = derived_summary_schema(dimension_key)
-    client = get_instructor_client()
-    model = get_structured_model()
+    from app.core.settings import LLM_STREAM_TIMEOUT
+    from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
 
     metrics_desc = get_metrics_description(dimension_key)
     metrics_hint = "\n".join(f"  - {k}: {v}" for k, v in metrics_desc.items())
 
-    prompt = f"""分析以下规划报告，提取仅用于展示的结构化摘要。
+    import json
+
+    artifact_text = (
+        source_artifact
+        if isinstance(source_artifact, str)
+        else json.dumps(source_artifact, ensure_ascii=False, sort_keys=True)
+    )
+    prompt = f"""分析以下规划报告的结构化语义 artifact，提取仅用于展示的结构化摘要。
 
 维度: {dimension_key} (Layer {layer})
 报告字数: {len(content)}
@@ -180,18 +195,24 @@ async def _instructor_generate(
 - 只使用报告原文明确支持的信息；不确定、未出现或无法确认的内容必须留空/null，不得补默认值或推断
 - authority、dimension_key、layer、word_count、summary_source、summary_status 由代码校验并覆盖
 
-报告内容（前3000字）:
-{content[:3000]}"""
+语义 artifact（完整输入）:
+{artifact_text}"""
 
     try:
-        summary = await asyncio.to_thread(
-            client.chat.completions.create,
-            model=model,
-            max_tokens=800,
-            temperature=0.1,
-            max_retries=2,
-            response_model=dim_schema,
-            messages=[{"role": "user", "content": prompt}],
+        summary = await get_llm_manager().run_structured(
+            LLMCallSpec(
+                stage="SUMMARY",
+                contract_key="display.summary",
+                response_model=dim_schema,
+                call_type="report",
+                max_retries=1,
+                timeout_s=float(LLM_STREAM_TIMEOUT),
+                max_tokens=800,
+                temperature=0.1,
+                semaphore_scope="summary",
+                allow_content_json=True,
+            ),
+            [{"role": "user", "content": prompt}],
         )
     except Exception as e:
         logger.warning(f"[summary] Instructor call failed for {dimension_key}: {e}")

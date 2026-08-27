@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .expr_eval import Condition, MappingContext, condition_from_yaml
 from .loader import MappingTable
-from app.domain.validation.closed_set import CandidateDescriptor, candidate_set_digest
+from app.contracts.llm.closed_set_contracts import CandidateDescriptor, candidate_set_digest
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)

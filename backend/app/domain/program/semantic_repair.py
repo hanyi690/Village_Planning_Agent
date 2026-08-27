@@ -11,13 +11,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from collections.abc import Iterable, Sequence
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.contracts.domain.l3_contracts import (
     InterventionDependency,
@@ -263,56 +262,16 @@ def _build_prompt(program: PlanningProgram, feedback: Sequence[str]) -> str:
 
 
 def _dynamic_repair_model(program: PlanningProgram) -> type[BaseModel]:
-    """Create the operation schema from this program's IDs and evidence refs."""
-    target_ids = tuple(sorted({item.target_id for item in program.interventions if item.target_id}))
-    evidence_refs = _available_evidence_refs(program)
-    evidence_ids = tuple(sorted({ref.ref_id for ref in evidence_refs}))
-    namespaces = tuple(sorted({ref.namespace for ref in evidence_refs}))
-    decision_ids = (*target_ids, "program") if target_ids else ("program",)
+    """Return the stable operation union; runtime closure stays local.
 
-    decision_type = Literal.__getitem__(decision_ids)
-    dynamic_abstain = create_model(
-        f"Abstain_{stable_digest(decision_ids)[:12]}",
-        __base__=Abstain,
-        decision_ref=(decision_type, ...),
-    )
-
-    if not target_ids or not evidence_ids or not namespaces:
-        operation_type = Annotated[dynamic_abstain, Field(discriminator="operation")]
-    else:
-        target_type = Literal.__getitem__(target_ids)
-        namespace_type = Literal.__getitem__(namespaces)
-        evidence_id_type = Literal.__getitem__(evidence_ids)
-        dynamic_evidence_ref = create_model(
-            f"RepairEvidenceRef_{stable_digest((evidence_ids, namespaces))[:12]}",
-            __base__=ClosedSetRef,
-            namespace=(namespace_type, ...),
-            ref_id=(evidence_id_type, ...),
-        )
-        dynamic_merge = create_model(
-            f"DuplicateMerge_{stable_digest(target_ids)[:12]}",
-            __base__=DuplicateMerge,
-            canonical_target_id=(target_type, ...),
-            duplicate_target_ids=(list[target_type], Field(min_length=1)),
-            evidence_refs=(list[dynamic_evidence_ref], Field(min_length=1)),
-        )
-        dynamic_dependency = create_model(
-            f"DependencyEdge_{stable_digest(target_ids)[:12]}",
-            __base__=DependencyEdge,
-            from_intervention_id=(target_type, ...),
-            to_intervention_id=(target_type, ...),
-            evidence_refs=(list[dynamic_evidence_ref], Field(min_length=1)),
-        )
-        operation_type = Annotated[
-            dynamic_merge | dynamic_dependency | dynamic_abstain,
-            Field(discriminator="operation"),
-        ]
-
-    return create_model(
-        f"ProgramSemanticRepairCandidate_{_candidate_set_digest(program)[:12]}",
-        __base__=ProgramSemanticRepairCandidate,
-        operations=(list[operation_type], Field(min_length=1, max_length=240)),
-    )
+    The current program's target and evidence IDs are still rendered in the
+    prompt and checked by ``_validation_errors``.  They are not expanded into
+    ``Literal`` fields because that would make the provider schema vary with
+    every program and can produce an oversized nested union.
+    """
+    if not isinstance(program, PlanningProgram):
+        raise TypeError("semantic repair requires a PlanningProgram")
+    return ProgramSemanticRepairCandidate
 
 
 def _duplicate_map(candidate: ProgramSemanticRepairCandidate) -> dict[str, str]:
@@ -695,12 +654,9 @@ async def repair_planning_program(
         )
 
     if llm is None:
-        enabled = str(os.getenv("L3_SEMANTIC_REPAIR_LLM_ENABLED", "false")).strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
+        from app.core.llm_config import get_llm_settings
+
+        enabled = get_llm_settings().semantic_repair_enabled
         if not enabled:
             disabled_issue = ProgramIssue(
                 stage="l3",
@@ -772,6 +728,7 @@ async def repair_planning_program(
                     },
                     {"role": "user", "content": prompt},
                 ],
+                contract_key="program.semantic_repair",
                 semantic_validator=lambda decision_context, proposal: _validation_outcome(
                     decision_context,
                     program,
@@ -782,6 +739,7 @@ async def repair_planning_program(
                 max_retries=0,
                 timeout=timeout_seconds,
                 max_tokens=8192,
+                allow_content_json=True,
             )
             result_pending = result.pending
             result_issues = result.issues

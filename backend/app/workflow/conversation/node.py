@@ -9,16 +9,10 @@ cacheable, and testable in isolation.
 Conversation routing is part of the current workflow graph described by docs/architecture/CURRENT_RUNTIME.md.
 """
 
-from typing import Dict, Any, Optional, TYPE_CHECKING
+from typing import Dict, Any
 
-from app.core.settings import LLM_MODEL, MAX_TOKENS
-from app.infrastructure.llm.factory import create_llm
 from app.infrastructure.logging import get_logger
 from app.workflow.layers.phase_machine import PlanningPhase, PHASE_DESCRIPTIONS
-
-if TYPE_CHECKING:
-    from langchain_core.prompts import ChatPromptTemplate
-    from langchain_core.runnables import RunnableSerializable
 
 logger = get_logger(__name__)
 
@@ -53,10 +47,6 @@ SYSTEM_TEMPLATE = """你是村庄规划助手，正在进行 {project_name} 的�
 - 其他对话 -> 直接回复"""
 
 
-# Module-level cached chain (LLM + bind_tools is static)
-_llm_with_tools: Optional[Any] = None
-
-
 def _bind_tool_list() -> list[Any]:
     """Intent tools plus the EXPLORE access-tool scope."""
     from app.infrastructure.llm.tools.intent_tools import advance_planning_intent, gis_analysis
@@ -67,22 +57,6 @@ def _bind_tool_list() -> list[Any]:
         gis_analysis,
         *ToolRegistry.for_agent("explore"),
     ]
-
-
-def _get_llm_with_tools() -> Any:
-    """Lazy-init the LLM+tools chain (cached across calls).
-
-    Binds the two intent tools plus the EXPLORE access-tool scope so the model
-    can both route planning intents and answer exploration questions by reading
-    session data (bundle / spatial / reports / KG / RAG).
-    """
-    global _llm_with_tools
-    if _llm_with_tools is None:
-        # Do not pin the primary provider's model here: MiniMax and other
-        # OpenAI-compatible providers have their own valid model ids.
-        llm = create_llm(temperature=0.7, max_tokens=MAX_TOKENS)
-        _llm_with_tools = llm.bind_tools(_bind_tool_list())
-    return _llm_with_tools
 
 
 def _build_prompt(state: Dict[str, Any]) -> Any:
@@ -131,10 +105,20 @@ async def conversation_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 return {}
 
-    llm_with_tools = _get_llm_with_tools()
     prompt = _build_prompt(state)
-    chain = prompt | llm_with_tools
-    response = await chain.ainvoke({"messages": messages})
+    prompt_value = prompt.invoke({"messages": messages})
+    from app.infrastructure.llm.manager import get_llm_manager
+
+    response = await get_llm_manager().run_tool_calling(
+        stage="conversation",
+        contract_key="conversation.tool_routing",
+        messages=list(prompt_value.messages),
+        tools=_bind_tool_list(),
+        context={
+            "session_id": state.get("session_id", ""),
+            "phase": state.get("phase", ""),
+        },
+    )
 
     tool_calls = getattr(response, 'tool_calls', None)
     has_content = bool(getattr(response, 'content', None))

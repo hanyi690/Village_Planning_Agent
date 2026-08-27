@@ -17,7 +17,7 @@ import json
 
 from app.core.settings import (
     CHROMA_COLLECTION_NAME, CHROMA_PERSIST_DIR,
-    DASHSCOPE_API_KEY, OUTLINE_INDEX_DIR,
+    ALIYUN_EMBEDDING_MODEL, DASHSCOPE_API_BASE, DASHSCOPE_API_KEY, OUTLINE_INDEX_DIR,
     RETRIEVE_SCORE_THRESHOLD, MAX_MERGE_CONTENT_LENGTH,
 )
 from app.infrastructure.logging import get_logger
@@ -159,8 +159,8 @@ class VectorStoreCache:
                         raise ValueError("未设置 DASHSCOPE_API_KEY")
                     model = AliyunEmbeddings(
                         api_key=DASHSCOPE_API_KEY,
-                        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-                        model="text-embedding-v4",
+                        base_url=DASHSCOPE_API_BASE,
+                        model=ALIYUN_EMBEDDING_MODEL,
                     )
                     from app.core.settings import EMBEDDING_MAX_CONCURRENT, EMBEDDING_RATE_LIMIT_RPS
                     from app.infrastructure.llm.rate_limiter import get_embedding_rate_limiter

@@ -532,7 +532,11 @@ async def l3_aggregate(
     fragments: list[L3ProgramFragment] = []
     for dim_key, rec in raw_reports.items():
         rec = rec or {}
-        content = rec.get("instruction") or rec.get("content", "")
+        content = rec.get("instruction")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError(
+                f"L3 report {dim_key} is missing its typed PlanningClaimSet payload"
+            )
         report_id = rec.get("report_id", f"rpt-{dim_key}-v1")
         try:
             claim_set = PlanningClaimSet.model_validate_json(content)

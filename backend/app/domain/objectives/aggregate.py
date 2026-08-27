@@ -30,6 +30,8 @@ from app.contracts.artifacts.provenance import Provenance
 from app.infrastructure.artifacts.fingerprint import semantic_checksum
 from app.infrastructure.reports.review_package import write_review_package
 from app.infrastructure.logging import get_logger
+from app.domain.validation.l1_fact_catalog import build_l1_fact_catalog
+from app.domain.validation.l2_boundary import normalize_l2_decision_boundary
 
 from .gate import evaluate_l2_gate
 from .review import build_l2_review_package
@@ -294,6 +296,10 @@ async def l2_aggregate(
     except Exception as exc:  # fail closed below when refs are present
         logger.warning("[l2_aggregate] unable to load L1 fact identity set: %s", exc)
 
+    l1_fact_catalog = build_l1_fact_catalog(
+        {"fact_id": value} for value in known_l1_fact_ids
+    )
+
     store = ReportStore.get_instance()
     raw_reports = await store.get_layer_reports_with_sources(session_id, layer=2)
 
@@ -304,11 +310,15 @@ async def l2_aggregate(
         try:
             payload = instruction if isinstance(instruction, dict) else json.loads(instruction)
             decision = _normalize_decision_set(payload, dimension_key=dim_key)
+            decision = normalize_l2_decision_boundary(
+                decision,
+                catalog=l1_fact_catalog,
+            ).decision
             from app.domain.validation.l2_closure import validate_l2_decision_set
 
             validate_l2_decision_set(
                 decision,
-                known_l1_fact_ids=known_l1_fact_ids,
+                known_l1_fact_ids=set(l1_fact_catalog.usable_allowed_fact_ids),
             )
             decision_sets.append(decision)
         except Exception as exc:  # noqa: BLE001 - one dimension must not break the aggregate

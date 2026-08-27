@@ -1,9 +1,10 @@
-"""Provider-facing L1 planning fact contracts.
+"""Provider-facing and internal L1 planning fact contracts.
 
-The observe pass emits a discriminated union.  The fact category is selected
-at generation time and each category exposes only its own semantic fields.
-Spatial locators are coarse evidence hints; no coordinates or geometry are
-accepted at L1.
+The internal observe result is a discriminated union.  The provider wire
+result is deliberately flatter: it carries a stable fact_type and optional
+semantic fields, while branch requirements and dimension membership are
+validated locally.  Spatial locators are coarse evidence hints; no
+coordinates or geometry are accepted at L1.
 """
 
 from __future__ import annotations
@@ -23,27 +24,8 @@ from pydantic import (
     model_validator,
 )
 
+from app.contracts.json_container import decode_json_container
 from app.contracts.domain.l1_contracts import L1SpatialMention
-
-
-_TARGET_ACTION_SUFFIXES = ("修缮", "修复", "维护", "保护", "整治")
-
-
-def _backfill_target_name(value: str) -> str:
-    """Recover a semantic target from a structured demand label.
-
-    This only strips a known action suffix.  It never creates a location or
-    geometry and remains a compatibility fallback for older providers that do
-    not emit the explicit ``target_name`` field.
-    """
-
-    text = str(value or "").strip()
-    if not text or any(token in text for token in ("、", "，", ",", "；", ";", " ")):
-        return ""
-    for suffix in _TARGET_ACTION_SUFFIXES:
-        if text.endswith(suffix) and len(text) > len(suffix):
-            return text[: -len(suffix)].strip()
-    return ""
 
 
 class L1SourceEvidence(BaseModel):
@@ -208,13 +190,7 @@ def _fact_adapter_for_allowed_fact_types(
 
 def _decode_json_container(value: str) -> Any:
     """Decode a provider JSON container without accepting executable text."""
-
-    candidate = value.strip()
-    if candidate.startswith("```") and candidate.endswith("```"):
-        candidate = candidate[3:-3].strip()
-        if candidate.startswith("json"):
-            candidate = candidate[4:].lstrip()
-    return json.loads(candidate)
+    return decode_json_container(value)
 
 
 def _normalize_sequence_container(
@@ -226,7 +202,32 @@ def _normalize_sequence_container(
 
     candidate = value
     if isinstance(candidate, str):
-        candidate = _decode_json_container(candidate)
+        try:
+            candidate = _decode_json_container(candidate)
+        except ValueError as exc:
+            # Some non-strict providers serialize the observations array and
+            # then append the sibling envelope field inside the same string:
+            # ``[...], "diagnostics": []}``.  Recover the complete array only
+            # when the suffix is a valid diagnostics-only envelope tail.  No
+            # arbitrary suffix or partial array is accepted.
+            if field_name != "observations":
+                raise
+            stripped = candidate.strip()
+            try:
+                decoded, end = json.JSONDecoder().raw_decode(stripped)
+                suffix = stripped[end:].strip()
+                if not isinstance(decoded, list) or not suffix.startswith(","):
+                    raise ValueError
+                tail = json.loads("{" + suffix[1:])
+                if (
+                    not isinstance(tail, dict)
+                    or set(tail) != {"diagnostics"}
+                    or not isinstance(tail["diagnostics"], list)
+                ):
+                    raise ValueError
+                candidate = decoded
+            except (TypeError, ValueError, json.JSONDecodeError):
+                raise exc
     while isinstance(candidate, dict):
         for key in (field_name, "items", "records", "values"):
             nested = candidate.get(key)
@@ -324,13 +325,11 @@ def build_l1_observation_output_model(
     *,
     required_fact_types: tuple[str, ...] = (),
 ) -> type["L1ObservationPassOutput"]:
-    """Build the smallest strict observe response model for one dimension.
+    """Build the smallest strict internal observe model for one dimension.
 
-    The provider must choose from a discriminated union.  Sending seven
-    branches to every dimension needlessly increases the tool schema and makes
-    malformed envelopes (notably a JSON array serialized as a string) more
-    likely.  This factory keeps the same strict branch models while narrowing
-    the union to the dimension contract.
+    The provider uses the stable flat wire model above.  This local model
+    narrows the internal discriminated union to the dimension contract after
+    the provider response has crossed the wire boundary.
     """
 
     normalized = _normalize_fact_type_names(allowed_fact_types)
@@ -359,6 +358,447 @@ def build_l1_observation_output_model(
         allowed_fact_types=(tuple[str, ...], Field(default=normalized, frozen=True)),
         required_fact_types=(tuple[str, ...], Field(default=required, frozen=True)),
     )
+
+
+class L1ProviderSpatialLocator(BaseModel):
+    """Provider wire locator; scalar fields may arrive as null."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    place_names: list[str] | None = None
+    relation: str | None = None
+    source_feature_ids: list[str] | None = None
+
+
+class L1ProviderSourceEvidence(BaseModel):
+    """Provider wire evidence with tolerant transport scalar boundaries."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    semantic_type: str | None = None
+    description: str | None = None
+    target_name: str | None = None
+    aliases: list[str] | None = None
+    spatial_mentions: list[dict[str, Any]] | None = None
+    attributes: dict[str, Any] | None = None
+    value: str | int | float | bool | None = None
+    unit: str | None = None
+    counting_basis: str | None = None
+    related_observation_ids: list[str] | None = None
+    constraint_refs: list[str] | None = None
+    source_feature_ids: list[str] | None = None
+    # The wire envelope must also represent an explicit uncertain observation
+    # when the current source page contains no supporting span.  The local
+    # source validator quarantines such an item before it becomes a fact.
+    source_segment_ids: list[str] = Field(default_factory=list)
+    source_quote: str = ""
+    source_refs: list[str] | None = None
+    confidence: float | None = None
+    status: str = "uncertain"
+
+    @model_validator(mode="before")
+    @classmethod
+    def decode_transport_lists(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        for field_name in (
+            "aliases",
+            "related_observation_ids",
+            "constraint_refs",
+            "source_feature_ids",
+            "source_segment_ids",
+            "source_refs",
+        ):
+            if field_name in payload and isinstance(payload[field_name], str):
+                payload[field_name] = _decode_json_container(payload[field_name])
+        return payload
+
+
+class L1ProviderObservation(L1ProviderSourceEvidence):
+    """Flat provider wire item; strict variant validation stays local."""
+
+    fact_type: Literal[
+        "spatial_entity",
+        "spatial_relation",
+        "scoped_metric",
+        "demand",
+        "constraint",
+        "risk",
+        "opportunity",
+        "document_observation",
+    ]
+    entity_type: str | None = None
+    name: str | None = None
+    locator: L1ProviderSpatialLocator | None = None
+    scale: str | None = None
+    subject_ref: str | None = None
+    predicate: str | None = None
+    object_ref: str | None = None
+    metric: str | None = None
+    scope: str | None = None
+    demand_type: str | None = None
+    beneficiary: str | None = None
+    spatial_requirement: str | None = None
+    constraint_type: str | None = None
+    applies_to_scope: str | None = None
+    strength: str | None = None
+    subject: str | None = None
+
+
+class L1ObservationProviderOutput(BaseModel):
+    """Minimal provider envelope for the L1 observe pass.
+
+    Quarantine, provisional records, and dimension coverage are deterministic
+    application state.  They are deliberately not exposed in the provider
+    tool schema; otherwise the model sees an internal recovery envelope and a
+    semantic output envelope as one contract.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    observations: list[L1ProviderObservation] = Field(default_factory=list)
+    diagnostics: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def decode_provider_containers(cls, data: Any) -> Any:
+        """Normalize provider JSON containers before wire validation."""
+
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        if "observations" in payload:
+            payload["observations"] = _normalize_sequence_container(
+                payload.get("observations", []),
+                field_name="observations",
+            )
+        payload["diagnostics"] = _normalize_string_list(
+            payload.get("diagnostics", []),
+            field_name="diagnostics",
+        )
+        return payload
+
+
+@lru_cache(maxsize=None)
+def build_l1_observation_provider_model(
+    allowed_fact_types: tuple[str, ...],
+) -> type[L1ObservationProviderOutput]:
+    """Return the stable provider-only L1 schema with no recovery fields.
+
+    ``allowed_fact_types`` is still validated here so a malformed dimension
+    contract fails before a provider call.  It intentionally does not alter
+    the provider schema: the eight semantic branches are fixed, while the
+    dimension-specific allowlist is enforced by the local projection into the
+    strict internal model.  This keeps the provider/tool schema identity
+    stable across dimensions and leaves runtime catalogs out of ``oneOf``.
+    """
+
+    normalized = _normalize_fact_type_names(allowed_fact_types)
+    if not normalized:
+        raise ValueError("at least one L1 fact_type is required")
+    unknown = [value for value in normalized if value not in _FACT_TYPE_MODELS]
+    if unknown:
+        raise ValueError(f"unknown L1 fact_type(s): {unknown}")
+    del normalized
+    return L1ObservationProviderOutput
+
+
+def l1_observation_provider_model_for_dimension(
+    dimension_key: str,
+) -> type[L1ObservationProviderOutput]:
+    """Return the provider-facing observe schema for one dimension."""
+
+    from app.domain.assessment.dimension_contracts import get_dimension_semantic_contract
+
+    contract = get_dimension_semantic_contract(dimension_key, 1)
+    allowed = tuple(contract.get("l1_fact_types", []) or [])
+    return build_l1_observation_provider_model(allowed)
+
+
+def _provider_string(value: Any, *, default: str = "") -> str:
+    if value is None:
+        return default
+    return str(value).strip()
+
+
+def _provider_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    candidate = value
+    if isinstance(candidate, str):
+        candidate = _decode_json_container(candidate)
+    if not isinstance(candidate, (list, tuple, set)):
+        raise TypeError("provider list field must decode to a list")
+    return [item for raw in candidate if (item := _provider_string(raw))]
+
+
+def _provider_attributes(value: Any, *, diagnostics: list[str], ordinal: int) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, str] = {}
+    for raw_key, raw_value in value.items():
+        key = _provider_string(raw_key)
+        if not key:
+            continue
+        if isinstance(raw_value, (str, int, float, bool)):
+            result[key] = str(raw_value)
+        else:
+            result[key] = json.dumps(
+                raw_value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            diagnostics.append(f"l1_provider_attribute_coerced:{ordinal}:{key}")
+    return result
+
+
+_PROVIDER_STATUS_ALIASES = {
+    "confirmed": "confirmed",
+    "verified": "confirmed",
+    "supported": "confirmed",
+    "已验证": "confirmed",
+    "uncertain": "uncertain",
+    "observed": "uncertain",
+    "inferred": "uncertain",
+    "likely": "uncertain",
+    "possible": "uncertain",
+    "待核验": "uncertain",
+    "conflict": "conflict",
+    "ambiguous": "conflict",
+    "rejected": "conflict",
+    "矛盾": "conflict",
+    "source_exhausted": "source_exhausted",
+    "exhausted": "source_exhausted",
+    "not_found": "source_exhausted",
+    "来源不足": "source_exhausted",
+}
+
+_SPATIAL_MENTION_KIND_ALIASES = {
+    "target": "target",
+    "place": "place",
+    "anchor_request": "anchor_request",
+    "anchor": "anchor_request",
+    "target_place": "place",
+}
+
+_SPATIAL_RESOLUTION_ALIASES = {
+    "resolved": "resolved",
+    "verified": "resolved",
+    "confirmed": "resolved",
+    "needs_retrieval": "needs_retrieval",
+    "pending": "needs_retrieval",
+    "unresolved": "needs_retrieval",
+    "conflict": "conflict",
+    "source_exhausted": "source_exhausted",
+    "exhausted": "source_exhausted",
+    "unknown": "unknown",
+}
+
+
+def _provider_locator(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "place_names": _provider_string_list(value.get("place_names")),
+        "relation": _provider_string(value.get("relation")),
+        "source_feature_ids": _provider_string_list(value.get("source_feature_ids")),
+    }
+
+
+def _provider_spatial_mentions(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    candidate = value
+    if isinstance(candidate, str):
+        try:
+            candidate = _decode_json_container(candidate)
+        except Exception:
+            return []
+    if not isinstance(candidate, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for raw in candidate:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        for field_name in (
+            "mention",
+            "normalized_name",
+            "target_name",
+            "role",
+            "relation",
+            "instance_label",
+            "instance_count",
+        ):
+            item[field_name] = _provider_string(item.get(field_name))
+        mention_kind = _provider_string(item.get("mention_kind")).casefold()
+        item["mention_kind"] = _SPATIAL_MENTION_KIND_ALIASES.get(
+            mention_kind,
+            "target",
+        )
+        resolution_state = _provider_string(item.get("resolution_state")).casefold()
+        item["resolution_state"] = _SPATIAL_RESOLUTION_ALIASES.get(
+            resolution_state,
+            "needs_retrieval",
+        )
+        item["aliases"] = _provider_string_list(item.get("aliases"))
+        item["village_scopes"] = _provider_string_list(item.get("village_scopes"))
+        item["place_scopes"] = _provider_string_list(item.get("place_scopes"))
+        item["source_feature_ids"] = _provider_string_list(item.get("source_feature_ids"))
+        provenance = item.get("provenance")
+        if not isinstance(provenance, dict):
+            provenance = {}
+        item["provenance"] = {
+            "source_refs": _provider_string_list(provenance.get("source_refs")),
+            "source_segment_ids": _provider_string_list(provenance.get("source_segment_ids")),
+            "source_quote": _provider_string(provenance.get("source_quote")),
+            "observation_id": _provider_string(provenance.get("observation_id")),
+        }
+        result.append(item)
+    return result
+
+
+def _normalize_provider_observation(
+    raw: Any,
+    *,
+    ordinal: int,
+    diagnostics: list[str],
+) -> Any:
+    if not isinstance(raw, dict):
+        return raw
+    payload = dict(raw)
+    for field_name in (
+        "semantic_type",
+        "description",
+        "target_name",
+        "source_quote",
+    ):
+        payload[field_name] = _provider_string(payload.get(field_name))
+    for field_name in (
+        "aliases",
+        "related_observation_ids",
+        "constraint_refs",
+        "source_feature_ids",
+        "source_segment_ids",
+        "source_refs",
+    ):
+        payload[field_name] = _provider_string_list(payload.get(field_name))
+    payload["unit"] = _provider_string(payload.get("unit"))
+    payload["counting_basis"] = _provider_string(payload.get("counting_basis"))
+    payload["attributes"] = _provider_attributes(
+        payload.get("attributes"),
+        diagnostics=diagnostics,
+        ordinal=ordinal,
+    )
+    payload["spatial_mentions"] = _provider_spatial_mentions(
+        payload.get("spatial_mentions")
+    )
+    raw_status = _provider_string(payload.get("status"))
+    normalized_status = raw_status.casefold().replace("-", "_").replace(" ", "_")
+    status = _PROVIDER_STATUS_ALIASES.get(normalized_status)
+    if not raw_status:
+        status = "uncertain"
+        diagnostics.append(f"l1_provider_status_defaulted:{ordinal}:uncertain")
+    elif status is None:
+        status = "uncertain"
+        diagnostics.append(
+            f"l1_provider_status_normalized:{ordinal}:{raw_status}->uncertain"
+        )
+    elif status != raw_status:
+        diagnostics.append(
+            f"l1_provider_status_normalized:{ordinal}:{raw_status}->{status}"
+        )
+    payload["status"] = status
+
+    fact_type = _provider_string(payload.get("fact_type"))
+    for field_name in {
+        "entity_type",
+        "name",
+        "scale",
+        "subject_ref",
+        "predicate",
+        "object_ref",
+        "metric",
+        "scope",
+        "demand_type",
+        "beneficiary",
+        "constraint_type",
+        "applies_to_scope",
+        "subject",
+    }:
+        if field_name in payload:
+            payload[field_name] = _provider_string(payload.get(field_name))
+    if fact_type in {"spatial_entity", "demand", "constraint", "risk", "opportunity"}:
+        payload["locator"] = _provider_locator(payload.get("locator"))
+    if fact_type == "demand" and payload.get("spatial_requirement") is None:
+        payload["spatial_requirement"] = "none"
+    if fact_type == "constraint" and payload.get("strength") is None:
+        payload["strength"] = "unknown"
+    common_fields = {
+        "fact_type",
+        "semantic_type",
+        "description",
+        "target_name",
+        "aliases",
+        "spatial_mentions",
+        "attributes",
+        "value",
+        "unit",
+        "counting_basis",
+        "related_observation_ids",
+        "constraint_refs",
+        "source_feature_ids",
+        "source_segment_ids",
+        "source_quote",
+        "source_refs",
+        "confidence",
+        "status",
+    }
+    variant_fields = {
+        "spatial_entity": {"entity_type", "name", "locator", "scale"},
+        "spatial_relation": {"subject_ref", "predicate", "object_ref"},
+        "scoped_metric": {"metric", "scope"},
+        "demand": {"demand_type", "scope", "beneficiary", "spatial_requirement", "locator"},
+        "constraint": {"constraint_type", "applies_to_scope", "strength", "locator"},
+        "risk": {"subject", "scope", "locator"},
+        "opportunity": {"subject", "scope", "locator"},
+        "document_observation": {"subject", "scope"},
+    }
+    allowed_fields = common_fields | variant_fields.get(fact_type, set())
+    return {
+        key: value
+        for key, value in payload.items()
+        if key in allowed_fields
+    }
+
+
+def normalize_l1_observation_provider_output(
+    dimension_key: str,
+    value: Any,
+) -> "L1ObservationPassOutput":
+    """Project a provider envelope into the internal recovery contract."""
+
+    response_model = l1_observation_output_model_for_dimension(dimension_key)
+    payload = value.model_dump(mode="python") if hasattr(value, "model_dump") else value
+    payload = dict(payload or {})
+    diagnostics = [
+        str(item).strip()
+        for item in (payload.get("diagnostics") or [])
+        if str(item).strip()
+    ]
+    raw_observations = payload.get("observations") or []
+    payload["observations"] = [
+        _normalize_provider_observation(
+            item,
+            ordinal=index,
+            diagnostics=diagnostics,
+        )
+        for index, item in enumerate(raw_observations)
+    ]
+    payload["diagnostics"] = list(dict.fromkeys(diagnostics))
+    return response_model.model_validate(payload)
 
 
 def l1_observation_output_model_for_dimension(
@@ -416,7 +856,7 @@ def observation_to_compiler_payload(raw: Any) -> dict[str, Any]:
     elif isinstance(observation, L1DemandFact):
         payload.update({
             "name": observation.demand_type,
-            "target_name": observation.target_name or _backfill_target_name(observation.demand_type),
+            "target_name": observation.target_name,
             "location": "、".join(observation.locator.place_names),
             "relation": observation.locator.relation,
             "scope": observation.scope,
@@ -582,9 +1022,13 @@ __all__ = [
     "L1DocumentObservationFact",
     "L1PlanningFactDraft",
     "build_l1_observation_output_model",
+    "build_l1_observation_provider_model",
     "l1_observation_output_model_for_dimension",
+    "l1_observation_provider_model_for_dimension",
+    "normalize_l1_observation_provider_output",
     "observation_to_compiler_payload",
     "L1ObservationPassOutput",
+    "L1ObservationProviderOutput",
     "QuarantinedObservation",
     "L1ReportOutput",
 ]

@@ -253,12 +253,9 @@ async def extract_spatial_query_spec(
     returned as a diagnostic instead of being silently converted to a clean
     deterministic parse.
     """
-    enabled = str(os.getenv("GROUND_LLM_ENABLED", "false")).strip().lower() in {
-        "1", "true", "yes", "on"
-    }
-    disabled = not enabled or str(os.getenv("DISABLE_GROUND_LLM", "")).strip().lower() in {
-        "1", "true", "yes", "on"
-    }
+    from app.core.llm_config import get_llm_settings
+
+    disabled = get_llm_settings().ground_llm_is_disabled()
     if disabled:
         return None, {
             "step": "spatial_query_parser",

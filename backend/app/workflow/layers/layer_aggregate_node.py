@@ -13,13 +13,65 @@ on resume, so aggregates must run in a different node to avoid double-execution.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Dict
 
-from app.core.settings import GROUND_ANCHOR_TIMEOUT_S
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+async def _persist_l1_identity_artifacts(
+    state: Dict[str, Any],
+    aggregate_state: Dict[str, Any],
+    patch: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Persist the canonical L1 observations and mention bindings.
+
+    GROUND consumes these two immutable snapshots.  No report body, synthetic
+    settlement cluster, or pre-contract anchor is produced here.
+    """
+    session_id = str(aggregate_state.get("session_id") or "")
+    if not session_id:
+        return {}
+    from app.contracts.domain.l1_contracts import L1Snapshot
+    from app.evidence.identity.binding_store import BindingStore
+    from app.evidence.identity.observation_store import ObservationStore
+    from app.infrastructure.artifacts.runtime import load_artifact
+    from app.infrastructure.context.planning_context_factory import get_cached_context
+    from app.evidence.retrieval.evidence_graph import EvidenceGraph
+
+    context = get_cached_context(session_id)
+    snapshot = load_artifact(aggregate_state, "l1_snapshot", L1Snapshot)
+    if context is None or snapshot is None:
+        logger.warning("[layer_aggregate] L1 identity artifacts skipped: context or snapshot missing")
+        return {}
+    facts = list(getattr(snapshot, "location_facts", []) or [])
+    context.location_facts = facts
+    context.l1_fact_records = list(getattr(snapshot, "fact_records", []) or [])
+    context.evidence_graph = EvidenceGraph.build(context)
+
+    observation_store = ObservationStore()
+    observation_ref = observation_store.put_snapshot(
+        aggregate_state,
+        observation_store.from_location_facts(facts),
+        parent_digest=str(
+            ((patch.get("artifact_refs") or {}).get("l1_snapshot") or {}).get("digest") or ""
+        ),
+    )
+    bindings = BindingStore.from_context(context)
+    binding_ref = BindingStore().put_snapshot(
+        aggregate_state,
+        bindings,
+        observation_snapshot_ref=observation_ref.digest,
+        parent_digest=observation_ref.digest,
+    )
+    context.grounded_bindings = bindings
+    return {
+        "artifact_refs": {
+            "l1_observations": observation_ref.model_dump(mode="json"),
+            "l1_bindings": binding_ref.model_dump(mode="json"),
+        }
+    }
 
 
 def _update_explore_retry(state: Dict[str, Any], patch: Dict[str, Any], layer: int, stage: str) -> None:
@@ -104,51 +156,24 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
             patch = {**{k: aggregate_state[k] for k in ("context_version", "context_fingerprint", "context_ref", "bootstrap_context_done") if k in aggregate_state}, **patch}
         patch["layer_just_completed"] = None
         _update_explore_retry(state, patch, layer, "l1")
-        # 统一接地核心（设计 §5.1）：L1 后立即 ground_anchors——回填 KG 真名、
-        # 村名→地块绑定、锚点接地（mention→entity/BSM/geometry+拓扑证据）、
-        # 语义注解、重建 EvidenceGraph。Enrichment 消费 typed L1Snapshot，必须在
-        # aggregate 持久化 artifact 之后运行（设计 §7：无新节点）。
+        # L1 identity is materialized as the current observation/binding
+        # snapshots consumed by TARGET_PROJECTION and GROUND.
         try:
-            from app.domain.ground import ground_anchors
-
-            # Grounding enriches the frozen L1 snapshot but must not hold the
-            # cognitive graph forever.  It contains optional flash-LLM
-            # village/water mapping calls; bound the whole enrichment phase,
-            # not only individual provider requests, so the next layer can
-            # still run and the spatial chain can surface the missing anchor
-            # evidence as an auditable gate.
-            ground_timeout = max(1.0, float(GROUND_ANCHOR_TIMEOUT_S))
-            anchor_patch = await asyncio.wait_for(
-                ground_anchors({**aggregate_state, **patch}),
-                timeout=ground_timeout,
+            identity_patch = await _persist_l1_identity_artifacts(
+                state,
+                aggregate_state,
+                patch,
             )
-            # ``artifact_refs`` is a reducer channel.  Grounding adds one
-            # descriptor after L1 aggregation; a shallow dict overlay would
-            # discard the already-persisted l1_snapshot/l1_gate refs and make
-            # the next gate route look like a dimension deadlock.
             patch = {
                 **patch,
-                **anchor_patch,
+                **identity_patch,
                 "artifact_refs": {
                     **dict(patch.get("artifact_refs") or {}),
-                    **dict(anchor_patch.get("artifact_refs") or {}),
+                    **dict(identity_patch.get("artifact_refs") or {}),
                 },
             }
-        except asyncio.TimeoutError:
-            logger.error(
-                "[layer_aggregate] ground_anchors timed out after %ss; "
-                "continuing to L2 with an explicit enrichment gap",
-                ground_timeout,
-            )
-            patch.setdefault("dimension_failures", []).append({
-                "stage": "L1",
-                "dimension": "ground_anchors",
-                "code": "ground_anchor_timeout",
-                "message": f"ground_anchors timed out after {ground_timeout}s",
-            })
-            patch["ground_anchor_deferred"] = True
         except Exception as exc:  # noqa: BLE001 - 接地失败不阻塞 L2，但记录
-            logger.warning("[layer_aggregate] ground_anchors failed: %s", exc)
+            logger.warning("[layer_aggregate] L1 identity artifact production failed: %s", exc)
         return patch
 
     if layer == 2:

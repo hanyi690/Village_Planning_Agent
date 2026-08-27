@@ -8,8 +8,15 @@ from app.infrastructure.logging import get_logger
 logger = get_logger(__name__)
 
 
-def build_summary_task_key(session_id: str, layer: int, dimension: str, version: int) -> str:
-    return f"{session_id}:summary:{layer}:{dimension}:{version}"
+def build_summary_task_key(
+    session_id: str,
+    layer: int,
+    dimension: str,
+    version: int,
+    report_id: str = "",
+) -> str:
+    identity = f"{session_id}:summary:{layer}:{dimension}:{version}"
+    return f"{identity}:{report_id}" if report_id else identity
 
 
 class TaskSupervisor:

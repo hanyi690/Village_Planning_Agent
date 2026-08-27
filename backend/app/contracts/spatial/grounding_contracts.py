@@ -6,7 +6,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.contracts.artifacts.contract_meta import ContractMeta, StageIssue
 from app.contracts.artifacts.provenance import Provenance
-from app.contracts.evidence.identity_contracts import infer_geometry_granularity
 from app.contracts.evidence.requirement_contracts import EvidenceRequirement
 from app.contracts.planning.constraint_factor import ConstraintFactor, RelationSatisfaction
 from app.contracts.planning.p1_closure import GroundingRequest
@@ -162,52 +161,6 @@ class GroundingResult(ContractMeta):
     grounding_requests: list[GroundingRequest] = Field(default_factory=list)
     pending_grounding_requests: list[GroundingRequest] = Field(default_factory=list)
 
-class GroundedAnchor(ContractMeta):
-    """L1 锚点接地产物：location_fact -> KG 实体/几何 + 拓扑证据（设计 §5.1/§6）。
-
-    ``coordinate_key`` 按"同一坐标 = 同一实体"原则生成；``best_effort`` 表示
-    该锚点是低置信推理兜底产物（仍带 KG/索引证据，几何永不来自 LLM）。
-    """
-
-    location_fact_ref: str = ""
-    mention: str = ""
-    normalized_name: str = ""
-    role: str = "unknown"
-    entity_ref: str = ""
-    entity_type: str = ""
-    geometry_ref: str | None = None
-    feature_bsm: str | None = None
-    source_feature_id: str | None = None
-    source_layer: str | None = None
-    related_parcel_bsms: list[str] = Field(default_factory=list)
-    source_bsms: list[str] = Field(default_factory=list)
-    relation_refs: list[str] = Field(default_factory=list)
-    l1_fact_refs: list[str] = Field(default_factory=list)
-    l1_snapshot_ref: str = ""
-    bundle_snapshot_digest: str = ""
-    topology_evidence: list[str] = Field(default_factory=list)
-    coordinate_key: str = ""
-    confidence: float = 0.0
-    status: Literal["resolved", "ambiguous", "unresolved"] = "unresolved"
-    best_effort: bool = False
-    source_report_ref: str = ""
-    source_span: str = ""
-    query_trace: list[dict] = Field(default_factory=list)
-    geometry_granularity: Literal[
-        "exact_feature", "parcel_set", "settlement", "village_scope", "none"
-    ] = "none"
-
-    @model_validator(mode="after")
-    def derive_geometry_granularity(self) -> "GroundedAnchor":
-        if self.geometry_granularity == "none":
-            self.geometry_granularity = infer_geometry_granularity(
-                self.geometry_ref,
-                entity_ref=self.entity_ref,
-                source_bsms=self.source_bsms,
-            )
-        return self
-
-
 __all__ = [
     "HardConstraintResult",
     "SuitabilityFactorEvidence",
@@ -219,5 +172,4 @@ __all__ = [
     "RelationSatisfaction",
     "GroundedPlanningProblem",
     "GroundingResult",
-    "GroundedAnchor",
 ]

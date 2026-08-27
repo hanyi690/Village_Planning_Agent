@@ -17,7 +17,7 @@ GLOBAL_CONCEPT_RULES = """
 
 【L2 typed decision pass 覆盖规则】
 当调用方要求输出 L2DecisionSet 时，上述正文写作规则和各维度的文本输出骨架仅是背景，
-不得执行。只返回结构化 JSON 根对象：schema_version、dimension_key、objectives、metrics、
+不得执行。只填写声明的 L2DecisionSet typed response contract，字段为：schema_version、dimension_key、objectives、metrics、
 strategies、priorities、spatial_structures、conflicts、evidence_gaps、source_refs、diagnostics。
 schema_version 固定为 "2.0"；objective.kind=goal|constraint|opportunity，
 objective.status=observed|proposed|required；metric.direction=increase|decrease|maintain|range|unknown，
