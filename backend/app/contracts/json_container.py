@@ -192,6 +192,19 @@ def decode_json_container(value: str) -> Any:
     try:
         return json.loads(candidate)
     except json.JSONDecodeError as exc:
+        # Some OpenAI-compatible providers concatenate a valid container with
+        # a trailing explanation or a second serialized copy.  Recover only
+        # the first complete JSON value; the caller still validates its type
+        # against the field annotation, so prose cannot become structured data.
+        try:
+            first_value, end = json.JSONDecoder().raw_decode(candidate)
+            remainder = candidate[end:].strip()
+            if remainder.startswith("```"):
+                remainder = remainder[3:].strip()
+            if remainder and not remainder.startswith(("{", "[")):
+                return first_value
+        except json.JSONDecodeError:
+            pass
         repaired = _repair_json_like(candidate)
         if repaired == candidate:
             raise

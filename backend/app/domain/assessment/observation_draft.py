@@ -25,7 +25,7 @@ from pydantic import (
 )
 
 from app.contracts.json_container import decode_json_container
-from app.contracts.domain.l1_contracts import L1SpatialMention
+from app.contracts.domain.l1_contracts import LocationMentionDraft
 
 
 class L1SourceEvidence(BaseModel):
@@ -37,7 +37,7 @@ class L1SourceEvidence(BaseModel):
     description: str = ""
     target_name: str = ""
     aliases: list[str] = Field(default_factory=list)
-    spatial_mentions: list[L1SpatialMention] = Field(default_factory=list)
+    spatial_mentions: list[LocationMentionDraft] = Field(default_factory=list)
     attributes: dict[str, str] = Field(default_factory=dict)
     value: str | int | float | None = None
     unit: str = ""
@@ -363,7 +363,7 @@ def build_l1_observation_output_model(
 class L1ProviderSpatialLocator(BaseModel):
     """Provider wire locator; scalar fields may arrive as null."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     place_names: list[str] | None = None
     relation: str | None = None
@@ -373,7 +373,7 @@ class L1ProviderSpatialLocator(BaseModel):
 class L1ProviderSourceEvidence(BaseModel):
     """Provider wire evidence with tolerant transport scalar boundaries."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     semantic_type: str | None = None
     description: str | None = None
@@ -455,7 +455,7 @@ class L1ObservationProviderOutput(BaseModel):
     semantic output envelope as one contract.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     observations: list[L1ProviderObservation] = Field(default_factory=list)
     diagnostics: list[str] = Field(default_factory=list)
@@ -468,6 +468,14 @@ class L1ObservationProviderOutput(BaseModel):
         if not isinstance(data, dict):
             return data
         payload = dict(data)
+        # A non-object item in the observations array is provider wire noise,
+        # not an observation.  Drop it at the wire boundary so it cannot be
+        # mistaken for a fact; the source/fact validators remain responsible
+        # for accepting or quarantining actual observation objects.
+        if isinstance(payload.get("observations"), list):
+            payload["observations"] = [
+                item for item in payload["observations"] if isinstance(item, dict)
+            ]
         if "observations" in payload:
             payload["observations"] = _normalize_sequence_container(
                 payload.get("observations", []),
@@ -594,6 +602,21 @@ _SPATIAL_RESOLUTION_ALIASES = {
     "source_exhausted": "source_exhausted",
     "exhausted": "source_exhausted",
     "unknown": "unknown",
+}
+
+_SPATIAL_SCOPE_ROLE_ALIASES = {
+    "natural_village": "natural_village",
+    "village": "natural_village",
+    "natural village": "natural_village",
+    "自然村": "natural_village",
+    "村庄": "natural_village",
+    "administrative_village": "administrative_village",
+    "administrative village": "administrative_village",
+    "行政村": "administrative_village",
+    "place": "place",
+    "地点": "place",
+    "area": "area",
+    "区域": "area",
 }
 
 

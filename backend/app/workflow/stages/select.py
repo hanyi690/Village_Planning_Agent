@@ -109,20 +109,11 @@ async def _reason_select_scenario(
     if not descriptors:
         return None
     decision_id = f"select:scenario-set:{getattr(scenario_set, 'set_id', '')}"
-    query_text = json.dumps(
-        {
-            "set_id": str(getattr(scenario_set, "set_id", "") or ""),
-            "problem_fingerprint": str(
-                getattr(scenario_set, "problem_fingerprint", "") or ""
-            ),
-            "recommendation_policy": str(
-                getattr(scenario_set, "recommendation_policy", "") or ""
-            ),
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    query_text = "；".join((
+        f"set_id={getattr(scenario_set, 'set_id', '') or ''}",
+        f"problem_fingerprint={getattr(scenario_set, 'problem_fingerprint', '') or ''}",
+        f"recommendation_policy={getattr(scenario_set, 'recommendation_policy', '') or ''}",
+    ))
     input_digest = spatial_candidate_input_digest(
         decision_id=decision_id,
         query_text=query_text,
@@ -135,8 +126,12 @@ async def _reason_select_scenario(
         f"场景集合语义={query_text}",
         f"input_digest={input_digest}",
         "场景卡：",
+        "| candidate_id | status | 关键约束/指标 |",
+        "|---|---|---|",
         "\n".join(
-            json.dumps(item.metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            f"| {item.candidate_id} | {item.label} | "
+            + str(item.metadata).replace("|", "\\|").replace("\n", " ")
+            + " |"
             for item in descriptors
         ),
     ))

@@ -58,12 +58,16 @@ async def get_llm_semaphore(
     """
     loop = asyncio.get_running_loop()
     if max_concurrent is None:
-        # Compatibility export is populated from the same typed settings
-        # boundary.  Reading it here also preserves the test/application seam
-        # that can replace the effective process budget before a call starts.
-        from app.core.settings import LLM_MAX_CONCURRENT
+        # Resolve from the typed settings boundary at gate creation time.
+        # Importing the compatibility constant from app.core.settings here
+        # can capture its value before dotenv loading during bootstrap.
+        from app.core.llm_config import get_llm_settings
 
-        max_concurrent = LLM_MAX_CONCURRENT
+        settings = get_llm_settings()
+        max_concurrent = settings.provider_concurrency()
+        resolved_from = "LLMRuntimeSettings.provider_concurrency"
+    else:
+        resolved_from = "stage_policy"
     budget = max(1, int(max_concurrent))
     if scope != "default":
         key = (loop, str(scope), budget)
@@ -87,7 +91,11 @@ async def get_llm_semaphore(
         _llm_semaphore = asyncio.Semaphore(budget)
         _llm_semaphore_loop = loop
         _llm_semaphore_budget = budget
-        logger.info("[LLM] Provider-call semaphore created: max_concurrent=%d", budget)
+        logger.info(
+            "[LLM] Provider-call semaphore created: max_concurrent=%d source=%s",
+            budget,
+            resolved_from,
+        )
     return _llm_semaphore
 
 

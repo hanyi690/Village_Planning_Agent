@@ -222,6 +222,9 @@ def _admission_reasons(claim: PlanningClaim) -> list[str]:
 
 _PENDING_REQUIREMENTS_BY_REASON = {
     "project_package_ref is required": "project_package_ref",
+    "the category-specific typed parameter block is missing": "typed_parameter_block",
+    "typed action/completion semantics are incomplete": "typed_parameter_values",
+    "materialization_role is required for this spatial category": "materialization_role",
     "locator, candidate, or source-feature reference is missing": (
         "locator_or_candidate_or_source_feature_reference"
     ),

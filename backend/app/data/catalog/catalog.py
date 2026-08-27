@@ -43,6 +43,14 @@ logger = get_logger(__name__)
 
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "sources.yaml"
 
+# These are deliverable/baseline layers, not default inputs to a new planning
+# session.  They remain loadable through an explicit ``layer_types`` request.
+_PLANNING_OUTPUT_LAYER_TYPES = frozenset({
+    "landuse_planned",
+    "planned_road",
+    "planned_annotation",
+})
+
 
 def _derive_water_bodies_from_landuse(bundle: "VillageBundle") -> int:
     """从 DLBM=31xx 现状地块派生水体面（bundle.polygons["water_bodies"]）。
@@ -335,13 +343,14 @@ class DataCatalog:
         from app.data.model.layer_registry import GIS_LAYER_REGISTRY
 
         # The default session snapshot is reproducible and offline-capable:
-        # use configured local vector facts only. Remote vector/raster/tile
-        # sources remain available through an explicit ``layer_types`` request
-        # and therefore cannot silently change a planning run.
+        # use configured local current/reference vector facts only. Planned
+        # layers are deliverables or prior-plan baselines, not new-run inputs;
+        # they remain available through an explicit ``layer_types`` request.
         return [
             layer_type
             for layer_type, entry in GIS_LAYER_REGISTRY.items()
             if entry.geometry_kind in {"point", "line", "polygon", "annotation"}
+            and layer_type not in _PLANNING_OUTPUT_LAYER_TYPES
             and any(
                 cfg.get("driver") == "file_vector"
                 and (
@@ -366,13 +375,14 @@ class DataCatalog:
           1. Load boundary first (file_vector ignores bbox)
           2. Derive bbox from boundary geometry
           3. Fallback: geocode village_name if no boundary
-          4. Load all layers (file_vector ignores bbox, api_vector uses it)
+          4. Load default planning inputs (or the explicitly requested layers)
           5. Return typed VillageBundle with morphology groups populated
 
         Args:
             village_name: village name for metadata and geocode fallback.
-            layer_types: specific layer types to load. If None, loads all
-                configured sources whose layer_type is in ``GIS_LAYER_REGISTRY``.
+            layer_types: specific layer types to load. If None, loads current
+                and reference inputs; planned output layers require an explicit
+                request.
 
         Returns:
             ``VillageBundle`` with points/lines/polygons/rasters morphology groups.

@@ -72,17 +72,17 @@ CONTRACT_REGISTRY: dict[str, ContractRegistration] = {
         key="l3.claims",
         role="llm_output",
         owner="program",
-        model_path="app.domain.program.claim_draft:L3ProviderClaimOutput",
+        model_path="app.domain.program.claim_draft:L3RoughClaimOutput",
         version="2",
         description="Stable L3 provider claims envelope; runtime catalog closure is local.",
     ),
-    "l3.report": ContractRegistration(
-        key="l3.report",
+    "l3.intent_summary": ContractRegistration(
+        key="l3.intent_summary",
         role="llm_output",
         owner="program",
-        model_path="app.domain.program.claim_draft:L3ReportOutput",
-        version="2",
-        description="L3 human-facing report synthesis from admitted claims.",
+        model_path="app.domain.program.claim_draft:L3IntentSummaryOutput",
+        version="1",
+        description="L3 short human-facing intent summary from rough claims.",
     ),
     "program.unit_repair": ContractRegistration(
         key="program.unit_repair",

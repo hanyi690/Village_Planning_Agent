@@ -8,7 +8,8 @@ the only place that converts provider drafts into the strict claim contract.
 from __future__ import annotations
 
 import json
-from typing import Annotated, Any, Literal, TypeAlias
+import hashlib
+from typing import Any, Literal, TypeAlias
 
 from pydantic import (
     BaseModel,
@@ -16,6 +17,7 @@ from pydantic import (
     Field,
     ValidationError,
     field_validator,
+    model_validator,
 )
 
 from app.contracts.json_container import decode_json_container
@@ -212,135 +214,125 @@ class SiteAreaPlanningParametersDraft(BaseModel):
         return value
 
 
-class L3ProviderRelationDraft(BaseModel):
-    """Wire-level relation shape used only by the L3 provider adapter.
+class L3RoughClaimDraft(BaseModel):
+    """Small provider wire shape for one non-executable planning intention.
 
-    The provider must return a typed object, but a dynamic relation union is not
-    the right place to enforce runtime identity or parameter closure.  Those
-    checks run once in the L3 worker against the current relation catalogue.
+    This is intentionally narrower than ``PlanningClaim``.  L3 expresses the
+    planning meaning and its evidence/grounding needs; deterministic admission
+    and GROUND add typed parameters, identities, relations and geometry later.
+    Provider-facing tolerance is limited to vendor-added fields and JSON
+    container coercion.  The strict domain boundary remains below this model.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
-    relation_template: str = ""
-    relation_id: str = ""
-    subject_ref: str = ""
-    object_ref: str = ""
-    object_ref_kind: str = "entity"
-    criticality: str = "soft"
-    geometry_scope: str = "pair"
-    parameters: dict[str, Any] | None = None
-    evidence_refs: list[str] = Field(default_factory=list)
-    source_claim_refs: list[str] = Field(default_factory=list)
-    weight: float = 1.0
-
-
-class L3ProviderSpatialRequirementsDraft(BaseModel):
-    """Provider wire shape before deterministic relation closure."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    relations: list[L3ProviderRelationDraft] = Field(default_factory=list)
-    shared_resource_refs: list[str] = Field(default_factory=list)
-    parcel_membership_refs: list[str] = Field(default_factory=list)
-    competing_parcel_refs: list[str] = Field(default_factory=list)
-    network_refs: list[str] = Field(default_factory=list)
-    required_input_refs: list[str] = Field(default_factory=list)
-    grounding_requirements: list[str] = Field(default_factory=list)
-
-
-class L3ProviderComponentDraft(BaseModel):
-    """Single structural wire shape for one provider-emitted L3 component.
-
-    ``L3ClaimOutput`` is the strict internal discriminated union.  It must not
-    also be used as the provider wire contract: component kinds such as
-    ``constraint`` are semantic labels that are normalized to the internal
-    ``non_spatial_action`` kind, and parameter/relation membership depends on
-    the current runtime catalogue.  Those checks belong to the L3 boundary
-    adapter after Instructor has parsed this typed object.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    component_kind: str = ""
-    claim_id: str = ""
-    dimension_key: str = ""
-    statement: str = ""
-    planning_role: str = ""
-    project_package_ref: str = ""
-    affected_population: float | None = None
-    affected_parcel_refs: list[str] = Field(default_factory=list)
-    suggested_category: str = ""
-    suggested_output_kind: str = ""
-    asset_kind: str = ""
-    suggested_interventions: list[str] = Field(default_factory=list)
-    quantity: float | None = None
-    quantity_unit: str | None = None
-    intervention_action: str = ""
-    implementation_phase: str = "short"
-    location_hints: list[str] = Field(default_factory=list)
-    constraint_refs: list[str] = Field(default_factory=list)
-    objective_refs: list[str] = Field(default_factory=list)
-    evidence_refs: list[str] = Field(default_factory=list)
-    source_fact_refs: list[str] = Field(default_factory=list)
-    source_refs: list[str] = Field(default_factory=list)
-    facility_parameters: dict[str, Any] | None = None
-    road_parameters: dict[str, Any] | None = None
-    linear_parameters: dict[str, Any] | None = None
-    axis_parameters: dict[str, Any] | None = None
-    polygon_parameters: dict[str, Any] | None = None
-    site_area_parameters: dict[str, Any] | None = None
-    spatial_requirements: L3ProviderSpatialRequirementsDraft | None = None
-    confidence: float | None = None
-    uncertainty: str = ""
+    claim_family: str = Field(default="", max_length=120)
+    statement: str = Field(default="", max_length=1200)
+    planning_role: str = Field(default="", max_length=120)
+    location_hints: list[str] = Field(default_factory=list, max_length=8)
+    constraint_refs: list[str] = Field(default_factory=list, max_length=16)
+    objective_refs: list[str] = Field(default_factory=list, max_length=16)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=16)
+    source_fact_refs: list[str] = Field(default_factory=list, max_length=24)
+    grounding_requirements: list[str] = Field(default_factory=list, max_length=12)
+    uncertainty: str = Field(default="", max_length=400)
 
     @field_validator(
-        "affected_parcel_refs",
-        "suggested_interventions",
         "location_hints",
         "constraint_refs",
         "objective_refs",
         "evidence_refs",
         "source_fact_refs",
-        "source_refs",
+        "grounding_requirements",
         mode="before",
     )
     @classmethod
     def decode_list_fields(cls, value: Any) -> Any:
         if isinstance(value, str):
-            decoded = _decode_json_container(value)
-            if not isinstance(decoded, list):
-                raise TypeError("provider list field must decode to a list")
-            return decoded
-        return value
+            try:
+                decoded = _decode_json_container(value)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                decoded = value
+            value = decoded if isinstance(decoded, list) else [decoded]
+        elif value is None:
+            return []
+        elif not isinstance(value, list):
+            value = [value]
+        return [
+            item
+            if isinstance(item, str)
+            else json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+            if isinstance(item, (dict, list, tuple, set))
+            else str(item)
+            for item in value
+        ]
 
-    @field_validator(
-        "facility_parameters",
-        "road_parameters",
-        "linear_parameters",
-        "axis_parameters",
-        "polygon_parameters",
-        "site_area_parameters",
-        "spatial_requirements",
-        mode="before",
-    )
-    @classmethod
-    def decode_object_fields(cls, value: Any) -> Any:
-        if isinstance(value, str):
-            decoded = _decode_json_container(value)
-            if not isinstance(decoded, dict):
-                raise TypeError("provider object field must decode to an object")
-            return decoded
-        return value
-
-
-class L3ProviderClaimOutput(BaseModel):
+class L3RoughClaimOutput(BaseModel):
     """Top-level L3 provider envelope before strict domain projection."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
-    claims: list[L3ProviderComponentDraft] = Field(default_factory=list)
-    diagnostics: list[str] = Field(default_factory=list)
+    claims: list[L3RoughClaimDraft] = Field(default_factory=list, max_length=12)
+    diagnostics: list[str] = Field(default_factory=list, max_length=24)
+
+    @model_validator(mode="before")
+    @classmethod
+    def isolate_non_object_claim_items(cls, value: Any) -> Any:
+        """Keep one malformed item from invalidating its valid peers."""
+
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        raw_claims = payload.get("claims")
+        if isinstance(raw_claims, str):
+            try:
+                raw_claims = _decode_json_container(raw_claims)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return payload
+        if raw_claims is None:
+            if "claims" in payload:
+                return payload
+            return payload
+        if not isinstance(raw_claims, list):
+            return payload
+        valid_items = []
+        rejected_items = []
+        for index, item in enumerate(raw_claims):
+            if len(valid_items) >= 12:
+                rejected_items.append((index, "claims max_length=12"))
+                continue
+            if not isinstance(item, (dict, L3RoughClaimDraft)):
+                rejected_items.append(
+                    (index, "item must be an object")
+                )
+                continue
+            try:
+                valid_items.append(
+                    item
+                    if isinstance(item, L3RoughClaimDraft)
+                    else L3RoughClaimDraft.model_validate(item)
+                )
+            except ValidationError as exc:
+                paths = []
+                for error in exc.errors(include_url=False):
+                    location = ".".join(str(part) for part in error.get("loc", ()))
+                    error_type = str(error.get("type") or "invalid")
+                    paths.append(f"{location or 'item'}:{error_type}")
+                rejected_items.append((index, ",".join(paths)[:500]))
+        payload["claims"] = valid_items
+        if rejected_items:
+            diagnostics = payload.get("diagnostics")
+            if not isinstance(diagnostics, list):
+                diagnostics = [diagnostics] if diagnostics is not None else []
+            diagnostics.append(
+                "WARNING[rough_claim_item_quarantine] "
+                + "; ".join(
+                    f"index={index} reason={reason}"
+                    for index, reason in rejected_items
+                )[:2000]
+            )
+            payload["diagnostics"] = diagnostics
+        return payload
 
     @field_validator("claims", mode="before")
     @classmethod
@@ -445,162 +437,8 @@ class PlanningClaimDraft(BaseModel):
         return value
 
 
-class _ClaimComponentBase(BaseModel):
-    """Shared semantic and lineage fields for the provider component union.
-
-    The provider-facing union deliberately does not include the six optional
-    typed parameter blocks.  Each concrete component adds only the block that
-    belongs to its component kind.  ``PlanningClaimDraft`` remains the local
-    internal conversion shape used by deterministic normalization.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    component_kind: str
-    claim_id: str = ""
-    dimension_key: str = ""
-    statement: str = ""
-    planning_role: PlanningRoleDraft = "spatial_intervention"
-    project_package_ref: str = ""
-    affected_population: float | None = None
-    affected_parcel_refs: list[str] = Field(default_factory=list)
-    suggested_interventions: list[str] = Field(default_factory=list)
-    quantity: float | None = None
-    quantity_unit: str | None = None
-    intervention_action: PlanningActionDraft
-    implementation_phase: Literal["short", "medium", "long"] = "short"
-    location_hints: list[str] = Field(default_factory=list)
-    constraint_refs: list[str] = Field(default_factory=list)
-    objective_refs: list[str] = Field(default_factory=list)
-    evidence_refs: list[str] = Field(default_factory=list)
-    source_fact_refs: list[str] = Field(default_factory=list)
-    source_refs: list[str] = Field(default_factory=list)
-    spatial_requirements: PlanningSpatialRequirements | None = None
-    confidence: float | None = None
-    uncertainty: str = ""
-
-
-class FacilityComponentDraft(_ClaimComponentBase):
-    component_kind: Literal["facility"] = "facility"
-    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
-    suggested_category: Literal["facility"] = "facility"
-    suggested_output_kind: Literal["point"] = "point"
-    asset_kind: Literal["facility"] = "facility"
-    facility_parameters: FacilityPlanningParametersDraft | None = None
-
-
-class RoadComponentDraft(_ClaimComponentBase):
-    component_kind: Literal["road"] = "road"
-    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
-    suggested_category: Literal["road"] = "road"
-    suggested_output_kind: Literal["line"] = "line"
-    asset_kind: Literal["road"] = "road"
-    road_parameters: RoadPlanningParametersDraft | None = None
-
-
-class LinearComponentDraft(_ClaimComponentBase):
-    component_kind: Literal["linear"] = "linear"
-    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
-    suggested_category: Literal["road"] = "road"
-    suggested_output_kind: Literal["line"] = "line"
-    asset_kind: Literal[
-        "water_supply",
-        "sewer",
-        "stormwater",
-        "power",
-        "communication",
-        "drainage_channel",
-        "revetment",
-    ] = "sewer"
-    linear_parameters: LinearAssetPlanningParametersDraft | None = None
-
-
-class AxisComponentDraft(_ClaimComponentBase):
-    component_kind: Literal["axis"] = "axis"
-    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
-    suggested_category: Literal["axis"] = "axis"
-    suggested_output_kind: Literal["line"] = "line"
-    asset_kind: Literal["axis"] = "axis"
-    axis_parameters: AxisPlanningParametersDraft | None = None
-
-
-class RestorationOverlayComponentDraft(_ClaimComponentBase):
-    component_kind: Literal["restoration_overlay"] = "restoration_overlay"
-    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
-    suggested_category: Literal["restoration"] = "restoration"
-    suggested_output_kind: Literal["polygon"] = "polygon"
-    asset_kind: Literal["none"] = "none"
-    polygon_parameters: PolygonPlanningParametersDraft | None = None
-
-
-class ProtectionOverlayComponentDraft(_ClaimComponentBase):
-    component_kind: Literal["protection_overlay"] = "protection_overlay"
-    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
-    suggested_category: Literal["protection"] = "protection"
-    suggested_output_kind: Literal["polygon"] = "polygon"
-    asset_kind: Literal["none"] = "none"
-    polygon_parameters: PolygonPlanningParametersDraft | None = None
-
-
-class ZoneComponentDraft(_ClaimComponentBase):
-    component_kind: Literal["zone"] = "zone"
-    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
-    suggested_category: Literal["zone"] = "zone"
-    suggested_output_kind: Literal["polygon"] = "polygon"
-    asset_kind: Literal["none"] = "none"
-    polygon_parameters: PolygonPlanningParametersDraft | None = None
-
-
-class LandUseAssignmentComponentDraft(_ClaimComponentBase):
-    component_kind: Literal["land_use_assignment"] = "land_use_assignment"
-    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
-    suggested_category: Literal["zone"] = "zone"
-    suggested_output_kind: Literal["polygon"] = "polygon"
-    asset_kind: Literal["land_use"] = "land_use"
-    polygon_parameters: PolygonPlanningParametersDraft | None = None
-
-
-class SiteAreaComponentDraft(_ClaimComponentBase):
-    component_kind: Literal["site_area"] = "site_area"
-    planning_role: Literal["spatial_intervention"] = "spatial_intervention"
-    suggested_category: Literal["site_area"] = "site_area"
-    suggested_output_kind: Literal["parcel", "polygon"] = "polygon"
-    asset_kind: Literal["none"] = "none"
-    site_area_parameters: SiteAreaPlanningParametersDraft | None = None
-
-
-class NonSpatialActionComponentDraft(_ClaimComponentBase):
-    component_kind: Literal["non_spatial_action"] = "non_spatial_action"
-    planning_role: Literal[
-        "evidence_statement",
-        "indicator",
-        "constraint",
-        "objective",
-        "non_spatial_action",
-        "project_package",
-    ] = "non_spatial_action"
-    suggested_category: Literal["action"] = "action"
-    suggested_output_kind: Literal["action"] = "action"
-    asset_kind: Literal["none"] = "none"
-
-
-ClaimComponentDraft: TypeAlias = Annotated[
-    FacilityComponentDraft
-    | RoadComponentDraft
-    | LinearComponentDraft
-    | AxisComponentDraft
-    | RestorationOverlayComponentDraft
-    | ProtectionOverlayComponentDraft
-    | ZoneComponentDraft
-    | LandUseAssignmentComponentDraft
-    | SiteAreaComponentDraft
-    | NonSpatialActionComponentDraft,
-    Field(discriminator="component_kind"),
-]
-
-
-def component_to_planning_claim_draft(
-    component: ClaimComponentDraft | dict[str, Any],
+def rough_claim_to_planning_claim_draft(
+    component: dict[str, Any],
     *,
     dimension_key: str = "",
 ) -> PlanningClaimDraft:
@@ -611,7 +449,42 @@ def component_to_planning_claim_draft(
         if hasattr(component, "model_dump")
         else dict(component)
     )
-    component_kind = _text(payload.get("component_kind"))
+    grounding_requirements = _clean_refs(payload.pop("grounding_requirements", []))
+    if grounding_requirements:
+        payload["spatial_requirements"] = {
+            "grounding_requirements": grounding_requirements,
+        }
+    claim_family = _text(payload.pop("claim_family", "")).lower()
+    family_aliases = {
+        "restoration": "restoration_overlay",
+        "protection": "protection_overlay",
+        "zone": "zone",
+        "site_area": "site_area",
+        "facility": "facility",
+        "road": "road",
+        "axis": "axis",
+        "action": "non_spatial_action",
+        "evidence_statement": "non_spatial_action",
+        "indicator": "non_spatial_action",
+        "constraint": "non_spatial_action",
+        "objective": "non_spatial_action",
+        "project_package": "non_spatial_action",
+        "non_spatial_action": "non_spatial_action",
+    }
+    component_kind = family_aliases.get(claim_family, "")
+    if not _text(payload.get("planning_role")):
+        payload["planning_role"] = (
+            claim_family
+            if claim_family in {
+                "evidence_statement",
+                "indicator",
+                "constraint",
+                "objective",
+                "project_package",
+                "non_spatial_action",
+            }
+            else ""
+        )
     non_spatial_aliases = {
         "action",
         "constraint",
@@ -666,6 +539,22 @@ def component_to_planning_claim_draft(
             payload["planning_role"] = role if role in allowed_roles else "non_spatial_action"
         else:
             payload["planning_role"] = "spatial_intervention"
+    if not payload.get("claim_id"):
+        identity = {
+            "dimension_key": dimension_key,
+            "claim_family": claim_family,
+            "planning_role": payload.get("planning_role", ""),
+            "statement": _text(payload.get("statement")),
+            "objective_refs": sorted(_clean_refs(payload.get("objective_refs", []))),
+            "source_fact_refs": sorted(_clean_refs(payload.get("source_fact_refs", []))),
+            "evidence_refs": sorted(_clean_refs(payload.get("evidence_refs", []))),
+            "location_hints": sorted(_clean_refs(payload.get("location_hints", []))),
+            "grounding_requirements": sorted(grounding_requirements),
+        }
+        digest = hashlib.sha256(
+            json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:20]
+        payload["claim_id"] = f"{dimension_key or 'l3'}:intent:{digest}"
     action = _text(payload.get("intervention_action"))
     if action not in {
         "preserve", "new", "expand", "relocate", "upgrade", "widen",
@@ -676,7 +565,8 @@ def component_to_planning_claim_draft(
     if phase not in {"short", "medium", "long"}:
         payload["implementation_phase"] = "short"
     payload.pop("component_kind", None)
-    if dimension_key and not payload.get("dimension_key"):
+    payload.pop("dimension_key", None)
+    if dimension_key:
         payload["dimension_key"] = dimension_key
     return PlanningClaimDraft.model_validate(payload)
 
@@ -718,29 +608,12 @@ class PlanningClaimDraftSet(BaseModel):
         return value
 
 
-class L3ClaimOutput(BaseModel):
-    """L3 planning-intent pass; no human report field is requested."""
+class L3IntentSummaryOutput(BaseModel):
+    """Short human-facing summary synthesized after rough-claim validation."""
 
     model_config = ConfigDict(extra="forbid")
 
-    claims: list[ClaimComponentDraft] = Field(default_factory=list)
-
-    @field_validator("claims", mode="before")
-    @classmethod
-    def decode_claims(cls, value: Any) -> Any:
-        if isinstance(value, str):
-            value = _decode_json_container(value)
-            if not isinstance(value, list):
-                raise TypeError("structured claims argument must decode to a list")
-        return value
-
-
-class L3ReportOutput(BaseModel):
-    """L3 human report synthesized after claim validation."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    report_body: str = ""
+    summary_body: str = Field(default="", max_length=2400)
 
 
 def _decode_json_container(value: str) -> Any:
@@ -1023,7 +896,7 @@ def _claim_draft_semantic_errors(raw: PlanningClaimDraft) -> list[str]:
                 "road spatial_intervention requires asset_kind=road or a "
                 "supported linear asset"
             )
-        if required and present != [required]:
+        if required and present and present != [required]:
             reasons.append(
                 f"asset_kind={asset} requires exactly {required} and all other "
                 "typed parameter blocks must be null"
@@ -1066,7 +939,7 @@ def _claim_draft_semantic_errors(raw: PlanningClaimDraft) -> list[str]:
             "site_area": "site_area_parameters",
         }
         required = required_by_category.get(category, "")
-        if required and present != [required]:
+        if required and present and present != [required]:
             reasons.append(
                 f"suggested_category={category} requires exactly {required} "
                 "and all other typed parameter blocks must be null"
@@ -1609,15 +1482,12 @@ def claim_set_semantic_errors(claim_set: PlanningClaimSet) -> list[str]:
 
 
 __all__ = [
-    "L3ClaimOutput",
-    "L3ProviderClaimOutput",
-    "L3ProviderComponentDraft",
-    "L3ProviderRelationDraft",
-    "L3ProviderSpatialRequirementsDraft",
-    "L3ReportOutput",
+    "L3RoughClaimOutput",
+    "L3RoughClaimDraft",
+    "L3IntentSummaryOutput",
     "PlanningClaimDraft",
     "PlanningClaimDraftSet",
-    "component_to_planning_claim_draft",
+    "rough_claim_to_planning_claim_draft",
     "claim_set_semantic_errors",
     "normalize_claim_draft_set",
 ]

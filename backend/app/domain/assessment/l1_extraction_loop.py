@@ -460,19 +460,27 @@ async def run_l1_dimension_loop(
                     "calls_used": cursor.calls_used + 1,
                 }
             )
-            report_material = json.dumps(
-                {
-                    "observations": [
-                        item.model_dump(mode="json")
-                        if hasattr(item, "model_dump")
-                        else item
-                        for item in observations
-                    ],
-                    "diagnostics": _unique(diagnostics),
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            )
+            report_rows = [
+                "| observation_id | fact_type | statement | source_segment_ids | source_quote | status |",
+                "|---|---|---|---|---|---|",
+            ]
+            for item in observations:
+                raw = item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+                if not isinstance(raw, dict):
+                    continue
+                def _cell(value: Any) -> str:
+                    if value is None:
+                        return ""
+                    if isinstance(value, (dict, list)):
+                        value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+                    return str(value).replace("|", "\\|").replace("\n", " ")
+                report_rows.append("| " + " | ".join(
+                    _cell(raw.get(key)) for key in (
+                        "observation_id", "fact_type", "statement",
+                        "source_segment_ids", "source_quote", "status",
+                    )
+                ) + " |")
+            report_material = "\n".join(report_rows)
             report_system = (
                 f"【L1 report synthesis pass; dimension_key={dimension_key}】\n"
                 "只生成面向规划人员的现状分析正文 report_body。"

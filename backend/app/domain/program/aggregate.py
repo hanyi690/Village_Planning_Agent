@@ -1,9 +1,9 @@
 """L3 aggregate node - merge typed PlanningClaimSets into PlanningProgram.
 
-L3 reports are produced as evidence-bearing claims by the LLM worker. This
+L3 intent artifacts are produced as evidence-bearing claims by the LLM worker. This
 node accepts only that typed contract and performs deterministic proposal
 adaptation, deduplication, provenance, persistence, and gating. Only
-PlanningClaimSet reports are executable inputs.
+PlanningClaimSet intent artifacts are accepted inputs.
 """
 from __future__ import annotations
 
@@ -535,14 +535,14 @@ async def l3_aggregate(
         content = rec.get("instruction")
         if not isinstance(content, str) or not content.strip():
             raise ValueError(
-                f"L3 report {dim_key} is missing its typed PlanningClaimSet payload"
+                f"L3 intent artifact {dim_key} is missing its typed PlanningClaimSet payload"
             )
         report_id = rec.get("report_id", f"rpt-{dim_key}-v1")
         try:
             claim_set = PlanningClaimSet.model_validate_json(content)
         except Exception as exc:
             raise ValueError(
-                f"L3 report {dim_key} is not a PlanningClaimSet; expected PlanningClaimSet JSON"
+                f"L3 intent artifact {dim_key} is not a PlanningClaimSet; expected PlanningClaimSet JSON"
             ) from exc
         claims = [
             claim.model_copy(update={"dimension_key": claim.dimension_key or dim_key})
@@ -763,7 +763,7 @@ async def l3_aggregate(
                 "gate_route": gate_decision.feedback_route or ("PASS" if gate_decision.passed else "FAIL"),
             },
             artifacts=[{"key": "planning_program", **ref.model_dump(mode="json")}],
-            diagnostics={"fact_consumer": "L1Snapshot + L2Strategy + L3 dimension reports"},
+            diagnostics={"fact_consumer": "L1Snapshot + L2Strategy + L3 intent artifacts"},
         )
     except Exception as exc:
         logger.debug("[l3_aggregate] step report failed: %s", exc)

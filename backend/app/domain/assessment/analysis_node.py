@@ -190,7 +190,12 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     same_layer_contexts = (
         dependency_context.render_for_prompt(
             include_keys=same_layer_deps,
-            include_summary=False,
+            # Same-layer reports are display/context summaries.  Do not
+            # recursively inline their full instruction payloads into the
+            # next dimension's prompt.
+            include_summary=True,
+            include_instruction=True,
+            instruction_projection="decision",
         )
         if same_layer_deps
         else ""

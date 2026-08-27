@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 from app.contracts.artifacts.classification_ref import ClassificationRef
 from app.contracts.artifacts.contract_meta import ContractMeta, StageIssue
@@ -24,11 +24,57 @@ class L1SpatialProvenance(BaseModel):
     observation_id: str = ""
 
 
-class L1SpatialMention(BaseModel):
-    """A named spatial work item emitted by the L1 observe pass.
+class LocationScopeMention(BaseModel):
+    """One explicitly named semantic scope around a location mention.
 
-    This is deliberately semantic only: it carries no coordinate, WKT, BSM,
-    or geometry authority.  GROUND resolves it through EvidenceGraph.
+    Scope role is supplied by the L1 observation and never guessed from a
+    name suffix.  The object is intentionally pre-geometric: it can describe
+    a natural village, administrative area, place, or another named scope,
+    but it cannot carry coordinates, BSMs, WKT, or a generated boundary.
+    """
+
+    name: str
+    normalized_name: str = ""
+    role: str = "unknown"
+    relation_to_target: str = "located_in"
+    aliases: list[str] = Field(default_factory=list)
+    source_quote: str = ""
+    source_refs: list[str] = Field(default_factory=list)
+    source_segment_ids: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
+
+
+def _legacy_scope_objects(data: Any, *, field_name: str) -> Any:
+    """Translate the retired flat scope lists at the L1 boundary only."""
+
+    if not isinstance(data, dict):
+        return data
+    payload = dict(data)
+    if field_name in payload:
+        return payload
+    scopes: list[dict[str, Any]] = []
+    for legacy_key, role in (
+        ("village_scopes", "natural_village"),
+        ("place_scopes", "place"),
+    ):
+        values = payload.pop(legacy_key, None) or []
+        if isinstance(values, str):
+            values = [values]
+        for value in values:
+            name = str(value or "").strip()
+            if name:
+                scopes.append({"name": name, "role": role})
+    if scopes:
+        payload[field_name] = scopes
+    return payload
+
+
+class LocationMentionDraft(BaseModel):
+    """Provider-side semantic location draft.
+
+    This is a transport/helper type.  It is validated inside L1 and compiled
+    into :class:`LocationMention`; it is never a resolved identity or
+    geometry.
     """
 
     mention_kind: Literal["target", "place", "anchor_request"] = "target"
@@ -36,8 +82,7 @@ class L1SpatialMention(BaseModel):
     normalized_name: str = ""
     target_name: str = ""
     role: str = "unknown"
-    village_scopes: list[str] = Field(default_factory=list)
-    place_scopes: list[str] = Field(default_factory=list)
+    scope_mentions: list[LocationScopeMention] = Field(default_factory=list)
     relation: str = ""
     instance_label: str = ""
     instance_count: str = ""
@@ -52,12 +97,34 @@ class L1SpatialMention(BaseModel):
     source_feature_ids: list[str] = Field(default_factory=list)
     provenance: L1SpatialProvenance = Field(default_factory=L1SpatialProvenance)
 
+    @model_validator(mode="before")
+    @classmethod
+    def translate_legacy_scopes(cls, data: Any) -> Any:
+        return _legacy_scope_objects(data, field_name="scope_mentions")
 
-class L1LocationFact(BaseModel):
-    """A traceable place mention extracted from an L1 observation report.
+    @property
+    def village_scopes(self) -> list[str]:
+        return [
+            scope.name
+            for scope in self.scope_mentions
+            if scope.role == "natural_village"
+        ]
 
-    ``target_name`` and the scope/instance fields form a grounding work-item
-    identity.  They do not claim that the target has already been located.
+    @property
+    def place_scopes(self) -> list[str]:
+        return [
+            scope.name
+            for scope in self.scope_mentions
+            if scope.role != "natural_village"
+        ]
+
+
+class LocationMention(BaseModel):
+    """Traceable semantic place work item compiled by L1.
+
+    ``target_name`` and ``scopes`` form a grounding work-item identity.  They
+    do not claim that the target has already been located.  Geometry and
+    canonical identity are produced only by retrieval/GROUND.
     """
 
     mention: str
@@ -67,8 +134,7 @@ class L1LocationFact(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     spatial_hint: str = ""
     related_mentions: list[str] = Field(default_factory=list)
-    village_scopes: list[str] = Field(default_factory=list)
-    place_scopes: list[str] = Field(default_factory=list)
+    scopes: list[LocationScopeMention] = Field(default_factory=list)
     instance_label: str = ""
     instance_count: str = ""
     resolution_state: Literal[
@@ -85,6 +151,27 @@ class L1LocationFact(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
     source_feature_ids: list[str] = Field(default_factory=list)
     confidence: float = 0.0
+
+    @model_validator(mode="before")
+    @classmethod
+    def translate_legacy_scopes(cls, data: Any) -> Any:
+        return _legacy_scope_objects(data, field_name="scopes")
+
+    @property
+    def village_scopes(self) -> list[str]:
+        return [
+            scope.name
+            for scope in self.scopes
+            if scope.role == "natural_village"
+        ]
+
+    @property
+    def place_scopes(self) -> list[str]:
+        return [
+            scope.name
+            for scope in self.scopes
+            if scope.role != "natural_village"
+        ]
 
 
 class L1Fact(BaseModel):
@@ -198,7 +285,10 @@ class L1Snapshot(ContractMeta):
     # Dimension-scoped facts are the auditable source for downstream strategy
     # prompts; ``facts`` remains the flattened view used by summaries.
     facts_by_dimension: dict[str, list[str]] = Field(default_factory=dict)
-    location_facts: list[L1LocationFact] = Field(default_factory=list)
+    location_mentions: list[LocationMention] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("location_mentions", "location_facts"),
+    )
     constraints: list[str] = Field(default_factory=list)
     issues: list[StageIssue] = Field(default_factory=list)
     opportunities: list[str] = Field(default_factory=list)
@@ -212,11 +302,25 @@ class L1Snapshot(ContractMeta):
     provenance: "Provenance | None" = None
     evidence_requirements: list[EvidenceRequirement] = Field(default_factory=list)
 
+    @property
+    def location_facts(self) -> list[LocationMention]:
+        """Read-only transition view for callers not yet on the new name."""
+
+        return self.location_mentions
+
+
+# Source-compatibility names are intentionally not exported.  They allow old
+# persisted fixtures to cross the boundary while all new records use the
+# LocationMention contract and the new ``location_mentions`` field.
+L1LocationFact = LocationMention
+L1SpatialMention = LocationMentionDraft
+
 
 __all__ = [
     "L1Snapshot",
-    "L1LocationFact",
-    "L1SpatialMention",
+    "LocationMention",
+    "LocationMentionDraft",
+    "LocationScopeMention",
     "L1SpatialProvenance",
     "L1Fact",
     "EvidenceGap",

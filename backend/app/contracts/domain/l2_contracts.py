@@ -17,6 +17,7 @@ from app.contracts.artifacts.contract_meta import ContractMeta
 from app.contracts.artifacts.provenance import Provenance
 from app.contracts.evidence.evidence_contracts import EvidenceSource
 from app.contracts.evidence.requirement_contracts import EvidenceRequirement
+from app.contracts.json_container import decode_json_container
 
 from .l1_contracts import EvidenceGap
 
@@ -401,6 +402,16 @@ class L2DecisionSet(StrictL2Model):
     evidence_gaps: list[L2EvidenceGap] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)
     diagnostics: list[str] = Field(default_factory=list)
+
+    @field_validator("source_refs", "diagnostics", mode="before")
+    @classmethod
+    def decode_provider_lists(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            decoded = decode_json_container(value)
+            if not isinstance(decoded, list):
+                raise TypeError("l2 provider list must decode to a list")
+            return decoded
+        return value
 
 
 class L2ReportOutput(StrictL2Model):

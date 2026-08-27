@@ -126,7 +126,13 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     same_layer_contexts = (
         dependency_context.render_for_prompt(
             include_keys=same_layer_deps,
-            include_summary=False,
+            # Same-layer dependencies are already abstract L2 outputs.  Pass
+            # their independently generated summaries, not the full typed
+            # instruction payload, which would recursively expand the
+            # context as the dependency chain grows.
+            include_summary=True,
+            include_instruction=True,
+            instruction_projection="decision",
         )
         if same_layer_deps
         else ""
@@ -164,10 +170,31 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         explore_section = f"{l1_fact_section}\n\n{explore_section}".strip()
 
     # 5. 组装 L2 Prompt（concept 模板）
+    state_config = state.get("config", {}) if isinstance(state, dict) else {}
+    if not isinstance(state_config, dict):
+        state_config = {}
+    task_and_constraints = "\n".join(
+        value for value in (
+            str(state_config.get("task_description", "") or ""),
+            str(state_config.get("constraints", "") or ""),
+        ) if value
+    )
+    prompt_parts = {
+        "task_and_constraints": task_and_constraints,
+        "l1_facts": l1_fact_section,
+        "direct_l1_dependencies": deps,
+        "same_layer_decision_context": same_layer_contexts,
+        "retrieval_context": rag_context or "",
+    }
     prompt = f"【dimension_key={dim_key}】\n" + _build_prompt(
         cfg, state, rag_context, deps, same_layer_contexts, explore_section,
     )
-    logger.info(f"[analyze_l2_dimension] {dim_key}: Prompt length = {len(prompt)} chars")
+    logger.info(
+        "[analyze_l2_dimension] %s: Prompt length=%d chars context_breakdown=%s",
+        dim_key,
+        len(prompt),
+        {key: len(value) for key, value in prompt_parts.items()},
+    )
 
     # 5.5 统计收集 - 开始维度
     from app.infrastructure.llm.stats_collector import StatsCollector
@@ -645,18 +672,19 @@ def _load_l1_fact_section(
             "spatial_fact_ids": catalog.usable_spatial_fact_ids,
         })
         audit["snapshot_fact_record_count"] = len(fact_records)
-        audit["catalog_record_count"] = len(scoped_records)
+        catalog_records = list(catalog.candidates)
+        audit["catalog_record_count"] = len(catalog_records)
         # Fact statements are rendered from the same catalog as the selectable
         # IDs in the system prompt.  The worker does not create a second,
         # identity-free fact projection that forces the model to re-match text
         # to IDs.
         facts = [
-            str(item.get("statement") or "").strip()
-            for item in scoped_records
-            if str(item.get("statement") or "").strip()
+            candidate.label
+            for candidate in catalog_records
+            if candidate.label
         ]
         audit["fact_count"] = len(facts)
-        audit["fact_record_count"] = len(scoped_records)
+        audit["fact_record_count"] = len(catalog_records)
         scoped_locations = [
             item for item in location_facts
             if not selected_dimensions or item.get("dimension_key") in selected_dimensions
@@ -665,6 +693,26 @@ def _load_l1_fact_section(
         if not facts and not scoped_locations:
             return "", audit
         lines = []
+        if facts:
+            lines.append(
+                f"【L1 对 {dimension_key} 的上游事实（由依赖树选定；可引用但不是规划决定）】"
+            )
+            lines.extend([
+                "| fact_id | statement | fact_kind | dimension_key |",
+                "|---|---|---|---|",
+            ])
+            for candidate in catalog_records:
+                if candidate.label:
+                    values = (
+                        candidate.candidate_id,
+                        candidate.label,
+                        candidate.metadata.get("fact_kind", candidate.kind),
+                        candidate.metadata.get("dimension_key", ""),
+                    )
+                    lines.append("| " + " | ".join(
+                        str(value or "").replace("|", "\\|").replace("\n", "<br>")
+                        for value in values
+                    ) + " |")
         if scoped_locations:
             lines.append(
                 f"【L1 对 {dimension_key} 的上游地点事实（来自 L1Snapshot artifact；"
@@ -702,16 +750,18 @@ def _l2_fact_reference_rules(audit: Dict[str, Any]) -> str:
     lines = [
         "【source_fact_refs 运行时闭集】",
         "source_fact_refs 只能逐字复制下面动态生成的 canonical L1Snapshot fact_id。",
-        "每个 fact_id 与 statement/kind/dimension 在同一 JSON 行中对应；不要从其他文本、"
+        "每个 fact_id 与 statement/kind/dimension 在同一表格行中对应；不要从其他文本、"
         "EXPLORE 的 L1_facts、source_refs、provenance、bundle ref、报告引用或地点名中复制身份。",
         "source_fact_refs 的每个数组必须去重；不得拼接、改写、猜测或使用不在该表中的 l1:fact ID。",
         f"catalog_digest: {catalog.digest}",
     ]
     if fact_ids:
-        lines.append(
-            "机器可复制的 JSON 闭集（唯一允许复制的身份与语义映射）："
-            + json.dumps({"allowed_l1_facts": selectable_facts}, ensure_ascii=False)
-        )
+        from app.infrastructure.llm.context_manager import render_table
+        lines.append("机器可复制的闭集（唯一允许复制的身份与语义映射）：")
+        lines.append(render_table(
+            ("fact_id", "statement", "fact_kind", "dimension_key", "spatial"),
+            selectable_facts,
+        ))
         lines.append(
             "spatial=true 的行是空间事实；除此之外不得从本提示词的其他内容推导引用。"
         )
@@ -819,10 +869,11 @@ async def _validate_l2_decision_with_one_closed_set_reask(
         first_message = "\n".join(str(first_error).splitlines()[:12])[:4000]
 
     retried = await run_decision(
-        "L2 fact catalog must remain unchanged for this reask. "
-        f"catalog_digest={catalog.digest}; "
-        "allowed_l1_fact_ids="
-        f"{json.dumps(catalog.usable_allowed_fact_ids, ensure_ascii=False)}\n"
+        "L2 fact catalog must remain unchanged for this reask.\n"
+        f"catalog_digest={catalog.digest}\n"
+        "allowed_l1_fact_ids:\n| fact_id |\n|---|\n"
+        + "\n".join(f"| {fact_id} |" for fact_id in catalog.usable_allowed_fact_ids)
+        + "\n"
         + first_message
     )
     retried = retried.model_copy(update={"dimension_key": decision_set.dimension_key})

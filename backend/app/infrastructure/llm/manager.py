@@ -323,6 +323,8 @@ class LLMManager:
             for key, value in (
                 ("timeout_s", spec.timeout_s),
                 ("max_tokens", spec.max_tokens),
+                # The caller/configuration owns schema retry policy.  A zero
+                # value is intentional for probes and item-level recovery.
                 ("max_retries", spec.max_retries),
                 ("incomplete_output_max_tokens", spec.incomplete_output_max_tokens),
                 ("max_concurrent", spec.max_concurrent),

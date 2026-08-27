@@ -12,7 +12,9 @@ Usage:
     limiter = AsyncRateLimiter(requests_per_second=500, max_concurrent=20)
     await limiter.acquire()
     try:
-        result = await llm.ainvoke(prompt)
+        # Embedding/vector callers own the provider operation; chat-model
+        # calls must go through infrastructure.llm.manager instead.
+        result = await embedding_operation(prompt)
     finally:
         limiter.release()
 """

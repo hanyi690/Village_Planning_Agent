@@ -202,10 +202,10 @@ class PlanningClaim(BaseModel):
             if self.asset_kind == "none":
                 raise ValueError("line claims require an explicit asset_kind")
             if self.asset_kind == "road":
-                if self.road_parameters is None or self.linear_parameters is not None:
-                    raise ValueError("road asset_kind requires only road_parameters")
-            elif self.linear_parameters is None or self.road_parameters is not None:
-                raise ValueError("non-road linear assets require only linear_parameters")
+                if self.linear_parameters is not None:
+                    raise ValueError("road asset_kind cannot use linear_parameters")
+            elif self.road_parameters is not None:
+                raise ValueError("non-road linear assets cannot use road_parameters")
         if self.facility_parameters is not None and self.suggested_category != "facility":
             raise ValueError("facility_parameters may only appear on facility claims")
         if self.axis_parameters is not None and self.suggested_category != "axis":

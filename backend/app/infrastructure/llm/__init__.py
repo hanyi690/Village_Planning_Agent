@@ -8,6 +8,7 @@ from .manager import (
     get_llm_manager,
 )
 from .planning_claims import PlanningClaimGenerator, get_planning_claim_generator
+from .context_manager import render_dependency_table, render_table, table_cell
 
 __all__ = [
     "LLMCallRecord",
@@ -17,4 +18,7 @@ __all__ = [
     "PlanningClaimGenerator",
     "get_llm_manager",
     "get_planning_claim_generator",
+    "render_table",
+    "table_cell",
+    "render_dependency_table",
 ]

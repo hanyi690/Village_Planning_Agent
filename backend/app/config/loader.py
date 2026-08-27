@@ -5,10 +5,26 @@
 """
 
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import yaml
 from pydantic import BaseModel, Field
+
+
+class DimensionSemanticConfig(BaseModel):
+    """Semantic contract owned by one YAML dimension entry."""
+
+    focus: str = ""
+    l1_fact_types: List[str] = Field(default_factory=list)
+    l3_claim_families: List[str] = Field(default_factory=list)
+    l3_grounding_requirements: List[str] = Field(default_factory=list)
+    spatial_authority: str = ""
+
+
+class DimensionEvidenceConfig(BaseModel):
+    """Retrieval boundary owned by one YAML dimension entry."""
+
+    entity_scope: List[str] = Field(default_factory=list)
 
 
 class DimensionConfig(BaseModel):
@@ -24,6 +40,9 @@ class DimensionConfig(BaseModel):
     # P1: KG 查询命名空间分派（"analysis" | "shared" | "execute" | 组合）
     #   L1 默认 analysis；L2 用 analysis+shared；L3 用 execute+shared。
     kg_query: str = ""
+    # Prompt/evidence boundary owned by the same YAML dimension definition.
+    semantic: DimensionSemanticConfig = Field(default_factory=DimensionSemanticConfig)
+    evidence: DimensionEvidenceConfig = Field(default_factory=DimensionEvidenceConfig)
 
 
 class PhaseConfig(BaseModel):
@@ -53,7 +72,32 @@ def load_config(path: str = None) -> PlanningConfig:
     with open(path, encoding="utf-8") as f:
         raw_data = yaml.safe_load(f)
 
-    return PlanningConfig(**raw_data)
+    config = PlanningConfig(**raw_data)
+    dimensions = [dim for phase in config.phases for dim in phase.dimensions]
+    keys = [dim.key for dim in dimensions]
+    if len(keys) != 28 or len(set(keys)) != 28:
+        raise ValueError(f"phases.yaml must contain 28 unique dimensions, got {len(keys)}")
+    for dim in dimensions:
+        semantic = dim.semantic
+        required = (
+            semantic.focus,
+            semantic.l1_fact_types,
+            semantic.l3_claim_families,
+            semantic.l3_grounding_requirements,
+            semantic.spatial_authority,
+            dim.evidence.entity_scope,
+        )
+        if any(not value for value in required):
+            raise ValueError(f"dimension {dim.key!r} has incomplete semantic/evidence configuration")
+        for field_name, values in (
+            ("l1_fact_types", semantic.l1_fact_types),
+            ("l3_claim_families", semantic.l3_claim_families),
+            ("l3_grounding_requirements", semantic.l3_grounding_requirements),
+            ("entity_scope", dim.evidence.entity_scope),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"dimension {dim.key!r} has duplicate {field_name}")
+    return config
 
 
 def get_phase_by_id(config: PlanningConfig, phase_id: str) -> Optional[PhaseConfig]:

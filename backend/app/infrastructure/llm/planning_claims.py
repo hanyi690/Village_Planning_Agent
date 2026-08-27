@@ -8,6 +8,8 @@ the JSON-schema response format used by ``method='json_schema'``.
 
 from __future__ import annotations
 
+import logging
+import json
 import threading
 from typing import Any, Sequence
 
@@ -15,7 +17,36 @@ from pydantic import ValidationError
 
 from app.core.llm_config import get_llm_settings
 from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
-from app.infrastructure.llm.structured import structured_failure_code
+from app.infrastructure.llm.structured import (
+    provider_failure_code,
+    structured_failure_code,
+    structured_failure_kind,
+    structured_failure_observation,
+)
+
+
+logger = logging.getLogger(__name__)
+
+
+def _claim_counts(result: Any) -> dict[str, int | None]:
+    claims = getattr(result, "claims", None)
+    if not isinstance(claims, list):
+        return {"emitted": None, "accepted": None, "quarantined": None}
+    count = len(claims)
+    return {"emitted": count, "accepted": count, "quarantined": 0}
+
+
+def _log_claim_observation(observation: dict[str, Any], *, level: str) -> None:
+    logger_method = getattr(logger, level)
+    logger_method(
+        "[planning_claims] output_observation=%s",
+        json.dumps(
+            observation,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
 
 
 class PlanningClaimGenerator:
@@ -39,7 +70,7 @@ class PlanningClaimGenerator:
         """Run one bounded provider call for one semantic projection only."""
 
         stage_policy = get_llm_settings().stage_policy("l3")
-        report_projection = response_model.__name__ == "L3ReportOutput"
+        report_projection = response_model.__name__ == "L3IntentSummaryOutput"
         configured_max_tokens = max(
             256,
             stage_policy.report_max_tokens
@@ -61,20 +92,24 @@ class PlanningClaimGenerator:
                     feedback_text = (
                         "\nCorrect only these deterministic closed-set findings; "
                         "do not add new claims or report content:\n- "
-                        + "\n- ".join(validation_feedback[:40])
+                        + "\n- ".join(
+                            str(item).strip()[:300]
+                            for item in validation_feedback[:8]
+                            if str(item).strip()
+                        )
                     )
                 retry_text = ""
                 if attempt > 0 and last_error is not None:
                     retry_text = (
-                        "\nThe previous structured arguments were invalid. Return only "
-                        "valid arguments for the declared response model:\n"
-                        + str(last_error)[:6000]
+                        "\nL3 claims repair: fix only the typed validation paths below; "
+                        "return the same narrow claims contract and no report text:\n"
+                        + str(last_error)[:1200]
                     )
                 result = await get_llm_manager().run_structured(
                     LLMCallSpec(
                         stage="L3",
                         contract_key=(
-                            "l3.report" if report_projection else "l3.claims"
+                            "l3.intent_summary" if report_projection else "l3.claims"
                         ),
                         response_model=response_model,
                         call_type="report" if report_projection else "semantic",
@@ -136,38 +171,89 @@ class PlanningClaimGenerator:
         spatial_source_fact_ids: Sequence[str],
         validation_feedback: list[str] | None = None,
     ) -> Any:
-        """Generate only typed L3 claims; report synthesis is a later call."""
+        """Generate only typed L3 rough claims; summary is a later call."""
 
         response_model = _dynamic_claim_output_model(
             source_fact_ids,
             spatial_source_fact_ids,
         )
 
-        return await self._generate_projection(
-            response_model,
-            prompt,
-            instruction=(
-                "Return only the complete structured claims array. Do not return "
-                "report_body, Markdown, explanations, coordinates, BSM IDs or geometry."
-            ),
-            validation_feedback=validation_feedback,
-        )
+        try:
+            result = await self._generate_projection(
+                response_model,
+                prompt,
+                instruction=(
+                    "Return only the complete structured claims array. Do not return "
+                    "summary_body, Markdown, explanations, coordinates, BSM IDs or geometry."
+                ),
+                validation_feedback=validation_feedback,
+            )
+            _log_claim_observation(
+                {
+                    "contract": "l3.claims",
+                    "failure_code": None,
+                    "failure_kind": None,
+                    "status": "accepted",
+                    "claim_counts": _claim_counts(result),
+                },
+                level="info",
+            )
+            return result
+        except Exception as exc:
+            failure_code = structured_failure_code(exc)
+            failure_kind = structured_failure_kind(exc)
+            if failure_kind == "provider_infrastructure" or provider_failure_code(exc) is not None:
+                observation = structured_failure_observation(exc)
+                observation.update(
+                    {
+                        "status": "provider_failure",
+                        "claim_counts": {
+                            "emitted": None,
+                            "accepted": 0,
+                            "quarantined": 0,
+                        },
+                    }
+                )
+                _log_claim_observation(observation, level="error")
+                raise
+            if failure_kind != "recoverable_schema":
+                observation = structured_failure_observation(exc)
+                observation["status"] = "unclassified_failure"
+                _log_claim_observation(observation, level="error")
+                raise
+            observation = structured_failure_observation(exc)
+            emitted = observation.get("claims_emitted")
+            observation.update(
+                {
+                    "status": "quarantined",
+                    "claim_counts": {
+                        "emitted": emitted,
+                        "accepted": 0,
+                        "quarantined": emitted,
+                    },
+                }
+            )
+            _log_claim_observation(observation, level="warning")
+            return response_model(
+                claims=[],
+                diagnostics=["provider_claims_quarantined_validation_error"],
+            )
 
-    async def generate_report(
+    async def generate_intent_summary(
         self,
         prompt: str,
         *,
         validation_feedback: list[str] | None = None,
     ) -> Any:
-        """Synthesize only the human L3 report from already validated claims."""
+        """Synthesize only the human L3 intent summary from validated claims."""
 
-        from app.domain.program.claim_draft import L3ReportOutput
+        from app.domain.program.claim_draft import L3IntentSummaryOutput
 
         return await self._generate_projection(
-            L3ReportOutput,
+            L3IntentSummaryOutput,
             prompt,
             instruction=(
-                "Return only report_body as a human-readable planning report. "
+                "Return only summary_body as a short human-readable intent summary. "
                 "Do not create or change claims, targets, locations, geometry, quantities "
                 "or source facts; do not return a claims array."
             ),
@@ -191,10 +277,10 @@ def _dynamic_claim_output_model(
     schema caches from seeing a new contract name for every catalog digest.
     """
 
-    from app.domain.program.claim_draft import L3ProviderClaimOutput
+    from app.domain.program.claim_draft import L3RoughClaimOutput
 
     del source_fact_ids, spatial_source_fact_ids
-    return L3ProviderClaimOutput
+    return L3RoughClaimOutput
 
 def get_planning_claim_generator() -> PlanningClaimGenerator:
     global _GENERATOR

@@ -21,7 +21,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from app.config import get_dimension_layer
 from app.contracts.events import SSEEventType
@@ -159,18 +159,6 @@ class RAGRetrievalLog:
     skip_reason: str  # 如果RAG被跳过，记录原因
 
 
-_EVIDENCE_ENTITY_SCOPE = (
-    "parcels",
-    "facilities",
-    "roads",
-    "annotations",
-    "hazards",
-    "waters",
-    "zones",
-    "settlements",
-)
-
-
 async def _current_planning_context(state: Dict[str, Any]) -> Any:
     """Return the workflow-owned context required by every evidence request."""
 
@@ -228,6 +216,7 @@ def _analysis_evidence_context(
     *,
     budget: int = 48,
     excluded_source_families: set[str] | None = None,
+    excluded_fact_refs: Iterable[str] | None = None,
 ) -> str:
     """Render only the analysis-safe evidence projection.
 
@@ -241,7 +230,11 @@ def _analysis_evidence_context(
         render_analysis_evidence_for_prompt,
     )
 
-    projection = render_analysis_evidence_for_prompt(result, budget=min(budget, 16))
+    projection = render_analysis_evidence_for_prompt(
+        result,
+        budget=min(budget, 16),
+        include_packet_spatial=False,
+    )
     excluded = {str(item).strip() for item in (excluded_source_families or set())}
     if excluded:
         projection["facts"] = [
@@ -254,12 +247,56 @@ def _analysis_evidence_context(
             for source in projection.get("sources", [])
             if source.get("source_family") not in excluded
         ]
-    return "## EXPLORE 证据\n" + json.dumps(
-        projection,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    excluded_refs = {
+        str(item).strip()
+        for item in (excluded_fact_refs or ())
+        if str(item).strip()
+    }
+    if excluded_refs:
+        projection["facts"] = [
+            fact
+            for fact in projection.get("facts", [])
+            if not excluded_refs.intersection({
+                str(fact.get("fact_id") or "").strip(),
+                *(str(ref).strip() for ref in fact.get("source_refs", []) or []),
+                *(str(ref).strip() for ref in fact.get("evidence_refs", []) or []),
+            })
+        ]
+    def cell(value: Any) -> str:
+        if value is None:
+            return ""
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True)
+        return str(text).replace("|", "\\|").replace("\n", " ")
+
+    sections = ["## EXPLORE 证据"]
+    facts = projection.get("facts", [])
+    if facts:
+        sections.extend([
+            "### 事实",
+            "| fact_id | statement | subject_ref | predicate | value | source_refs |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ])
+        sections.extend(
+            "| " + " | ".join(cell(fact.get(key)) for key in (
+                "fact_id", "statement", "subject_ref", "predicate", "value", "source_refs"
+            )) + " |"
+            for fact in facts
+        )
+    coverage = projection.get("coverage", {})
+    if coverage:
+        sections.extend(["### 覆盖状态", "| 字段 | 值 |", "| --- | --- |"])
+        sections.extend(
+            f"| {cell(key)} | {cell(value)} |"
+            for key, value in coverage.items()
+        )
+    gaps = projection.get("gap", [])
+    if gaps:
+        sections.extend(["### 证据缺口", "| gap_id | status | reason |", "| --- | --- | --- |"])
+        sections.extend(
+            "| " + " | ".join(cell(row.get(key)) for key in ("gap_id", "status", "reason")) + " |"
+            for row in gaps
+        )
+    return "\n".join(sections)
 
 
 async def retrieve_vector_context(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[str, Any | None]:
@@ -622,6 +659,7 @@ async def run_rag(
     state: Dict[str, Any],
     *,
     trace_sink: dict[str, Any] | None = None,
+    excluded_fact_refs: Iterable[str] | None = None,
 ) -> tuple[str, Any | None]:
     """Retrieve one unified evidence packet for a planning dimension.
 
@@ -635,7 +673,11 @@ async def run_rag(
     session_id = str(state.get("session_id", "") or "")
     config = state.get("config") or {}
     context = await _current_planning_context(state)
-    entity_scope = list(_EVIDENCE_ENTITY_SCOPE)
+    from app.domain.assessment.dimension_contracts import get_dimension_entity_scope
+
+    entity_scope = get_dimension_entity_scope(dimension_key, cfg)
+    if not entity_scope:
+        raise ValueError(f"No retrieval entity scope configured for {dimension_key!r}")
     project_cognition_scope = _project_cognition_scope(
         context,
         state,
@@ -773,6 +815,7 @@ async def run_rag(
     return _analysis_evidence_context(
         result,
         excluded_source_families=excluded_source_families,
+        excluded_fact_refs=excluded_fact_refs,
     ), rag_log
 
 
@@ -797,7 +840,11 @@ async def run_targeted_evidence(
     session_id = str(state.get("session_id", "") or "")
     config = state.get("config") or {}
     context = await _current_planning_context(state)
-    entity_scope = list(_EVIDENCE_ENTITY_SCOPE)
+    from app.domain.assessment.dimension_contracts import get_dimension_entity_scope
+
+    entity_scope = get_dimension_entity_scope(dimension_key, cfg)
+    if not entity_scope:
+        raise ValueError(f"No retrieval entity scope configured for {dimension_key!r}")
     project_cognition_scope = _project_cognition_scope(
         context,
         state,

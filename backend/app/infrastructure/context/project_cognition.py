@@ -760,7 +760,12 @@ def build_project_cognition(context: Any, scope: Any = None) -> ProjectCognition
     )
 
 
-def render_analysis_evidence(result: ExplorationResult, budget: int | None = None) -> dict[str, Any]:
+def render_analysis_evidence(
+    result: ExplorationResult,
+    budget: int | None = None,
+    *,
+    include_packet_spatial: bool = True,
+) -> dict[str, Any]:
     """Render only safe projections from a real ``ExplorationResult``."""
 
     if not isinstance(result, ExplorationResult):
@@ -780,7 +785,7 @@ def render_analysis_evidence(result: ExplorationResult, budget: int | None = Non
     raw_facts: list[tuple[dict[str, Any], str, str]] = [
         _project_fact(fact, source_by_ref=source_by_ref) for fact in bundle.facts
     ]
-    if packet is not None:
+    if packet is not None and include_packet_spatial:
         for candidate in packet.candidate_refs:
             projected = _project_candidate(candidate, packet)
             if projected is not None:
@@ -1007,6 +1012,7 @@ def render_analysis_evidence_for_prompt(
     result: ExplorationResult,
     *,
     budget: int = 16,
+    include_packet_spatial: bool = False,
 ) -> dict[str, Any]:
     """Render the small evidence view allowed into an analysis prompt.
 
@@ -1021,7 +1027,11 @@ def render_analysis_evidence_for_prompt(
 
     if budget <= 0:
         raise ValueError("budget must be positive")
-    projected = render_analysis_evidence(result, budget=budget)
+    projected = render_analysis_evidence(
+        result,
+        budget=budget,
+        include_packet_spatial=include_packet_spatial,
+    )
 
     facts = [
         _prompt_fact(raw)

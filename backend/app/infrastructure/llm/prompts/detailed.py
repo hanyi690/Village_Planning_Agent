@@ -1,26 +1,19 @@
-"""Production prompt for the semantic L3 claim-component pass.
+"""Production prompt for the small, non-executable L3 intent pass.
 
-The structured response model, relation catalog, and evidence registry own
-closed-set validation. This prompt supplies planning context and explains the
-semantic work that remains for the model; it deliberately does not duplicate
-those executable contracts.
+L3 expresses a rough planning intention.  It does not pre-compile a target,
+spatial relation, parameter block, candidate, or geometry for GROUND.
 """
 
 
 CLAIMS_OUTPUT_GUIDE = """
-【L3 claims-only semantic pass】
-claims pass 只写结构化判断：claims-only 输出当前维度的 claims 数组，不生成 report_body、坐标、BSM 或 geometry。报告正文由后续 report-synthesis pass 根据已确认 claims 生成，不能新增目标、数量、位置、关系或证据来源。
+【L3 planning-intent pass】
+本轮只表达当前维度的粗略、非可执行规划意图。输出少量 claims；不要生成 report_body、项目包拆解、候选、空间关系、参数、数量、面积、容量、坐标、BSM 或 geometry。
 
-【组件与项目包】
-结构化 schema 是字段、组件类型和参数块的唯一约束来源。每条 claim 先表达一个语义组件，再填写该组件真正需要的规划量；不要把一个项目包的总体愿景、服务范围、道路/管线和保护/修复覆盖物塞进同一个组件。一个项目包含多个物质组件时分别输出并复用同一个 project_package_ref：例如“文化廊道连接村寨”可拆成 axis 与实际 road/linear；“服务中心服务居民点”可拆成 zone 与 facility。只有概念性“串联/服务/修复”而没有明确物质工程时，保留为 objective 或组件语义，不凭空增加 hard relation 或物理设施。
+每条 claim 只回答：想解决什么问题、希望形成什么方向、依据哪些事实、还需要核实什么。空间意图可以保留为“需要进一步接地”的语义，不要因为暂时没有位置就改写成另一个结论。
 
-spatial_intervention 表示最终需要空间候选或空间成果，不表示已经完成空间定位。非空间事实、指标、约束和管理行动使用 schema 提供的非空间组件。缺少定位、证据或端点时保留语义意图，让 GROUND 接收 grounding requirement；不要把空间目标静默降级为 action，也不要编造身份。
+允许的 claim_family 只能使用当前维度语义契约中的粗粒度类别，例如 objective、constraint、action、facility、road、axis、zone、site_area、restoration、protection。类别只表示意图类型，不表示已经拥有对应的空间对象。
 
-【引用与关系】
-candidate_context 是本轮可选的 source fact ID 和按主体类型分组的关系候选。source_fact_refs 只能逐字复制其中真实存在的 fact ID；空间 claim 还必须从 spatial_source_fact_options 中选择。EXPLORE 中的 L1_facts、source_refs、provenance、entity ref 和 bundle ref 只是 lineage/background，不能复制到 source_fact_refs。其他 ID、地点名、报告段落、BSM 和坐标也不是来源身份。关系只在当前语义明确且候选列表允许时声明；跨组件对象尚未进入 registry 时留空，并用 grounding requirement 描述 expected kind、查询语义和缺失槽位。未解析的引用不能改写成另一个 claim、项目包或地点字符串。
-
-【证据边界】
-L1 typed facts、EvidenceGraph 证据和本节明确提供的专业数据用于支持语义判断；报告背景和旧模板只作为背景。没有证据就不要补写项目数量、地点、面积、长度、容量或服务对象。L3 不生成空间几何，具体 place binding、network、parcel 和 topology 由 GROUND/VALIDATE 处理。
+source_fact_refs 只能逐字复制当前 L1 facts 中出现的 fact_id；没有合适事实时使用空数组。location_hints 只能是来源支持的自然语言线索，不是实体 ID。grounding_requirements 只描述后续 GROUND 需要核实的事实类型或关系，不填写 relation object、candidate ID 或 geometry。
 """
 
 
@@ -34,86 +27,64 @@ L3_EVIDENCE_PRIORITY_GUIDE = """
 
 L3_EMISSION_CHECKLIST = """
 【发射前检查】
-1. 先判断这是非空间语义、空间组件还是项目包的一部分。
-2. 混合项目拆成独立组件；同一项目包只复用稳定 package ref，不复用空间实体身份。
-3. 只选择当前 schema 和 candidate_context 提供的组件/关系/来源选项。
-4. 未闭合的来源、对象、网络或位置形成 grounding requirement，并在 uncertainty 中保留待核验状态。
-"""
-
-
-L3_DYNAMIC_CLOSED_SET_GUIDE = """
-【L3 动态闭集发射规则】
-1. source_fact_refs 只能逐字复制 candidate_context 的 source_fact_options；空间 claim 只能复制 spatial_source_fact_options。没有明确候选时使用 []，不得发明 l1:fact ID、把背景文本中的其他 ID 当作候选，或用 source_fact_catalog_digest 作为引用。
-2. relation_template 只能逐字复制 relation_options_by_subject_kind 中当前组件对应的 relation_template；object_ref_kind、参数类型和 criticality 必须逐字读取 relation_specs[relation_template]。
-3. 网络连通关系的模板名是 connect_network；connects 不是 relation_template（不是关系模板），只能作为 road_parameters、linear_parameters 或 axis_parameters 中的端点/地点提示字段。
-4. 不要把关系参数字段名、旧版解析字段或自然语言同义词当作 relation_template。没有合法关系时输出空 relations 并保留 grounding requirement。
-"""
-
-
-LOCATION_EVIDENCE_GUIDE = """
-【空间证据】
-以下内容只提供可核验的上游证据和位置线索，不等于已经完成空间绑定：
-{location_evidence}
-只能复制其中真实出现且与当前对象直接相关的身份；没有直接关系时留空。
+1. 每条 claim 只保留一个粗粒度规划意图。
+2. 只引用当前 L1 fact projection 中真实存在的 fact_id。
+3. 没有位置或空间证据时保留 location_hints，并填写 grounding_requirements。
+4. 不输出参数块、relation_template、object_ref、candidate、parcel、network 或 geometry。
 """
 
 
 def get_dimension_prompt(
     dimension_key: str,
+    *,
+    project_name: str = "村庄",
+    l1_facts: str = "",
+    l2_decisions: str = "",
+    same_layer_claims: str = "",
+    evidence_context: str = "",
+    task_constraints: str = "",
+    semantic_contract: str = "",
+    upstream_source_dimensions: str = "未提供",
     revision_instruction: str = "",
-    **kwargs,
 ) -> str:
-    """Build one bounded claims-only prompt for a dimension."""
+    """Build the only production L3 rough-intent prompt."""
 
     dimension_key = str(dimension_key or "").strip()
     if not dimension_key:
         return ""
 
-    def _text(name: str) -> str:
-        return str(kwargs.get(name) or "").strip()
-
-    project_name = _text("project_name") or "村庄"
-    semantic_contract = _text("semantic_contract")
-    professional_data_section = _text("professional_data_section")
-    if not professional_data_section and isinstance(kwargs.get("professional_data"), str):
-        professional_data_section = str(kwargs["professional_data"]).strip()
-    evidence_context = _text("evidence_context") or _text("knowledge_context")
-    location_evidence = _text("location_evidence")
-    candidate_context = _text("candidate_context")
-    upstream_dimensions = _text("upstream_source_dimensions") or "未提供"
+    project_name = str(project_name or "村庄").strip()
+    semantic_contract = str(semantic_contract or "").strip()
+    l1_facts = str(l1_facts or "").strip()
+    l2_decisions = str(l2_decisions or "").strip()
+    same_layer_claims = str(same_layer_claims or "").strip()
+    evidence_context = str(evidence_context or "").strip()
+    task_constraints = str(task_constraints or "").strip()
+    upstream_dimensions = str(upstream_source_dimensions or "未提供").strip()
 
     sections = [
         f"【L3 claims-only production pass | dimension_key={dimension_key}】",
         f"项目：{project_name}",
-        "本轮只生成可审计的结构化 claims，不生成法定报告正文、表格、几何或调试对象。",
-        "旧报告模板中的表格和‘至少列出’只是背景，不能决定本轮项目数量或数值。",
-        "非空间指标可以没有 locator；空间组件即使还没有 locator 也要保留语义，并交给 GROUND 生成待补齐任务。",
+        "本轮只生成粗粒度、非可执行的结构化规划意图；报告正文由独立调用生成。",
         "上游 L1 source dimensions：" + upstream_dimensions,
     ]
     if revision_instruction:
         sections.insert(0, revision_instruction)
     if semantic_contract:
         sections.append("【维度语义契约】\n" + semantic_contract)
-    if professional_data_section:
-        sections.append("【专业数据与探索上下文；仅作背景】\n" + professional_data_section)
-    for label, value in (
-        ("L1 现状分析背景", _text("analysis_report")),
-        ("L2 规划思路背景", _text("planning_concept")),
-        ("约束条件", _text("constraints")),
-        ("同层规划背景", _text("dimension_plans")),
-    ):
-        if value:
-            sections.append(f"【{label}；不得直接当作空间身份】\n{value}")
+    if l1_facts:
+        sections.append("【去重后的 L1 canonical facts】\n" + l1_facts)
+    if l2_decisions:
+        sections.append("【L2 abstract decisions】\n" + l2_decisions)
+    if same_layer_claims:
+        sections.append("【同层已形成的 rough claims；仅用于去重与边界协调】\n" + same_layer_claims)
+    if task_constraints:
+        sections.append("【任务约束】\n" + task_constraints)
     if evidence_context:
-        sections.append("【统一证据检索结果】\n" + evidence_context)
-    if location_evidence:
-        sections.append(LOCATION_EVIDENCE_GUIDE.format(location_evidence=location_evidence))
-    if candidate_context:
-        sections.append("【当前候选上下文；只可选择其中 ID/关系】\n" + candidate_context)
+        sections.append("【当前维度的定向证据 projection】\n" + evidence_context)
     sections.extend([
         L3_EVIDENCE_PRIORITY_GUIDE,
         CLAIMS_OUTPUT_GUIDE,
-        L3_DYNAMIC_CLOSED_SET_GUIDE,
         L3_EMISSION_CHECKLIST,
     ])
     return "\n\n".join(sections)
@@ -123,7 +94,5 @@ __all__ = [
     "CLAIMS_OUTPUT_GUIDE",
     "L3_EVIDENCE_PRIORITY_GUIDE",
     "L3_EMISSION_CHECKLIST",
-    "L3_DYNAMIC_CLOSED_SET_GUIDE",
-    "LOCATION_EVIDENCE_GUIDE",
     "get_dimension_prompt",
 ]

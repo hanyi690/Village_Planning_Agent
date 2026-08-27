@@ -2,314 +2,1128 @@
 # 此文件是28维度配置的唯一来源
 
 phases:
-  # Layer 1: 现状分析（12维度，并行执行）
-  - id: layer1
-    name: "现状分析"
-    execution: parallel
-    dimensions:
-      - key: location
-        name: "区位与对外交通分析"
-        tools: []
-        rag_query: "村庄区位条件分析 对外交通规划要求 交通设施配置标准"
-        prefer_doc_types: [standard]
-        depends_on: []
-
-      - key: socio_economic
-        name: "社会经济分析"
-        tools: []
-        rag_query: "村庄人口规模预测方法 人均建设用地指标 人口增长率计算"
-        prefer_doc_types: [policy, standard]
-        depends_on: []
-
-      - key: villager_wishes
-        name: "村民意愿与诉求分析"
-        tools: []
-        rag_query: "村民意愿调查方法 村庄规划公众参与 问卷调查技术规范"
-        prefer_doc_types: [standard, guide]
-        depends_on: []
-
-      - key: superior_planning
-        name: "上位规划与政策导向分析"
-        tools: []
-        rag_query: "上位规划衔接要求 村庄规划政策依据 土地利用总体规划"
-        prefer_doc_types: [policy, planning]
-        depends_on: []
-
-      - key: natural_environment
-        name: "自然环境分析"
-        tools: []
-        rag_query: "村庄自然环境评价 地形地貌分析技术 生态敏感性评价"
-        prefer_doc_types: [standard, guide]
-        depends_on: []
-
-      - key: land_use
-        name: "土地利用分析"
-        tools: []
-        rag_query: "村庄用地分类标准 建设用地指标控制 土地利用现状调查"
-        prefer_doc_types: [policy, standard]
-        depends_on: []
-
-      - key: traffic
-        name: "道路交通分析"
-        tools: []
-        rag_query: "村庄道路等级分类 交通可达性分析 道路宽度标准"
-        prefer_doc_types: [standard, guide]
-        depends_on: []
-
-      - key: public_services
-        name: "公共服务设施分析"
-        tools: []
-        rag_query: "村庄公共服务设施配置标准 村级公共服务设施规划要求"
-        prefer_doc_types: [standard, policy]
-        depends_on: []
-
-      - key: infrastructure
-        name: "基础设施分析"
-        tools: []
-        rag_query: "村庄基础设施配置标准 给排水设施规划 电力通信设施"
-        prefer_doc_types: [standard, guide]
-        depends_on: []
-
-      - key: ecological_green
-        name: "生态绿地分析"
-        tools: []
-        rag_query: "村庄绿地系统规划 生态保护红线划定 绿地覆盖率标准"
-        prefer_doc_types: [standard, guide]
-        depends_on: []
-
-      - key: architecture
-        name: "建筑分析"
-        tools: []
-        rag_query: "村庄建筑质量评价 农房建设标准 建筑风貌分类"
-        prefer_doc_types: [standard, policy]
-        depends_on: []
-
-      - key: historical_culture
-        name: "历史文化与乡愁保护分析"
-        tools: []
-        rag_query: "历史文化保护规划 传统村落保护要求 乡土文化传承"
-        prefer_doc_types: [policy, standard]
-        depends_on: []
-
-  # Layer 2: 规划思路（4维度，Wave波次执行）
-  - id: layer2
-    name: "规划思路"
-    execution: wave
-    dimensions:
-      - key: resource_endowment
-        name: "资源禀赋分析"
-        tools: []
-        rag_query: ""
-        kg_query: "analysis+shared"
-        depends_on: []
-        layer_depends_on:
-          - "natural_environment"
-          - "land_use"
-          - "socio_economic"
-          - "historical_culture"
-          - "architecture"
-          - "public_services"
-
-      - key: planning_positioning
-        name: "规划定位分析"
-        tools: []
-        rag_query: ""
-        kg_query: "analysis+shared"
-        depends_on: ["resource_endowment"]
-        layer_depends_on:
-          - "location"
-          - "socio_economic"
-          - "superior_planning"
-
-      - key: development_goals
-        name: "发展目标分析"
-        tools: []
-        rag_query: ""
-        kg_query: "analysis+shared"
-        depends_on: ["resource_endowment", "planning_positioning"]
-        layer_depends_on:
-          - "socio_economic"
-          - "superior_planning"
-
-      - key: planning_strategies
-        name: "规划策略分析"
-        tools: ["population_prediction"]
-        rag_query: ""
-        kg_query: "analysis+shared"
-        depends_on: ["resource_endowment", "planning_positioning", "development_goals"]
-        layer_depends_on:
-          - "socio_economic"
-          - "natural_environment"
-          - "land_use"
-          - "traffic"
-          - "infrastructure"
-          - "historical_culture"
-
-  # Layer 3: 详细规划（12维度，Wave波次执行）
-  - id: layer3
-    name: "详细规划"
-    execution: wave
-    dimensions:
-      - key: industry
-        name: "产业规划"
-        tools: []
-        rag_query: "村庄产业发展规划 农村产业布局 一二三产融合"
-        prefer_doc_types: [policy, standard, case]
-        depends_on: []
-        layer_depends_on:
-          - "socio_economic"
-          - "land_use"
-        phase_depends_on:
-          - "resource_endowment"
-          - "planning_positioning"
-          - "planning_strategies"
-
-      - key: spatial_structure
-        name: "空间结构规划"
-        tools: []
-        rag_query: "村庄空间结构规划 空间布局模式 一核多点布局"
-        kg_query: "execute+shared"
-        prefer_doc_types: [standard, case]
-        depends_on: []
-        layer_depends_on:
-          - "natural_environment"
-          - "land_use"
-        phase_depends_on:
-          - "planning_positioning"
-          - "planning_strategies"
-
-      - key: land_use_planning
-        name: "土地利用规划"
-        tools: []
-        rag_query: "村庄土地利用规划 用地布局方案 建设用地边界划定"
-        kg_query: "execute+shared"
-        prefer_doc_types: [policy, standard]
-        depends_on: []
-        layer_depends_on:
-          - "land_use"
-          - "natural_environment"
-        phase_depends_on:
-          - "planning_positioning"
-          - "planning_strategies"
-
-      - key: settlement_planning
-        name: "居民点规划"
-        tools: []
-        rag_query: "村庄居民点布局 农村居民点规划 自然村整治方案"
-        kg_query: "execute+shared"
-        prefer_doc_types: [standard, case]
-        depends_on: []
-        layer_depends_on:
-          - "socio_economic"
-        phase_depends_on:
-          - "planning_positioning"
-          - "planning_strategies"
-
-      - key: traffic_planning
-        name: "道路交通规划"
-        tools: []
-        rag_query: "村庄道路规划技术 道路红线宽度 村内道路等级"
-        kg_query: "execute+shared"
-        prefer_doc_types: [standard]
-        depends_on: []
-        layer_depends_on:
-          - "traffic"
-        phase_depends_on:
-          - "planning_strategies"
-
-      - key: public_service
-        name: "公共服务设施规划"
-        tools: []
-        rag_query: "村庄公共服务设施配置 公共设施用地指标 村级服务中心"
-        kg_query: "execute+shared"
-        prefer_doc_types: [standard]
-        depends_on: []
-        layer_depends_on:
-          - "public_services"
-          - "socio_economic"
-        phase_depends_on:
-          - "planning_strategies"
-
-      - key: infrastructure_planning
-        name: "基础设施规划"
-        tools: []
-        rag_query: "村庄基础设施规划 给排水管网设计 电力通信规划"
-        prefer_doc_types: [standard, guide]
-        depends_on: []
-        layer_depends_on:
-          - "infrastructure"
-        phase_depends_on:
-          - "planning_strategies"
-
-      - key: ecological
-        name: "生态绿地规划"
-        tools: []
-        rag_query: "村庄绿地规划 生态保护用地 公园绿地设计"
-        kg_query: "execute+shared"
-        prefer_doc_types: [standard, guide]
-        depends_on: []
-        layer_depends_on:
-          - "ecological_green"
-        phase_depends_on:
-          - "planning_strategies"
-
-      - key: disaster_prevention
-        name: "防震减灾规划"
-        tools: []
-        rag_query: "村庄防灾规划 地质灾害防治 消防通道设置"
-        prefer_doc_types: [standard, policy]
-        depends_on: []
-        layer_depends_on:
-          - "infrastructure"
-          - "architecture"
-        phase_depends_on:
-          - "planning_positioning"
-          - "planning_strategies"
-
-      - key: heritage
-        name: "历史文保规划"
-        tools: []
-        rag_query: "历史文化保护规划 传统建筑保护 历史风貌区划定"
-        prefer_doc_types: [policy, standard]
-        depends_on: []
-        layer_depends_on:
-          - "historical_culture"
-        phase_depends_on:
-          - "planning_positioning"
-          - "planning_strategies"
-
-      - key: landscape
-        name: "村庄风貌指引"
-        tools: []
-        rag_query: "村庄风貌设计 建筑风貌引导 村容村貌整治"
-        prefer_doc_types: [standard, guide, case]
-        depends_on: []
-        layer_depends_on:
-          - "architecture"
-          - "historical_culture"
-        phase_depends_on:
-          - "planning_positioning"
-          - "planning_strategies"
-
-      - key: project_bank
-        name: "建设项目库"
-        tools: []
-        rag_query: ""
-        depends_on:
-          - "industry"
-          - "spatial_structure"
-          - "land_use_planning"
-          - "settlement_planning"
-          - "traffic_planning"
-          - "public_service"
-          - "infrastructure_planning"
-          - "ecological"
-          - "disaster_prevention"
-          - "heritage"
-          - "landscape"
-        layer_depends_on: []
-        phase_depends_on: 
-          - "resource_endowment"
-          - "planning_positioning"
-          -  "development_goals"
-          - "planning_strategies"
+- id: layer1
+  name: 现状分析
+  execution: parallel
+  dimensions:
+  - key: location
+    name: 区位与对外交通分析
+    tools: []
+    rag_query: 村庄区位条件分析 对外交通规划要求 交通设施配置标准
+    prefer_doc_types:
+    - standard
+    depends_on: []
+    semantic:
+      focus: 行政区、自然村、道路、水系和对外联系的身份、别名、方向和关系；不把地点名本身变成规划项目。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - scoped_metric
+      - document_observation
+      l3_claim_families:
+      - evidence_statement
+      - constraint
+      - objective
+      - axis
+      - road
+      l3_grounding_requirements:
+      - place_binding
+      - network_snapshot
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - settlements
+      - roads
+      - waters
+      - zones
+  - key: socio_economic
+    name: 社会经济分析
+    tools: []
+    rag_query: 村庄人口规模预测方法 人均建设用地指标 人口增长率计算
+    prefer_doc_types:
+    - policy
+    - standard
+    depends_on: []
+    semantic:
+      focus: 人口、户数、产业、就业和服务需求；没有空间证据时只产指标或需求，不生成点位。
+      l1_fact_types:
+      - scoped_metric
+      - spatial_entity
+      - demand
+      - constraint
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - indicator
+      - objective
+      - project_package
+      - facility
+      - site_area
+      - action
+      l3_grounding_requirements:
+      - place_binding
+      - demand_points
+      - candidate_geometry
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - settlements
+      - facilities
+      - parcels
+  - key: villager_wishes
+    name: 村民意愿与诉求分析
+    semantic:
+      focus: 村民诉求、受益对象、紧迫性和位置线索；诉求不是现状资产，位置不明确则保留为需求或待核验。
+      l1_fact_types:
+      - demand
+      - spatial_entity
+      - constraint
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - objective
+      - project_package
+      - facility
+      - road
+      - site_area
+      - action
+      l3_grounding_requirements:
+      - place_binding
+      - demand_points
+      - candidate_geometry
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - settlements
+      - facilities
+      - annotations
+    tools: []
+    rag_query: 村民意愿调查方法 村庄规划公众参与 问卷调查技术规范
+    prefer_doc_types:
+    - standard
+    - guide
+    depends_on: []
+  - key: superior_planning
+    name: 上位规划与政策导向分析
+    semantic:
+      focus: 法定指标、政策约束、期限和适用范围；不得把政策条文直接当作地块或几何。
+      l1_fact_types:
+      - scoped_metric
+      - constraint
+      - spatial_entity
+      - spatial_relation
+      - document_observation
+      l3_claim_families:
+      - indicator
+      - constraint
+      - objective
+      - action
+      l3_grounding_requirements:
+      - place_binding
+      - topology
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - zones
+      - settlements
+      - annotations
+    tools: []
+    rag_query: 上位规划衔接要求 村庄规划政策依据 土地利用总体规划
+    prefer_doc_types:
+    - policy
+    - planning
+    depends_on: []
+  - key: natural_environment
+    name: 自然环境分析
+    semantic:
+      focus: 地形、水系、灾害、生态敏感性和保护边界；保护/避让优先，不能把风险描述默认为建设候选。
+      l1_fact_types:
+      - spatial_entity
+      - constraint
+      - risk
+      - scoped_metric
+      - spatial_relation
+      - document_observation
+      l3_claim_families:
+      - constraint
+      - protection
+      - restoration
+      - zone
+      - site_area
+      - action
+      l3_grounding_requirements:
+      - candidate_geometry
+      - topology
+      - parcel_membership
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - parcels
+      - waters
+      - hazards
+      - zones
+    tools: []
+    rag_query: 村庄自然环境评价 地形地貌分析技术 生态敏感性评价
+    prefer_doc_types:
+    - standard
+    - guide
+    depends_on: []
+  - key: land_use
+    name: 土地利用分析
+    tools: []
+    rag_query: 村庄用地分类标准 建设用地指标控制 土地利用现状调查
+    prefer_doc_types:
+    - policy
+    - standard
+    depends_on: []
+    semantic:
+      focus: 现状地类、面积、权属/适宜性和管控边界；现状地类不等于规划地类，整块与部分占用必须分开。
+      l1_fact_types:
+      - spatial_entity
+      - scoped_metric
+      - constraint
+      - spatial_relation
+      - document_observation
+      l3_claim_families:
+      - indicator
+      - constraint
+      - zone
+      - site_area
+      - protection
+      - restoration
+      l3_grounding_requirements:
+      - parcel_membership
+      - candidate_geometry
+      - topology
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - parcels
+      - zones
+      - waters
+  - key: traffic
+    name: 道路交通分析
+    semantic:
+      focus: 现状道路、等级、宽度、通行问题、端点和网络关系；道路规划必须提供 typed endpoint/alignment 线索，不能复制现状线。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - scoped_metric
+      - constraint
+      - risk
+      - document_observation
+      l3_claim_families:
+      - road
+      - axis
+      - constraint
+      - objective
+      - action
+      l3_grounding_requirements:
+      - network_snapshot
+      - place_binding
+      - candidate_geometry
+      - parcel_membership
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - roads
+      - settlements
+      - facilities
+      - parcels
+    tools: []
+    rag_query: 村庄道路等级分类 交通可达性分析 道路宽度标准
+    prefer_doc_types:
+    - standard
+    - guide
+    depends_on: []
+  - key: public_services
+    name: 公共服务设施分析
+    semantic:
+      focus: 设施类型、现状能力、服务半径、服务对象和缺口；coverage 需要明确 demand points，人口总数不能直接充当空间需求点。
+      l1_fact_types:
+      - spatial_entity
+      - demand
+      - scoped_metric
+      - constraint
+      - spatial_relation
+      - document_observation
+      l3_claim_families:
+      - facility
+      - site_area
+      - objective
+      - action
+      l3_grounding_requirements:
+      - demand_points
+      - candidate_geometry
+      - network_snapshot
+      - parcel_membership
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - facilities
+      - settlements
+      - roads
+    tools: []
+    rag_query: 村庄公共服务设施配置标准 村级公共服务设施规划要求
+    prefer_doc_types:
+    - standard
+    - policy
+    depends_on: []
+  - key: infrastructure
+    name: 基础设施分析
+    semantic:
+      focus: 给排水、电力、通信和设施网络的现状、缺口、端点与服务关系；线性工程必须保持线性资产类型。
+      l1_fact_types:
+      - spatial_entity
+      - demand
+      - spatial_relation
+      - scoped_metric
+      - constraint
+      - risk
+      - document_observation
+      l3_claim_families:
+      - road
+      - facility
+      - site_area
+      - constraint
+      - action
+      l3_grounding_requirements:
+      - network_snapshot
+      - place_binding
+      - candidate_geometry
+      - parcel_membership
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - facilities
+      - roads
+      - parcels
+      - settlements
+    tools: []
+    rag_query: 村庄基础设施配置标准 给排水设施规划 电力通信设施
+    prefer_doc_types:
+    - standard
+    - guide
+    depends_on: []
+  - key: ecological_green
+    name: 生态绿地分析
+    semantic:
+      focus: 生态斑块、廊道、绿地和保护约束；functional overlay、protection 和 restoration 必须区分。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - scoped_metric
+      - constraint
+      - risk
+      - document_observation
+      l3_claim_families:
+      - protection
+      - restoration
+      - zone
+      - site_area
+      - constraint
+      - action
+      l3_grounding_requirements:
+      - candidate_geometry
+      - topology
+      - parcel_membership
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - parcels
+      - waters
+      - zones
+      - hazards
+    tools: []
+    rag_query: 村庄绿地系统规划 生态保护红线划定 绿地覆盖率标准
+    prefer_doc_types:
+    - standard
+    - guide
+    depends_on: []
+  - key: architecture
+    name: 建筑分析
+    semantic:
+      focus: 建筑质量、风貌、界面和改造对象；建筑描述不能直接生成建设地块。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - scoped_metric
+      - constraint
+      - risk
+      - document_observation
+      l3_claim_families:
+      - site_area
+      - protection
+      - restoration
+      - action
+      - constraint
+      l3_grounding_requirements:
+      - candidate_geometry
+      - parcel_membership
+      - place_binding
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - facilities
+      - settlements
+      - annotations
+    tools: []
+    rag_query: 村庄建筑质量评价 农房建设标准 建筑风貌分类
+    prefer_doc_types:
+    - standard
+    - policy
+    depends_on: []
+  - key: historical_culture
+    name: 历史文化与乡愁保护分析
+    semantic:
+      focus: 文保单位、传统建筑、历史路径及保护级别；保护对象身份和范围要有来源，不因文化描述泛化成整村禁建。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - constraint
+      - scoped_metric
+      - document_observation
+      l3_claim_families:
+      - protection
+      - restoration
+      - zone
+      - site_area
+      - action
+      l3_grounding_requirements:
+      - candidate_geometry
+      - topology
+      - parcel_membership
+      - place_binding
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - facilities
+      - settlements
+      - annotations
+      - zones
+    tools: []
+    rag_query: 历史文化保护规划 传统村落保护要求 乡土文化传承
+    prefer_doc_types:
+    - policy
+    - standard
+    depends_on: []
+- id: layer2
+  name: 规划思路
+  execution: wave
+  dimensions:
+  - key: resource_endowment
+    name: 资源禀赋分析
+    tools: []
+    rag_query: ''
+    kg_query: analysis+shared
+    depends_on: []
+    layer_depends_on:
+    - natural_environment
+    - land_use
+    - socio_economic
+    - historical_culture
+    - architecture
+    - public_services
+    semantic:
+      focus: '自然资源、建设条件、设施基础和空间承载能力的综合禀赋；只形成可追溯的资源事实和约束，不直接替代详细规划落位。'
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - demand
+      - scoped_metric
+      - constraint
+      - risk
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - evidence_statement
+      - objective
+      - constraint
+      - zone
+      - site_area
+      - facility
+      - action
+      l3_grounding_requirements:
+      - place_binding
+      - candidate_geometry
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - parcels
+      - facilities
+      - roads
+      - waters
+      - hazards
+      - zones
+      - settlements
+  - key: planning_positioning
+    name: 规划定位分析
+    tools: []
+    rag_query: ''
+    kg_query: analysis+shared
+    depends_on:
+    - resource_endowment
+    layer_depends_on:
+    - location
+    - socio_economic
+    - superior_planning
+    semantic:
+      focus: '基于资源、区位、人口和政策约束提炼村庄功能定位与发展方向；保持高度抽象，不生成未经 GROUND 核验的空间项目。'
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - demand
+      - scoped_metric
+      - constraint
+      - risk
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - evidence_statement
+      - objective
+      - constraint
+      - indicator
+      - action
+      l3_grounding_requirements:
+      - place_binding
+      - candidate_geometry
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - settlements
+      - roads
+      - facilities
+      - zones
+      - parcels
+  - key: development_goals
+    name: 发展目标分析
+    tools: []
+    rag_query: ''
+    kg_query: analysis+shared
+    depends_on:
+    - resource_endowment
+    - planning_positioning
+    layer_depends_on:
+    - socio_economic
+    - superior_planning
+    semantic:
+      focus: '将规划定位转化为可审计的发展目标、阶段目标和约束指标；目标必须回指上游事实，不把目标表述伪装成空间几何。'
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - demand
+      - scoped_metric
+      - constraint
+      - risk
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - evidence_statement
+      - objective
+      - indicator
+      - constraint
+      - action
+      l3_grounding_requirements:
+      - place_binding
+      - candidate_geometry
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - settlements
+      - facilities
+      - parcels
+      - zones
+  - key: planning_strategies
+    name: 规划策略分析
+    tools:
+    - population_prediction
+    rag_query: ''
+    kg_query: analysis+shared
+    depends_on:
+    - resource_endowment
+    - planning_positioning
+    - development_goals
+    layer_depends_on:
+    - socio_economic
+    - natural_environment
+    - land_use
+    - traffic
+    - infrastructure
+    - historical_culture
+    semantic:
+      focus: '围绕发展目标形成分期、空间组织、设施补短板和资源保护策略；策略保持抽象，具体项目和位置由 L3/GROUND 继续核验。'
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - demand
+      - scoped_metric
+      - constraint
+      - risk
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - evidence_statement
+      - objective
+      - project_package
+      - zone
+      - facility
+      - road
+      - constraint
+      - action
+      l3_grounding_requirements:
+      - place_binding
+      - candidate_geometry
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - parcels
+      - facilities
+      - roads
+      - waters
+      - hazards
+      - zones
+      - settlements
+- id: layer3
+  name: 详细规划
+  execution: wave
+  dimensions:
+  - key: industry
+    name: 产业规划
+    tools: []
+    rag_query: 村庄产业发展规划 农村产业布局 一二三产融合
+    prefer_doc_types:
+    - policy
+    - standard
+    - case
+    depends_on: []
+    layer_depends_on:
+    - socio_economic
+    - land_use
+    phase_depends_on:
+    - resource_endowment
+    - planning_positioning
+    - planning_strategies
+    semantic:
+      focus: 产业项目、服务节点和用地需求；只有 L1/L2 证据支持的产业类型、规模和位置才能进入空间 claim。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - demand
+      - scoped_metric
+      - constraint
+      - risk
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - objective
+      - project_package
+      - facility
+      - site_area
+      - zone
+      - action
+      l3_grounding_requirements:
+      - candidate_geometry
+      - parcel_membership
+      - demand_points
+      - place_binding
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - settlements
+      - facilities
+      - parcels
+      - zones
+      - roads
+  - key: spatial_structure
+    name: 空间结构规划
+    tools: []
+    rag_query: 村庄空间结构规划 空间布局模式 一核多点布局
+    kg_query: execute+shared
+    prefer_doc_types:
+    - standard
+    - case
+    depends_on: []
+    layer_depends_on:
+    - natural_environment
+    - land_use
+    phase_depends_on:
+    - planning_positioning
+    - planning_strategies
+    semantic:
+      focus: 节点、轴线、功能结构和保护关系；功能 overlay 不等于地类分配，拓扑关系必须显式声明。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - demand
+      - scoped_metric
+      - constraint
+      - risk
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - objective
+      - axis
+      - zone
+      - protection
+      - restoration
+      - site_area
+      l3_grounding_requirements:
+      - topology
+      - candidate_geometry
+      - parcel_membership
+      - place_binding
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - settlements
+      - roads
+      - zones
+      - parcels
+      - waters
+  - key: land_use_planning
+    name: 土地利用规划
+    tools: []
+    rag_query: 村庄土地利用规划 用地布局方案 建设用地边界划定
+    kg_query: execute+shared
+    prefer_doc_types:
+    - policy
+    - standard
+    depends_on: []
+    layer_depends_on:
+    - land_use
+    - natural_environment
+    phase_depends_on:
+    - planning_positioning
+    - planning_strategies
+    semantic:
+      focus: 地类分配、功能叠加、保护/修复和面积约束；整块/部分占用和切割后的剩余地块必须由 GROUND 保留。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - demand
+      - scoped_metric
+      - constraint
+      - risk
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - objective
+      - zone
+      - site_area
+      - protection
+      - restoration
+      - constraint
+      l3_grounding_requirements:
+      - parcel_membership
+      - candidate_geometry
+      - topology
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - parcels
+      - zones
+      - waters
+  - key: settlement_planning
+    name: 居民点规划
+    tools: []
+    rag_query: 村庄居民点布局 农村居民点规划 自然村整治方案
+    kg_query: execute+shared
+    prefer_doc_types:
+    - standard
+    - case
+    depends_on: []
+    layer_depends_on:
+    - socio_economic
+    phase_depends_on:
+    - planning_positioning
+    - planning_strategies
+    semantic:
+      focus: 居民点整治、公共节点和空间联系；不从自然村名单直接推导设施或搬迁地块。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - demand
+      - scoped_metric
+      - constraint
+      - risk
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - objective
+      - site_area
+      - facility
+      - protection
+      - restoration
+      - action
+      l3_grounding_requirements:
+      - candidate_geometry
+      - parcel_membership
+      - place_binding
+      - network_snapshot
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - settlements
+      - facilities
+      - roads
+      - parcels
+  - key: traffic_planning
+    name: 道路交通规划
+    tools: []
+    rag_query: 村庄道路规划技术 道路红线宽度 村内道路等级
+    kg_query: execute+shared
+    prefer_doc_types:
+    - standard
+    depends_on: []
+    layer_depends_on:
+    - traffic
+    phase_depends_on:
+    - planning_strategies
+    semantic:
+      focus: 道路/线性工程的中心线语义、端点、对齐关系和新增占地要求；道路不重复生成 site_area。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - demand
+      - scoped_metric
+      - constraint
+      - risk
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - road
+      - axis
+      - objective
+      - constraint
+      - action
+      l3_grounding_requirements:
+      - network_snapshot
+      - place_binding
+      - candidate_geometry
+      - parcel_membership
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - roads
+      - settlements
+      - facilities
+      - parcels
+  - key: public_service
+    name: 公共服务设施规划
+    tools: []
+    rag_query: 村庄公共服务设施配置 公共设施用地指标 村级服务中心
+    kg_query: execute+shared
+    prefer_doc_types:
+    - standard
+    depends_on: []
+    layer_depends_on:
+    - public_services
+    - socio_economic
+    phase_depends_on:
+    - planning_strategies
+    semantic:
+      focus: 设施类型、容量、服务半径与需求点的覆盖关系；缺 demand points 时保持 diagnostic-only。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - demand
+      - scoped_metric
+      - constraint
+      - risk
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - facility
+      - site_area
+      - objective
+      - project_package
+      - action
+      l3_grounding_requirements:
+      - demand_points
+      - candidate_geometry
+      - network_snapshot
+      - parcel_membership
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - facilities
+      - settlements
+      - roads
+      - parcels
+  - key: infrastructure_planning
+    name: 基础设施规划
+    tools: []
+    rag_query: 村庄基础设施规划 给排水管网设计 电力通信规划
+    prefer_doc_types:
+    - standard
+    - guide
+    depends_on: []
+    layer_depends_on:
+    - infrastructure
+    phase_depends_on:
+    - planning_strategies
+    semantic:
+      focus: 给排水、电力、通信和基础设施网络；线性资产必须声明端点/网络引用，面状设施必须声明用地需求。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - demand
+      - scoped_metric
+      - constraint
+      - risk
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - road
+      - facility
+      - site_area
+      - objective
+      - constraint
+      - action
+      l3_grounding_requirements:
+      - network_snapshot
+      - place_binding
+      - candidate_geometry
+      - parcel_membership
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - facilities
+      - roads
+      - parcels
+      - settlements
+  - key: ecological
+    name: 生态绿地规划
+    tools: []
+    rag_query: 村庄绿地规划 生态保护用地 公园绿地设计
+    kg_query: execute+shared
+    prefer_doc_types:
+    - standard
+    - guide
+    depends_on: []
+    layer_depends_on:
+    - ecological_green
+    phase_depends_on:
+    - planning_strategies
+    semantic:
+      focus: 生态保护、修复、廊道和功能叠加；不把生态叙述自动转成 parcel assignment。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - demand
+      - scoped_metric
+      - constraint
+      - risk
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - protection
+      - restoration
+      - zone
+      - site_area
+      - objective
+      - action
+      l3_grounding_requirements:
+      - candidate_geometry
+      - topology
+      - parcel_membership
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - parcels
+      - waters
+      - zones
+      - hazards
+  - key: disaster_prevention
+    name: 防震减灾规划
+    tools: []
+    rag_query: 村庄防灾规划 地质灾害防治 消防通道设置
+    prefer_doc_types:
+    - standard
+    - policy
+    depends_on: []
+    layer_depends_on:
+    - infrastructure
+    - architecture
+    phase_depends_on:
+    - planning_positioning
+    - planning_strategies
+    semantic:
+      focus: 灾害避让、应急通道和安全设施；风险点是约束/证据，不能未经核验成为建设点。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - demand
+      - scoped_metric
+      - constraint
+      - risk
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - protection
+      - restoration
+      - road
+      - facility
+      - constraint
+      - action
+      l3_grounding_requirements:
+      - candidate_geometry
+      - topology
+      - network_snapshot
+      - place_binding
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - hazards
+      - roads
+      - facilities
+      - settlements
+      - parcels
+  - key: heritage
+    name: 历史文保规划
+    tools: []
+    rag_query: 历史文化保护规划 传统建筑保护 历史风貌区划定
+    prefer_doc_types:
+    - policy
+    - standard
+    depends_on: []
+    layer_depends_on:
+    - historical_culture
+    phase_depends_on:
+    - planning_positioning
+    - planning_strategies
+    semantic:
+      focus: 文保对象、保护范围和修缮项目；保护边界与项目 footprint 需分别表达。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - demand
+      - scoped_metric
+      - constraint
+      - risk
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - protection
+      - restoration
+      - zone
+      - site_area
+      - constraint
+      - action
+      l3_grounding_requirements:
+      - candidate_geometry
+      - topology
+      - parcel_membership
+      - place_binding
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - facilities
+      - settlements
+      - annotations
+      - zones
+  - key: landscape
+    name: 村庄风貌指引
+    tools: []
+    rag_query: 村庄风貌设计 建筑风貌引导 村容村貌整治
+    prefer_doc_types:
+    - standard
+    - guide
+    - case
+    depends_on: []
+    layer_depends_on:
+    - architecture
+    - historical_culture
+    phase_depends_on:
+    - planning_positioning
+    - planning_strategies
+    semantic:
+      focus: 风貌整治、公共空间和界面控制；描述性风貌要求没有地块证据时只保留为 overlay 或 action。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - demand
+      - scoped_metric
+      - constraint
+      - risk
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - site_area
+      - facility
+      - protection
+      - restoration
+      - zone
+      - action
+      l3_grounding_requirements:
+      - candidate_geometry
+      - parcel_membership
+      - place_binding
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - facilities
+      - settlements
+      - annotations
+      - parcels
+      - zones
+  - key: project_bank
+    name: 建设项目库
+    tools: []
+    rag_query: ''
+    depends_on:
+    - industry
+    - spatial_structure
+    - land_use_planning
+    - settlement_planning
+    - traffic_planning
+    - public_service
+    - infrastructure_planning
+    - ecological
+    - disaster_prevention
+    - heritage
+    - landscape
+    layer_depends_on: []
+    phase_depends_on:
+    - resource_endowment
+    - planning_positioning
+    - development_goals
+    - planning_strategies
+    semantic:
+      focus: 跨维度项目包的去重、目标身份、来源、阶段和执行所需输入；不得为了填满项目库复制同一目标或补造空间位置。
+      l1_fact_types:
+      - spatial_entity
+      - spatial_relation
+      - demand
+      - scoped_metric
+      - constraint
+      - risk
+      - opportunity
+      - document_observation
+      l3_claim_families:
+      - project_package
+      - facility
+      - road
+      - axis
+      - site_area
+      - zone
+      - protection
+      - restoration
+      - action
+      l3_grounding_requirements:
+      - place_binding
+      - candidate_geometry
+      - demand_points
+      - parcel_membership
+      - network_snapshot
+      - topology
+      spatial_authority: L1 facts and explicit GIS evidence only; no name-only location inference
+    evidence:
+      entity_scope:
+      - parcels
+      - facilities
+      - roads
+      - zones
+      - settlements
+      - waters
+      - hazards

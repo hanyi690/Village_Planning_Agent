@@ -163,10 +163,10 @@ async def reason_ground_candidates(
             "\n".join((
                 f"任务 decision_id={decision_id}",
                 f"目标语义={query_text}",
-                "允许选择的候选集合（只用于判断，不是输出字段）："
-                + json.dumps(
-                    [descriptor.candidate_id for descriptor in descriptors],
-                    ensure_ascii=False,
+                "允许选择的候选集合（只用于判断，不是输出字段）：\n"
+                "| candidate_id |\n| --- |\n"
+                + "\n".join(
+                    f"| {descriptor.candidate_id} |" for descriptor in descriptors
                 ),
                 f"input_digest={input_digest}",
                 "候选卡：",

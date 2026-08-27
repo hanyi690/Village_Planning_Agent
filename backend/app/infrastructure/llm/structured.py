@@ -8,9 +8,9 @@ import re
 import threading
 import time
 from queue import Empty, Queue
-from typing import Any, TypeVar
+from typing import Any, TypeVar, Union, get_args, get_origin
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.infrastructure.logging import get_logger
 from app.infrastructure.llm.instructor_client import (
@@ -20,6 +20,129 @@ from app.infrastructure.llm.instructor_client import (
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 logger = get_logger(__name__)
+
+
+def _coerce_json_string_containers(value: Any) -> Any:
+    """Normalize provider-emitted JSON containers before Pydantic validation.
+
+    Some OpenAI-compatible reasoning providers return an array/object field as
+    a JSON string even when the surrounding tool call is structured.  Decode
+    only strings whose trimmed value is an object or array; ordinary prose and
+    scalar strings remain unchanged.  This is a transport-boundary concern,
+    so every structured contract gets the same behavior.
+    """
+    if isinstance(value, dict):
+        return {key: _coerce_json_string_containers(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_coerce_json_string_containers(item) for item in value]
+    if isinstance(value, str):
+        candidate = value.strip()
+        if candidate[:1] in {"[", "{"} and candidate[-1:] in {"]", "}"
+        }:
+            try:
+                decoded = json.loads(candidate)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return value
+            if isinstance(decoded, (dict, list)):
+                return _coerce_json_string_containers(decoded)
+    return value
+
+
+def _model_type_from_annotation(annotation: Any) -> type[BaseModel] | None:
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation
+    for option in get_args(annotation):
+        model_type = _model_type_from_annotation(option)
+        if model_type is not None:
+            return model_type
+    return None
+
+
+def _container_kind(annotation: Any) -> str | None:
+    origin = get_origin(annotation)
+    if origin in (list, tuple, set):
+        return "list"
+    if origin in (dict,):
+        return "dict"
+    if annotation in (list, tuple, set):
+        return "list"
+    if annotation is dict:
+        return "dict"
+    for option in get_args(annotation):
+        kind = _container_kind(option)
+        if kind is not None:
+            return kind
+    return None
+
+
+def _normalize_model_payload(model_type: type[BaseModel], value: Any) -> Any:
+    """Normalize one payload against its Pydantic model before validation."""
+    if not isinstance(value, dict):
+        return value
+    fields = getattr(model_type, "model_fields", {})
+    normalized: dict[str, Any] = {}
+    for key, item in value.items():
+        field = fields.get(key)
+        # Unknown null placeholders are provider noise; unknown values remain
+        # untouched so extra='forbid' still catches real schema drift.
+        if field is None:
+            if item is None:
+                continue
+            normalized[key] = item
+            continue
+        annotation = field.annotation
+        kind = _container_kind(annotation)
+        if isinstance(item, str) and kind in {"list", "dict"}:
+            candidate = item.strip()
+            if candidate[:1] in {"[", "{"} and candidate[-1:] in {"]", "}"
+            }:
+                try:
+                    item = json.loads(candidate)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    pass
+        nested_model = _model_type_from_annotation(annotation)
+        if nested_model is not None:
+            item = _normalize_model_payload(nested_model, item)
+        else:
+            args = get_args(annotation)
+            item_type = next(
+                (arg for arg in args if _model_type_from_annotation(arg)), None
+            )
+            nested_item_model = _model_type_from_annotation(item_type)
+            if nested_item_model and isinstance(item, list):
+                item = [
+                    _normalize_model_payload(nested_item_model, entry)
+                    for entry in item
+                ]
+        normalized[key] = item
+    return normalized
+
+
+def _normalize_provider_payload(
+    response_model: type[ModelT],
+    value: Any,
+) -> Any:
+    """Single schema-aware provider response normalization boundary."""
+    return _normalize_model_payload(
+        response_model,
+        _coerce_json_string_containers(value),
+    )
+
+
+def _validate_model(
+    response_model: type[ModelT],
+    value: Any,
+    *,
+    completion: Any = None,
+) -> ModelT:
+    """Validate once and preserve only safe diagnostics when it fails."""
+
+    try:
+        return response_model.model_validate(value)
+    except ValidationError as exc:
+        _set_validation_metadata(exc, value)
+        _set_completion_metadata(exc, completion)
+        raise
 
 
 def _assistant_content(completion: Any) -> str | None:
@@ -40,7 +163,40 @@ def _decode_content_json(response_model: type[ModelT], completion: Any) -> Model
     decoded = decode_json_container(content)
     if not isinstance(decoded, dict):
         raise ValueError("structured assistant content must be a JSON object")
-    return response_model.model_validate(decoded)
+    return _validate_model(
+        response_model,
+        _normalize_provider_payload(response_model, decoded),
+        completion=completion,
+    )
+
+
+def _decode_tool_arguments(response_model: type[ModelT], completion: Any) -> ModelT:
+    """Recover a typed result from a tool call before Instructor re-asks.
+
+    OpenAI-compatible providers occasionally serialize one nested tool
+    argument (for example an array) as a string.  Instructor validates the
+    raw arguments before returning control to the application, so the normal
+    post-return coercion is too late.  Decode the provider's tool arguments at
+    this single boundary and run the same conservative container coercion.
+    """
+    choices = _read_field(completion, "choices")
+    if not isinstance(choices, (list, tuple)) or not choices:
+        raise ValueError("structured tool completion is missing choices")
+    message = _read_field(choices[0], "message")
+    tool_calls = _read_field(message, "tool_calls")
+    if not isinstance(tool_calls, (list, tuple)) or not tool_calls:
+        raise ValueError("structured tool completion is missing tool calls")
+    function = _read_field(tool_calls[0], "function")
+    arguments = _read_field(function, "arguments")
+    if isinstance(arguments, str):
+        arguments = json.loads(arguments)
+    if not isinstance(arguments, dict):
+        raise ValueError("structured tool arguments must be an object")
+    return _validate_model(
+        response_model,
+        _normalize_provider_payload(response_model, arguments),
+        completion=completion,
+    )
 
 _CONTEXT_OVERFLOW_RE = re.compile(
     r"(?:\bcontext_length_exceeded\b|"
@@ -66,6 +222,34 @@ STRUCTURED_FAILURE_CODES = frozenset(
         "PROVIDER_TRANSPORT",
     }
 )
+
+STRUCTURED_FAILURE_KINDS = frozenset(
+    {
+        "provider_infrastructure",
+        "recoverable_schema",
+        "request_boundary",
+        "unknown",
+    }
+)
+
+_PROVIDER_INFRASTRUCTURE_CODES = frozenset(
+    {
+        "TIMEOUT",
+        "PROVIDER_HTTP_4XX",
+        "PROVIDER_HTTP_5XX",
+        "PROVIDER_TRANSPORT",
+    }
+)
+
+_RECOVERABLE_SCHEMA_CODES = frozenset(
+    {
+        "OUTPUT_TRUNCATED",
+        "TOOL_CALL_MISSING",
+        "SCHEMA_INVALID",
+    }
+)
+
+_REQUEST_BOUNDARY_CODES = frozenset({"CONTEXT_OVERFLOW"})
 
 _PROVIDER_STATUS_TEXT_RE = re.compile(
     r"\b(429|4\d{2}|5\d{2})\b\s+"
@@ -176,6 +360,119 @@ def _value_length(value: Any) -> int | None:
     return None
 
 
+def _error_path(location: Any) -> str:
+    """Render a Pydantic location without including the rejected value."""
+
+    if not isinstance(location, (tuple, list)):
+        location = (location,)
+    path = "$"
+    for part in location:
+        if part == "__root__":
+            continue
+        if isinstance(part, int):
+            path += f"[{part}]"
+        else:
+            path += f".{part}"
+    return path
+
+
+def _pydantic_error_details(exc: BaseException) -> dict[str, Any]:
+    """Return bounded Pydantic diagnostics without rejected input values."""
+
+    if not isinstance(exc, ValidationError):
+        return {
+            "error_count": 0,
+            "error_paths": [],
+            "error_types": [],
+        }
+    details: list[dict[str, str]] = []
+    try:
+        errors = exc.errors(include_url=False)
+    except (AttributeError, TypeError, ValueError):
+        errors = []
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        details.append(
+            {
+                "path": _error_path(error.get("loc", ())),
+                "type": str(error.get("type") or "unknown"),
+            }
+        )
+    return {
+        "error_count": len(details),
+        "error_paths": [item["path"] for item in details],
+        "error_types": [item["type"] for item in details],
+    }
+
+
+def _claim_count(value: Any) -> int | None:
+    """Count an explicitly emitted claims array, never infer missing claims."""
+
+    if not isinstance(value, dict) or "claims" not in value:
+        return None
+    claims = value.get("claims")
+    return len(claims) if isinstance(claims, list) else None
+
+
+def _set_validation_metadata(exc: BaseException, value: Any) -> None:
+    """Attach safe root/error metadata to a model-validation exception."""
+
+    try:
+        setattr(exc, "structured_root_type", type(value).__name__)
+        details = _pydantic_error_details(exc)
+        setattr(exc, "structured_pydantic_errors", details)
+        emitted = _claim_count(value)
+        if emitted is not None or isinstance(value, dict) and "claims" in value:
+            setattr(exc, "structured_claim_emitted_count", emitted)
+        _set_failure_code(exc, "SCHEMA_INVALID")
+    except Exception:
+        pass
+
+
+def _exact_completion_payload(completion: Any) -> Any:
+    """Read a complete JSON payload for metrics only; do not repair it."""
+
+    choices = _read_field(completion, "choices")
+    if not isinstance(choices, (list, tuple)) or not choices:
+        return None
+    message = _read_field(choices[0], "message")
+    tool_calls = _read_field(message, "tool_calls")
+    if isinstance(tool_calls, (list, tuple)) and tool_calls:
+        function = _read_field(tool_calls[0], "function")
+        arguments = _read_field(function, "arguments")
+        if isinstance(arguments, dict):
+            return arguments
+        if isinstance(arguments, str):
+            try:
+                parsed = json.loads(arguments)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return None
+            return parsed
+    content = _read_field(message, "content")
+    if not isinstance(content, str):
+        return None
+    try:
+        return json.loads(content.strip())
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _completion_root_type(completion: Any) -> str | None:
+    choices = _read_field(completion, "choices")
+    if not isinstance(choices, (list, tuple)) or not choices:
+        return None
+    message = _read_field(choices[0], "message")
+    tool_calls = _read_field(message, "tool_calls")
+    if isinstance(tool_calls, (list, tuple)) and tool_calls:
+        function = _read_field(tool_calls[0], "function")
+        arguments = _read_field(function, "arguments")
+        if arguments is not None:
+            return type(arguments).__name__
+    content = _read_field(message, "content")
+    return type(content).__name__ if content is not None else None
+
+
 def _completion_shape(completion: Any) -> dict[str, Any]:
     """Describe a provider completion without recording its content."""
 
@@ -220,6 +517,27 @@ def _set_completion_shape(exc: BaseException, completion: Any) -> dict[str, Any]
     return shape
 
 
+def _set_completion_metadata(exc: BaseException, completion: Any) -> None:
+    """Attach finish/root/count metadata while keeping provider content private."""
+
+    if completion is None:
+        return
+    try:
+        shape = _set_completion_shape(exc, completion)
+        finish_reason = str(shape.get("finish_reason") or "").strip().lower()
+        setattr(exc, "structured_finish_reason", finish_reason or None)
+        if not getattr(exc, "structured_root_type", None):
+            root_type = _completion_root_type(completion)
+            if root_type:
+                setattr(exc, "structured_root_type", root_type)
+        payload = _exact_completion_payload(completion)
+        emitted = _claim_count(payload)
+        if emitted is not None or isinstance(payload, dict) and "claims" in payload:
+            setattr(exc, "structured_claim_emitted_count", emitted)
+    except Exception:
+        pass
+
+
 def _classify_structured_failure(exc: BaseException, completion: Any = None) -> str | None:
     """Classify a typed-output failure using provider metadata and safe markers."""
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
@@ -258,8 +576,62 @@ def structured_failure_code(exc: BaseException) -> str | None:
     return code if code in STRUCTURED_FAILURE_CODES else _classify_structured_failure(exc)
 
 
+def structured_failure_kind(exc: BaseException) -> str:
+    """Classify a structured failure for retry/quarantine policy decisions."""
+
+    code = structured_failure_code(exc)
+    if code in _PROVIDER_INFRASTRUCTURE_CODES:
+        return "provider_infrastructure"
+    if code in _RECOVERABLE_SCHEMA_CODES:
+        return "recoverable_schema"
+    if code in _REQUEST_BOUNDARY_CODES:
+        return "request_boundary"
+    return "unknown"
+
+
+def structured_failure_observation(exc: BaseException) -> dict[str, Any]:
+    """Return a redacted, stable failure record suitable for audit logs."""
+
+    contract = getattr(exc, "structured_contract", None)
+    request = getattr(exc, "structured_request", None)
+    errors = getattr(exc, "structured_pydantic_errors", None)
+    if not isinstance(errors, dict):
+        errors = _pydantic_error_details(exc)
+    finish_reason = getattr(exc, "structured_finish_reason", None)
+    shape = getattr(exc, "structured_response_shape", None)
+    if not isinstance(shape, dict):
+        shape = {}
+    root_type = getattr(exc, "structured_root_type", None)
+    if root_type is None:
+        root_type = "unknown"
+    observation: dict[str, Any] = {
+        "failure_code": structured_failure_code(exc) or "STRUCTURED_OUTPUT_ERROR",
+        "failure_kind": structured_failure_kind(exc),
+        "exception_type": type(exc).__name__,
+        "contract": (
+            contract.get("contract_key")
+            if isinstance(contract, dict)
+            else None
+        ) or (
+            request.get("contract_key")
+            if isinstance(request, dict)
+            else None
+        ),
+        "root_type": str(root_type),
+        "finish_reason": finish_reason or shape.get("finish_reason") or None,
+        "pydantic_error_count": int(errors.get("error_count") or 0),
+        "pydantic_error_paths": list(errors.get("error_paths") or []),
+        "pydantic_error_types": list(errors.get("error_types") or []),
+    }
+    emitted = getattr(exc, "structured_claim_emitted_count", None)
+    if emitted is not None:
+        observation["claims_emitted"] = int(emitted)
+    return observation
+
+
 def structured_failure_summary(exc: BaseException) -> str:
     """Return a stable diagnostic that never embeds provider response text."""
+    observation = structured_failure_observation(exc)
     code = structured_failure_code(exc) or "STRUCTURED_OUTPUT_ERROR"
     status = provider_http_status(exc)
     status_suffix = f"; http_status={status}" if status is not None else ""
@@ -290,7 +662,24 @@ def structured_failure_summary(exc: BaseException) -> str:
     input_limit = getattr(exc, "input_char_limit", None)
     if input_chars is not None and input_limit is not None:
         input_suffix = f"; input_chars={input_chars}; input_char_limit={input_limit}"
-    return f"{code} ({type(exc).__name__}{status_suffix}{contract_suffix}{shape_suffix}{request_suffix}{input_suffix})"
+    audit_suffix = "; audit=" + json.dumps(
+        {
+            "failure_kind": observation["failure_kind"],
+            "root_type": observation["root_type"],
+            "finish_reason": observation["finish_reason"],
+            "pydantic_error_paths": observation["pydantic_error_paths"],
+            "pydantic_error_types": observation["pydantic_error_types"],
+            **(
+                {"claims_emitted": observation["claims_emitted"]}
+                if "claims_emitted" in observation
+                else {}
+            ),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"{code} ({type(exc).__name__}{status_suffix}{contract_suffix}{shape_suffix}{request_suffix}{input_suffix}{audit_suffix})"
 
 
 def _read_field(value: Any, field: str) -> Any:
@@ -597,7 +986,10 @@ async def run_structured_output(
                 raise error
             if isinstance(result, response_model):
                 return result
-            return response_model.model_validate(result)
+            return _validate_model(
+                response_model,
+                _normalize_provider_payload(response_model, result),
+            )
 
         client = get_async_instructor_client()
         result = await client.chat.completions.create(**call_request)
@@ -607,7 +999,10 @@ async def run_structured_output(
             _set_failure_code(error, "TOOL_CALL_MISSING")
             raise error
         if not isinstance(result, response_model):
-            return response_model.model_validate(result)
+            return _validate_model(
+                response_model,
+                _normalize_provider_payload(response_model, result),
+            )
         return result
 
     async def _content_json_fallback() -> ModelT:
@@ -644,10 +1039,16 @@ async def run_structured_output(
                 decoded = decode_json_container(result)
                 if not isinstance(decoded, dict):
                     raise ValueError("injected JSON fallback must return an object")
-                return response_model.model_validate(decoded)
+                return _validate_model(
+                    response_model,
+                    _normalize_provider_payload(response_model, decoded),
+                )
             if _assistant_content(result) is not None:
                 return _decode_content_json(response_model, result)
-            return response_model.model_validate(result)
+            return _validate_model(
+                response_model,
+                _normalize_provider_payload(response_model, result),
+            )
         fallback_client = get_async_instructor_client(
             mode_override=instructor.Mode.JSON,
         )
@@ -666,7 +1067,10 @@ async def run_structured_output(
             return result
         if _assistant_content(result) is not None:
             return _decode_content_json(response_model, result)
-        return response_model.model_validate(result)
+        return _validate_model(
+            response_model,
+            _normalize_provider_payload(response_model, result),
+        )
 
     async def _call() -> ModelT:
         from instructor.core import IncompleteOutputException, InstructorRetryException
@@ -712,6 +1116,7 @@ async def run_structured_output(
             _set_contract_metadata(exc, contract_metadata)
             _set_request_shape(exc, request, contract_key=contract_key)
             completion = exc.last_completion
+            _set_completion_metadata(exc, completion)
             failure_code = _classify_structured_failure(exc, completion)
             if failure_code == "TOOL_CALL_MISSING":
                 shape = _set_completion_shape(exc, completion)
@@ -725,6 +1130,16 @@ async def run_structured_output(
                     json.dumps(shape, ensure_ascii=False, sort_keys=True),
                     contract_key or response_model.__name__,
                 )
+            try:
+                recovered = _decode_tool_arguments(response_model, completion)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                recovered = None
+            if recovered is not None:
+                logger.warning(
+                    "[structured] recovered provider tool arguments after pre-validation failure contract=%s",
+                    contract_key or response_model.__name__,
+                )
+                return recovered
             if allow_content_json and _is_content_json_fallback_candidate(
                 exc, completion
             ):
@@ -746,6 +1161,7 @@ async def run_structured_output(
         except IncompleteOutputException as exc:
             _set_contract_metadata(exc, contract_metadata)
             _set_request_shape(exc, request, contract_key=contract_key)
+            _set_completion_metadata(exc, getattr(exc, "last_completion", None))
             # Instructor raises this specific exception when the provider
             # reaches max_tokens before completing the declared tool call.
             # Retry only that condition, with an explicit ceiling; provider
@@ -767,6 +1183,7 @@ async def run_structured_output(
         except Exception as exc:
             _set_contract_metadata(exc, contract_metadata)
             _set_request_shape(exc, request, contract_key=contract_key)
+            _set_completion_metadata(exc, getattr(exc, "last_completion", None))
             if allow_content_json and _is_content_json_fallback_candidate(exc):
                 return await _run_content_json_fallback()
             raise
@@ -893,6 +1310,15 @@ async def run_structured_output(
                     elapsed_ms,
                     type(exc).__name__,
                 )
+                logger.warning(
+                    "[structured] failure_observation=%s",
+                    json.dumps(
+                        structured_failure_observation(exc),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                )
                 if attempt >= transient_budget or not _is_transient_provider_error(exc):
                     raise
                 attempt += 1
@@ -983,6 +1409,9 @@ __all__ = [
     "run_structured_output",
     "run_structured_output_sync",
     "structured_failure_code",
+    "structured_failure_kind",
+    "structured_failure_observation",
     "structured_failure_summary",
     "STRUCTURED_FAILURE_CODES",
+    "STRUCTURED_FAILURE_KINDS",
 ]

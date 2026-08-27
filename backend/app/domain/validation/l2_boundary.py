@@ -189,6 +189,30 @@ def normalize_l2_decision_boundary(
         strategies.append(payload)
     strategy_ids = {str(item["strategy_id"]) for item in strategies}
 
+    # Prerequisites are another closed strategy-to-strategy edge.  Providers
+    # frequently emit an ID for a strategy that was quarantined above; keep
+    # the surviving strategy and remove only that dangling edge.
+    for payload in strategies:
+        strategy_id = str(payload.get("strategy_id") or "")
+        raw_prerequisites = [
+            str(value).strip()
+            for value in payload.get("prerequisite_refs", []) or []
+            if str(value).strip()
+        ]
+        payload["prerequisite_refs"] = [
+            value
+            for value in dict.fromkeys(raw_prerequisites)
+            if value in strategy_ids and value != strategy_id
+        ]
+        missing_prerequisites = sorted(
+            set(raw_prerequisites) - set(payload["prerequisite_refs"])
+        )
+        if missing_prerequisites:
+            diagnostics.append(
+                "l2_boundary.strategy_prerequisite_refs_dropped:"
+                f"{strategy_id}:{','.join(missing_prerequisites)}"
+            )
+
     # A priority without a surviving strategy is not an executable ordering;
     # retaining it would only preserve an invalid cross-object edge.
     priorities: list[dict[str, Any]] = []

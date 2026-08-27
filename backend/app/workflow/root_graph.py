@@ -2099,6 +2099,21 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
             "pending_requests": [],
         })
         result.update(_gate_mutation_patch(state, paused_stage, gate))
+        # A layer-gate approval is a forward transition, not a provider
+        # recovery request.  Clear transient recovery/revision cursors here;
+        # otherwise after_analysis can consume a stale cursor before it sees
+        # the newly approved PASS gate and replay the whole layer.
+        result.update({
+            "provider_resume_dimensions": [],
+            "provider_failures": [],
+            "dimension_failures": [],
+            "is_revision": False,
+            "need_revision": False,
+            "revision_target_dimensions": [],
+            "revision_impact_tree": None,
+            "revision_completed_dims": {},
+            "layer_just_completed": int(paused_stage[1:]),
+        })
         result["post_l3_status"] = "auto_continue" if paused_stage == "l3" else ""
         return result
     if action == "retry" and paused_stage:
