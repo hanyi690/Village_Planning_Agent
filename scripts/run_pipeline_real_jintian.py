@@ -27,11 +27,10 @@ if str(project_root) not in sys.path:
 if str(backend_root) not in sys.path:
     sys.path.insert(0, str(backend_root))
 
-from scripts.experiments.framework.config import (
+from scripts.runtime_support.jintian import (
     DEFAULT_CONSTRAINTS,
     DEFAULT_TASK_DESCRIPTION,
     JINTIAN_VILLAGE_DATA,
-    ensure_cascade_dirs,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,7 +74,7 @@ async def _open_session_kg(session_id: str) -> None:
 
 
 async def _run_graph(session_id: str, listener) -> Dict[str, Any]:
-    """Port of scripts/experiments/cascade/baseline.py:_run_graph."""
+    """Run the current root graph and observe its layer events."""
     from app.workflow.layers.phase_machine import get_layer_dimensions, get_layer_name
     from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
     from app.workflow.plan_state.state_factory import StateFactory
@@ -193,9 +192,8 @@ async def _main_impl(session_id: str, skip_verify: bool) -> None:
     from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
     from app.infrastructure.paths import session_run_dir
     from scripts.audit_planning_layer_quality import audit_planning_layer_quality
-    from scripts.experiments.framework.sse_listener import InProcessEventListener
+    from scripts.runtime_support.sse_listener import InProcessEventListener
 
-    ensure_cascade_dirs()
     await PlanningRuntimeService.ensure_initialized()
 
     session_id = session_id or f"explore_kgenrich_{uuid.uuid4().hex[:8]}"

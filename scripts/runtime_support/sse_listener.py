@@ -1,5 +1,5 @@
 """
-SSE Event Listener for Experiment Scripts
+SSE event listeners for current runner scripts.
 实验脚本 SSE 事件监听器
 
 支持两种模式：
@@ -377,10 +377,7 @@ class InProcessEventListener:
             return True
 
         try:
-            try:
-                from app.services.sse import sse_manager
-            except ModuleNotFoundError:
-                from app.infrastructure.events import event_hub as sse_manager
+            from app.infrastructure.events import event_hub as sse_manager
 
             self._queue = await sse_manager.subscribe(self.session_id)
             self._task = asyncio.create_task(self._consume_queue())

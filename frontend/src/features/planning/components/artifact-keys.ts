@@ -10,7 +10,6 @@ export const ARTIFACT_KEYS = [
   'l1_gate',
   'l1_observations',
   'l1_bindings',
-  'grounded_anchors',
   'l2_strategy',
   'l2_gate',
   'planning_program',

@@ -1362,6 +1362,16 @@ export interface components {
             /** Session Id */
             session_id: string;
             /**
+             * Project Name
+             * @default
+             */
+            project_name: string;
+            /**
+             * Village Name
+             * @default
+             */
+            village_name: string;
+            /**
              * Status
              * @enum {string}
              */

@@ -35,7 +35,7 @@ _MIN_BINDINGS = 5
 
 
 def _latest_session() -> str:
-    from app.modules.kg.memory import get_memory_dir
+    from app.infrastructure.kg.memory import get_memory_dir
 
     files = sorted(get_memory_dir().glob("*_round_3.json"))
     if not files:
@@ -44,7 +44,7 @@ def _latest_session() -> str:
 
 
 def report(session_id: str) -> Dict[str, Any]:
-    from app.modules.kg.memory import diff_round, load_memory_state
+    from app.infrastructure.kg.memory import diff_round, load_memory_state
 
     rounds: List[Dict[str, Any]] = []
     previous = None

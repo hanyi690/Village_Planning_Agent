@@ -22,7 +22,7 @@ interface ArtifactView {
 }
 
 const STAGE_GROUPS: { stage: string; keys: ArtifactKey[] }[] = [
-  { stage: '事实与闸门', keys: ['l1_source_index', 'l1_snapshot', 'l1_observations', 'l1_bindings', 'grounded_anchors', 'l1_gate'] },
+  { stage: '事实与闸门', keys: ['l1_source_index', 'l1_snapshot', 'l1_observations', 'l1_bindings', 'l1_gate'] },
   { stage: '策略与意图', keys: ['l2_strategy', 'l2_gate', 'planning_program', 'l3_gate'] },
   {
     stage: '目标与落地',
@@ -80,7 +80,6 @@ const ARTIFACT_LABELS: Record<string, string> = {
   l1_gate: 'L1 事实闸门',
   l1_observations: 'L1 观察记录',
   l1_bindings: 'L1 实体绑定',
-  grounded_anchors: '空间锚点',
   l2_strategy: 'L2 规划策略',
   l2_gate: 'L2 策略闸门',
   planning_program: '规划程序草案',
@@ -160,7 +159,7 @@ function readableScalar(key: string, value: string | number | boolean): string {
 }
 
 const SPATIAL_CHAIN = [
-  { stages: ['KG_PREBUILD', 'L1'], label: 'L1 事实底座', description: '现状观察、L1 fact、来源与空间锚点' },
+  { stages: ['KG_PREBUILD', 'L1'], label: 'L1 事实底座', description: '现状观察、L1 fact、来源与实体绑定' },
   { stages: ['L2', 'EXPLORE', 'CONFLICT'], label: 'L2 策略与证据', description: '策略方向、探索证据与冲突记录' },
   { stages: ['L3', 'TARGET_PROJECTION'], label: 'L3 规划意图', description: '可读正文与结构化 claims 的双通道交付' },
   { stages: ['GROUND', 'SELECT'], label: '空间落位', description: '从意图到真实候选要素和选址结果' },

@@ -14,7 +14,8 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
-    "generate:api-types": "openapi-typescript ../docs/contracts/openapi-v1.json -o src/generated/v1.ts"
+    "generate:api-types": "openapi-typescript ../docs/contracts/openapi-v1.json -o src/generated/v1.ts",
+    "generate:api-types:check": "openapi-typescript ../docs/contracts/openapi-v1.json -o src/generated/v1.ts --check"
   },
   "dependencies": {
     "@fortawesome/fontawesome-svg-core": "^7.1.0",
