@@ -8,6 +8,33 @@ class _Result(BaseModel):
     value: int
 
 
+class _NestedResult(BaseModel):
+    model_config = {"extra": "forbid"}
+    items: list[dict[str, int]]
+
+
+def test_provider_normalizer_is_schema_aware_for_container_strings():
+    from app.infrastructure.llm.structured import _normalize_provider_payload
+
+    payload = _normalize_provider_payload(
+        _NestedResult,
+        {"items": '[{"value": 7}]', "provider_placeholder": None},
+    )
+
+    assert payload == {"items": [{"value": 7}]}
+
+
+def test_provider_normalizer_preserves_non_null_schema_drift():
+    from app.infrastructure.llm.structured import _normalize_provider_payload
+
+    payload = _normalize_provider_payload(
+        _NestedResult,
+        {"items": [{"value": 7, "unexpected": "keep"}]},
+    )
+
+    assert payload["items"][0]["unexpected"] == "keep"
+
+
 def _missing_tool(content: str):
     from instructor.core import InstructorRetryException
 

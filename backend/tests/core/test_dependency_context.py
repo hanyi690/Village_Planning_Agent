@@ -24,4 +24,32 @@ async def test_context_renders_metadata_and_never_body(monkeypatch):
     rendered = context.render_for_prompt()
     assert "SECRET BODY" not in rendered
     assert '"x":1' in rendered
+    assert "| dimension_key | layer | version | report_id |" in rendered
     assert context.missing_keys == ("b",)
+
+
+def test_decision_projection_preserves_semantics_without_raw_payload():
+    from app.infrastructure.llm.dependency_context import _decision_projection
+
+    projected = _decision_projection({
+        "strategies": [{"statement": "strategy-%s" % index} for index in range(20)],
+        "evidence_gaps": [{"description": "gap"}],
+        "report_body": "raw report body",
+        "retrieval_trace": {"query": "raw trace"},
+    })
+
+    assert len(projected["strategies"]) == 20
+    assert projected["strategies"][-1]["statement"] == "strategy-19"
+    assert "report_body" not in projected
+    assert "retrieval_trace" not in projected
+
+
+def test_decision_projection_does_not_truncate_abstract_statement():
+    from app.infrastructure.llm.dependency_context import _decision_projection
+
+    statement = "抽象决策内容。" * 400
+    projected = _decision_projection({
+        "objectives": [{"objective_id": "o-1", "statement": statement}],
+    })
+
+    assert projected["objectives"][0]["statement"] == statement

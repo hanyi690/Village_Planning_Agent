@@ -94,6 +94,33 @@ async def test_manager_rejects_oversized_input_without_truncating_or_calling_pro
 
 
 @pytest.mark.asyncio
+async def test_manager_preserves_explicit_zero_schema_retries(monkeypatch):
+    from app.infrastructure.llm.manager import LLMCallSpec, LLMManager
+
+    calls: list[dict] = []
+
+    async def fake_runner(response_model, messages, **kwargs):
+        calls.append(kwargs)
+        return _Result(value=1)
+
+    monkeypatch.setattr(
+        "app.infrastructure.llm.structured.run_structured_output",
+        fake_runner,
+    )
+    await LLMManager().run_structured(
+        LLMCallSpec(
+            stage="L3",
+            contract_key="l3.claims",
+            response_model=_Result,
+            max_retries=0,
+        ),
+        [{"role": "user", "content": "rough intent"}],
+    )
+
+    assert calls[0]["max_retries"] == 0
+
+
+@pytest.mark.asyncio
 async def test_manager_rejects_non_text_message_content_before_transport(monkeypatch):
     from app.infrastructure.llm.manager import LLMCallSpec, LLMManager
 

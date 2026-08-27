@@ -1,40 +1,36 @@
-"""Bounded structural repair for L3 claim sets that fail schema validation."""
-
-import pytest
+"""L3 rough-claim projection keeps one malformed item from killing peers."""
 
 from app.domain.program import worker
-from app.domain.program.claim_draft import L3ClaimOutput
+from app.domain.program.claim_draft import L3RoughClaimOutput
 
 
-def _good_output():
-    return L3ClaimOutput(claims=[
-        {
-            "component_kind": "facility",
-            "claim_id": "C-1",
-            "statement": "新建设施",
-            "intervention_action": "new",
-            "facility_parameters": {"facility_type": "卫生室", "action": "new"},
-        }
-    ])
+def test_rough_spatial_claim_is_projected_once_and_remains_non_executable():
+    output = L3RoughClaimOutput.model_validate({
+        "claims": [{
+            "claim_family": "facility",
+            "statement": "完善公共服务方向",
+            "planning_role": "spatial_intervention",
+            "source_fact_refs": [],
+            "grounding_requirements": ["candidate_geometry"],
+        }]
+    })
 
-
-def test_component_conversion_is_single_pass():
     draft_set, claim_set = worker._normalize_claim_components(
         dimension_key="infrastructure_planning",
-        output=_good_output(),
+        output=output,
     )
 
     assert draft_set is not None
     assert claim_set.claims
     assert claim_set.claims[0].suggested_category == "facility"
+    assert claim_set.claims[0].facility_parameters is None
 
 
-def test_missing_component_parameters_are_rejected_at_provider_boundary():
-    with pytest.raises(ValueError):
-        L3ClaimOutput(claims=[
-            {
-                "component_kind": "facility",
-                "claim_id": "C-1",
-                "statement": "新建设施",
-            }
-        ])
+def test_empty_rough_claim_set_is_a_valid_evidence_state():
+    draft_set, claim_set = worker._normalize_claim_components(
+        dimension_key="infrastructure_planning",
+        output=L3RoughClaimOutput(),
+    )
+
+    assert draft_set.claims == []
+    assert claim_set.claims == []

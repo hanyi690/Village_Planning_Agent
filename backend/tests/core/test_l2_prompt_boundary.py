@@ -49,10 +49,10 @@ def test_l2_fact_reference_rules_expose_only_the_runtime_closed_set() -> None:
         "fact_catalog": catalog,
     })
 
-    assert '"l1:fact:one"' in prompt
-    assert '"l1:fact:two"' in prompt
-    assert '"allowed_l1_facts":' in prompt
-    assert '"statement": "空间事实"' in prompt
+    assert "| l1:fact:one |" in prompt
+    assert "| l1:fact:two |" in prompt
+    assert "| fact_id | statement | fact_kind | dimension_key | spatial |" in prompt
+    assert "空间事实" in prompt
     assert 'EXPLORE 的 L1_facts' in prompt
     assert "spatial=true" in prompt
     assert "allowed_l1_fact_ids" not in prompt
@@ -122,7 +122,10 @@ def test_l2_snapshot_section_does_not_duplicate_catalog_fact_body(monkeypatch) -
         source_dimensions=["traffic"],
     )
 
-    assert section == ""
+    assert "l1:fact:background" in section
+    assert "交通组织存在短板" in section
+    assert "历史身份不能成为引用" not in section
+    assert "其他 L1 维度的事实也属于当前快照" not in section
     assert audit["allowed_fact_ids"] == [
         "l1:fact:background",
         "l1:fact:road",

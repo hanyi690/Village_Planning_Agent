@@ -12,6 +12,7 @@ import pytest
 
 
 BACKEND_ROOT = Path(__file__).resolve().parent
+pytest_plugins = ("tests.fixtures.db",)
 _PYTEST_TEMP_PREFIX = "run-"
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))

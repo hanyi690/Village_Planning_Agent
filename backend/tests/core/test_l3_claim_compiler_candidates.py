@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 from app.contracts.domain.planning_semantics import (
@@ -117,70 +116,9 @@ def test_source_fact_options_reject_noncanonical_fact_ids() -> None:
     assert [item.ref_id for item in options] == ["l1:fact:canonical"]
 
 
-def test_l3_candidate_context_exposes_exact_fact_catalog_and_spatial_subset(monkeypatch) -> None:
-    from app.contracts.domain.l1_contracts import L1Fact
-    from app.domain.program.worker import _l3_candidate_context
-
-    context = SimpleNamespace(
-        l1_fact_records=[
-            L1Fact(
-                fact_id="l1:fact:road",
-                statement="现状道路",
-                fact_kind="spatial_observation",
-                dimension_key="traffic",
-                semantic_type="road",
-                source_refs=["report:traffic"],
-            ),
-            L1Fact(
-                fact_id="l1:fact:background",
-                statement="交通组织存在短板",
-                fact_kind="document_observation",
-                dimension_key="traffic",
-                semantic_type="observation",
-                source_refs=["report:traffic"],
-            ),
-        ]
-    )
-    monkeypatch.setattr(
-        "app.infrastructure.context.planning_context_factory.get_cached_context",
-        lambda _session_id: context,
-    )
-
-    payload = json.loads(
-        _l3_candidate_context(
-            {"session_id": "l3-candidate-context"},
-            "traffic",
-            ["traffic"],
-        )
-    )
-
-    assert payload["source_fact_options"] == [
-        "l1:fact:background",
-        "l1:fact:road",
-    ]
-    assert payload["spatial_source_fact_options"] == ["l1:fact:road"]
-    assert {
-        item["fact_id"]: item["spatial_claim_allowed"]
-        for item in payload["source_fact_catalog"]
-    } == {
-        "l1:fact:background": False,
-        "l1:fact:road": True,
-    }
-    assert payload["source_fact_catalog_status"] == "usable"
-    assert payload["source_fact_catalog_digest"]
-    assert isinstance(payload["relation_options_by_subject_kind"]["road"][0], dict)
-    assert "connect_network" in {
-        item["relation_template"]
-        for item in payload["relation_options_by_subject_kind"]["road"]
-    }
-
-
-def test_l3_prompt_uses_the_persisted_snapshot_instead_of_a_stale_context_cache(monkeypatch) -> None:
+def test_l3_fact_projection_uses_the_persisted_snapshot_and_deduplicates(monkeypatch) -> None:
     from app.contracts.domain.l1_contracts import L1Fact, L1Snapshot
-    from app.domain.program.worker import (
-        _l3_candidate_context,
-        _typed_l1_fact_evidence,
-    )
+    from app.domain.program.worker import _typed_l1_fact_evidence
 
     stale_context = SimpleNamespace(
         l1_fact_records=[L1Fact(
@@ -191,12 +129,20 @@ def test_l3_prompt_uses_the_persisted_snapshot_instead_of_a_stale_context_cache(
         )],
         location_facts=[],
     )
-    snapshot = L1Snapshot(fact_records=[L1Fact(
-        fact_id="l1:fact:current",
-        statement="当前快照事实",
-        fact_kind="spatial_observation",
-        dimension_key="traffic",
-    )])
+    snapshot = L1Snapshot(fact_records=[
+        L1Fact(
+            fact_id="l1:fact:current",
+            statement="当前快照事实",
+            fact_kind="spatial_observation",
+            dimension_key="traffic",
+        ),
+        L1Fact(
+            fact_id="l1:fact:current-2",
+            statement="第二条当前快照事实",
+            fact_kind="document_observation",
+            dimension_key="traffic",
+        ),
+    ])
     monkeypatch.setattr(
         "app.infrastructure.context.planning_context_factory.get_cached_context",
         lambda _session_id: stale_context,
@@ -210,19 +156,16 @@ def test_l3_prompt_uses_the_persisted_snapshot_instead_of_a_stale_context_cache(
         "artifact_refs": {"l1_snapshot": {"digest": "snapshot-current"}},
     }
 
-    candidate_payload = json.loads(
-        _l3_candidate_context(state, "traffic", ["traffic"])
-    )
     evidence = _typed_l1_fact_evidence(
         state,
         "traffic",
         source_dimensions=["traffic"],
     )
-    evidence_payload = json.loads(evidence[evidence.index("["):])
 
-    assert candidate_payload["source_fact_options"] == ["l1:fact:current"]
-    assert [item["fact_id"] for item in evidence_payload] == ["l1:fact:current"]
+    assert "l1:fact:current" in evidence
+    assert "l1:fact:current-2" in evidence
     assert "l1:fact:stale" not in evidence
+    assert evidence.count("| l1:fact:current |") == 1
 
 
 def test_l3_source_fact_validation_rejects_unknown_and_non_spatial_refs(monkeypatch) -> None:

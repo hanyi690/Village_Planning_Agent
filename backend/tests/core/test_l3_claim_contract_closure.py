@@ -58,11 +58,14 @@ def test_normalization_does_not_lossily_turn_invalid_spatial_claim_into_action()
     )
 
 
-def test_l3_prompt_delegates_shape_and_relation_rules_to_compiler_contracts() -> None:
+def test_l3_prompt_delegates_execution_shape_to_downstream_compilers() -> None:
     prompt = get_dimension_prompt("land_use_planning")
 
-    assert "结构化 schema 是字段、组件类型和参数块的唯一约束来源" in prompt
-    assert "candidate_context" in prompt
+    assert "粗粒度" in prompt
+    assert "非可执行" in prompt
+    assert "参数" in prompt
+    assert "candidate" in prompt
+    assert "relation_template" in prompt
     assert "以下输出非法" not in prompt
     assert "serve 的 subject 只能是 facility" not in prompt
 

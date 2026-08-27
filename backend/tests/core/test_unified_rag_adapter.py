@@ -21,6 +21,7 @@ async def test_run_rag_is_the_single_unified_evidence_adapter(monkeypatch):
     async def retrieve(request, session_id, village_name="", source_versions=None):
         assert request.project_cognition_digest.startswith("sha256:")
         assert request.project_scope["village_name"] == "金田村"
+        assert request.entity_scope == ["roads", "settlements", "facilities", "parcels"]
         calls.append((request.dimension_key, session_id))
         return ExplorationResult(
             evidence_bundle=EvidenceBundle(
@@ -60,6 +61,8 @@ async def test_run_rag_is_the_single_unified_evidence_adapter(monkeypatch):
 
     assert calls == [("traffic", "session-adapter")]
     assert "统一证据" in context
+    assert "| fact_id |" in context
+    assert '"facts"' not in context
     assert log is None
     assert trace["source_types"] == ["rag"]
     assert trace["fact_count"] == 1
@@ -156,6 +159,41 @@ def test_analysis_projection_does_not_include_retrieval_trace_or_raw_body():
     assert "村道位于东侧" in context
     assert "SECRET SQL" not in context
     assert "SECRET ROW" not in context
+
+
+def test_analysis_projection_deduplicates_facts_already_in_l1_catalog():
+    from app.contracts.evidence.evidence_contracts import (
+        EvidenceBundle,
+        EvidenceFact,
+        ExplorationResult,
+    )
+    from app.infrastructure.llm import dimension_runtime
+
+    result = ExplorationResult(
+        evidence_bundle=EvidenceBundle(
+            request="道路",
+            facts=[
+                EvidenceFact(
+                    statement="村道需要改善",
+                    source_refs=["l1:fact:road"],
+                    source_kind="l1_typed_fact",
+                ),
+                EvidenceFact(
+                    statement="河道存在风险",
+                    source_refs=["kg:fact:risk"],
+                    source_kind="kg_canonical_fact",
+                ),
+            ],
+        )
+    )
+
+    context = dimension_runtime._analysis_evidence_context(
+        result,
+        excluded_fact_refs=("l1:fact:road",),
+    )
+
+    assert "村道需要改善" not in context
+    assert "河道存在风险" in context
 
 
 @pytest.mark.asyncio

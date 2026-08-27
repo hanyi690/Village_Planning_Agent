@@ -51,8 +51,28 @@ def _claim_component_kind(claim: Any) -> str:
 def _claims_as_provider_output(response_model: type[Any], claims: Iterable[Any]) -> Any:
     rows = []
     for claim in claims:
-        row = claim.model_dump(mode="python", exclude_none=True)
-        row["component_kind"] = _claim_component_kind(claim)
+        family = _claim_component_kind(claim)
+        if family.endswith("_overlay"):
+            family = family.removesuffix("_overlay")
+        row = {
+            "claim_family": family,
+            "statement": _text(getattr(claim, "statement", "")),
+            "planning_role": _text(getattr(claim, "planning_role", "")),
+            "location_hints": list(getattr(claim, "location_hints", []) or []),
+            "constraint_refs": list(getattr(claim, "constraint_refs", []) or []),
+            "objective_refs": list(getattr(claim, "objective_refs", []) or []),
+            "evidence_refs": list(getattr(claim, "evidence_refs", []) or []),
+            "source_fact_refs": list(getattr(claim, "source_fact_refs", []) or []),
+            "grounding_requirements": [
+                "candidate_geometry"
+                if family in {"facility", "road", "axis", "site_area", "zone", "restoration", "protection"}
+                else ""
+            ],
+            "uncertainty": _text(getattr(claim, "uncertainty", "")),
+        }
+        row["grounding_requirements"] = [
+            item for item in row["grounding_requirements"] if item
+        ]
         rows.append(row)
     return response_model.model_validate({"claims": rows})
 
@@ -535,14 +555,14 @@ class RecordedPlanningProvider:
                 if _text(item.get("dimension_key")) == dimension_key
             )
             return L2DecisionSet.model_validate(raw)
-        if name.startswith("L3ClaimOutput"):
+        if name == "L3RoughClaimOutput":
             self._count(f"L3:claims:{dimension_key}")
             return _claims_as_provider_output(
                 response_model,
                 self._claims_by_dimension.get(dimension_key) or [],
             )
-        if name == "L3ReportOutput":
-            from app.domain.program.claim_draft import L3ReportOutput
+        if name == "L3IntentSummaryOutput":
+            from app.domain.program.claim_draft import L3IntentSummaryOutput
 
             self._count(f"L3:report:{dimension_key}")
             report_dir = self.session_dir / "l3-projection-cache" / "report" / dimension_key
@@ -551,13 +571,13 @@ class RecordedPlanningProvider:
                 for path in report_dir.glob("*.json"):
                     try:
                         raw = json.loads(path.read_text(encoding="utf-8"))
-                        body = _text(raw.get("report_body"))
+                        body = _text(raw.get("summary_body"))
                         if body:
                             bodies.append(body)
                     except (OSError, ValueError, TypeError):
                         continue
             body = max(bodies, key=len) if bodies else self._report_body(dimension_key)
-            return L3ReportOutput(report_body=body)
+            return L3IntentSummaryOutput(summary_body=body)
         raise AssertionError(f"unhandled recorded structured contract: {name}")
 
     async def astream(self, prompt: str):

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError
 
 from app.infrastructure.llm.planning_claims import PlanningClaimGenerator
 
@@ -25,14 +25,9 @@ class _StructuredInvoker:
         return {
             "claims": [
                 {
-                    "component_kind": "facility",
-                    "claim_id": "industry-1",
+                    "claim_family": "facility",
                     "statement": "Provide a small agricultural service point.",
-                    "intervention_action": "new",
-                    "facility_parameters": {
-                        "facility_type": "service point",
-                        "action": "new",
-                    },
+                    "planning_role": "spatial_intervention",
                 }
             ],
         }
@@ -59,9 +54,104 @@ def test_provider_adapter_retries_malformed_nested_json(monkeypatch):
     ))
 
     assert invoker.calls == 2
-    assert result.claims[0].claim_id == "industry-1"
+    assert result.claims[0].claim_family == "facility"
     assert "claims" in invoker.messages[0][1]["content"]
     assert "PlanningClaimSet only" not in invoker.messages[0][1]["content"]
+
+
+def test_provider_adapter_quarantines_schema_failure_with_auditable_counts(
+    monkeypatch, caplog
+):
+    class _InvalidInvoker:
+        async def ainvoke(self, _messages):
+            return {
+                "claims": [
+                    {
+            "claim_family": "facility",
+            "statement": "invalid source ref",
+            "source_fact_refs": 7,
+                    }
+                ]
+            }
+
+    class _InvalidLLM:
+        def with_structured_output(self, *_args, **_kwargs):
+            return _InvalidInvoker()
+
+    generator = PlanningClaimGenerator()
+    generator._llm = _InvalidLLM()
+    monkeypatch.setenv("L3_PROVIDER_PARSE_RETRIES", "0")
+
+    with caplog.at_level(logging.WARNING):
+        result = asyncio.run(
+            generator.generate_claims(
+                "Generate one planning claim.",
+                source_fact_ids=(),
+                spatial_source_fact_ids=(),
+            )
+        )
+
+    assert len(result.claims) == 1
+    assert result.claims[0].source_fact_refs == ["7"]
+    records = [
+        record.getMessage()
+        for record in caplog.records
+        if "[planning_claims] output_observation=" in record.getMessage()
+    ]
+    assert records
+    observation = json.loads(records[-1].split("output_observation=", 1)[1])
+    assert observation["failure_code"] is None
+    assert observation["failure_kind"] is None
+    assert observation["root_type"] == "dict"
+    assert observation["finish_reason"] is None
+    assert observation["claim_counts"] == {
+        "emitted": 1,
+        "accepted": 1,
+        "quarantined": 0,
+    }
+    assert "claim-with-invalid-ref" not in records[-1]
+
+
+def test_provider_adapter_does_not_quarantine_provider_infrastructure_failure(
+    monkeypatch, caplog
+):
+    class _TransportInvoker:
+        async def ainvoke(self, _messages):
+            raise ConnectionError("provider socket closed")
+
+    class _TransportLLM:
+        def with_structured_output(self, *_args, **_kwargs):
+            return _TransportInvoker()
+
+    generator = PlanningClaimGenerator()
+    generator._llm = _TransportLLM()
+    monkeypatch.setenv("L3_PROVIDER_PARSE_RETRIES", "0")
+    monkeypatch.setenv("L3_TRANSIENT_RETRIES", "0")
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(ValueError, match="PROVIDER_TRANSPORT"):
+            asyncio.run(
+                generator.generate_claims(
+                    "Generate one planning claim.",
+                    source_fact_ids=(),
+                    spatial_source_fact_ids=(),
+                )
+            )
+
+    records = [
+        record.getMessage()
+        for record in caplog.records
+        if "[planning_claims] output_observation=" in record.getMessage()
+    ]
+    assert records
+    observation = json.loads(records[-1].split("output_observation=", 1)[1])
+    assert observation["failure_kind"] == "provider_infrastructure"
+    assert observation["failure_code"] == "PROVIDER_TRANSPORT"
+    assert observation["claim_counts"] == {
+        "emitted": None,
+        "accepted": 0,
+        "quarantined": 0,
+    }
 
 
 def test_provider_adapter_closes_fact_ids_after_structured_parse() -> None:
@@ -73,10 +163,8 @@ def test_provider_adapter_closes_fact_ids_after_structured_parse() -> None:
     )
     output = model.model_validate({
         "claims": [{
-            "component_kind": "facility",
-            "claim_id": "facility-1",
-            "intervention_action": "new",
-            "facility_parameters": {"action": "new"},
+            "claim_family": "facility",
+            "statement": "配置公共服务设施",
             "source_fact_refs": ["l1:fact:background"],
         }],
     })
@@ -91,58 +179,8 @@ def test_provider_adapter_closes_fact_ids_after_structured_parse() -> None:
     assert any("l3_source_fact_closed_set" in item for item in diagnostics)
 
 
-def test_provider_adapter_fail_closes_tool_call_missing_without_reask(monkeypatch) -> None:
-    import app.infrastructure.llm.planning_claims as planning_claims
-    from app.infrastructure.llm.structured import structured_failure_code
-
-    calls = 0
-
-    async def fail_once(*_args, **_kwargs):
-        nonlocal calls
-        calls += 1
-        raise RuntimeError("No tool calls or function call found in response")
-
-    monkeypatch.setattr(planning_claims, "run_structured_output", fail_once)
-    monkeypatch.setenv("L3_PROVIDER_PARSE_RETRIES", "1")
-
-    with pytest.raises(ValueError, match="TOOL_CALL_MISSING") as raised:
-        asyncio.run(PlanningClaimGenerator().generate_claims(
-            "Generate one planning claim.",
-            source_fact_ids=(),
-            spatial_source_fact_ids=(),
-        ))
-
-    assert calls == 1
-    assert structured_failure_code(raised.value) == "TOOL_CALL_MISSING"
-
-
-def test_provider_adapter_does_not_turn_none_into_empty_claims(monkeypatch) -> None:
-    import app.infrastructure.llm.planning_claims as planning_claims
-    from app.infrastructure.llm.structured import structured_failure_code
-
-    calls = 0
-
-    async def return_none(*_args, **_kwargs):
-        nonlocal calls
-        calls += 1
-        return None
-
-    monkeypatch.setattr(planning_claims, "run_structured_output", return_none)
-    monkeypatch.setenv("L3_PROVIDER_PARSE_RETRIES", "0")
-
-    with pytest.raises(ValueError, match="TOOL_CALL_MISSING") as raised:
-        asyncio.run(PlanningClaimGenerator().generate_claims(
-            "Generate one planning claim.",
-            source_fact_ids=(),
-            spatial_source_fact_ids=(),
-        ))
-
-    assert calls == 1
-    assert structured_failure_code(raised.value) == "TOOL_CALL_MISSING"
-
-
 def test_l3_projection_cache_is_written_only_by_validated_caller(tmp_path, monkeypatch) -> None:
-    from app.domain.program.claim_draft import L3ClaimOutput
+    from app.domain.program.claim_draft import L3RoughClaimOutput
     from app.domain.program import worker
 
     monkeypatch.setattr(
@@ -152,7 +190,7 @@ def test_l3_projection_cache_is_written_only_by_validated_caller(tmp_path, monke
 
     class _Generator:
         async def generate_claims(self, _prompt, **_kwargs):
-            return L3ClaimOutput()
+            return L3RoughClaimOutput()
 
     output = asyncio.run(worker._cached_claim_only_generation(
         _Generator(),
@@ -189,11 +227,8 @@ def test_l3_projection_cache_revalidates_current_fact_closed_set(tmp_path, monke
     )
     generated = response_model.model_validate({
         "claims": [{
-            "component_kind": "facility",
-            "claim_id": "facility-1",
+            "claim_family": "facility",
             "statement": "配置公共服务设施",
-            "intervention_action": "new",
-            "facility_parameters": {"action": "new"},
             "source_fact_refs": ["l1:fact:current"],
         }],
     })
@@ -234,9 +269,9 @@ def test_l3_projection_cache_revalidates_current_fact_closed_set(tmp_path, monke
     assert result.claims[0].source_fact_refs == ["l1:fact:current"]
 
 
-def test_l3_report_cache_does_not_reuse_empty_body(tmp_path, monkeypatch) -> None:
+def test_l3_intent_summary_cache_does_not_reuse_empty_body(tmp_path, monkeypatch) -> None:
     from app.domain.program import worker
-    from app.domain.program.claim_draft import L3ReportOutput
+    from app.domain.program.claim_draft import L3IntentSummaryOutput
 
     monkeypatch.setattr(
         "app.infrastructure.paths.session_run_dir",
@@ -246,27 +281,27 @@ def test_l3_report_cache_does_not_reuse_empty_body(tmp_path, monkeypatch) -> Non
     cache_key = worker._projection_cache_key(
         prompt=prompt,
         validation_feedback=None,
-        response_model=L3ReportOutput,
-        cache_contract="l3-report-only-v2",
+        response_model=L3IntentSummaryOutput,
+        cache_contract="l3-intent-summary-v1",
     )
     cache_path = worker._projection_cache_path(
         "l3-report-empty-cache",
         "traffic",
         cache_key,
-        "report",
+        "intent_summary",
     )
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(json.dumps({"report_body": ""}), encoding="utf-8")
+    cache_path.write_text(json.dumps({"summary_body": ""}), encoding="utf-8")
 
     class _Generator:
         calls = 0
 
-        async def generate_report(self, _prompt):
+        async def generate_intent_summary(self, _prompt):
             self.calls += 1
-            return L3ReportOutput(report_body="fresh report")
+            return L3IntentSummaryOutput(summary_body="fresh summary")
 
     generator = _Generator()
-    result = asyncio.run(worker._cached_report_generation(
+    result = asyncio.run(worker._cached_intent_summary_generation(
         generator,
         session_id="l3-report-empty-cache",
         dimension_key="traffic",
@@ -274,37 +309,15 @@ def test_l3_report_cache_does_not_reuse_empty_body(tmp_path, monkeypatch) -> Non
     ))
 
     assert generator.calls == 1
-    assert result.report_body == "fresh report"
+    assert result.summary_body == "fresh summary"
 
 
-def test_provider_adapter_queue_wait_is_bounded(monkeypatch):
-    import app.infrastructure.llm.planning_claims as planning_claims
+def test_l3_worker_rejects_empty_intent_summary() -> None:
+    from app.domain.program.worker import L3IntentSummaryEmptyError, _require_l3_intent_summary
 
-    generator = PlanningClaimGenerator()
-    generator._slots = asyncio.Semaphore(1)
-    monkeypatch.setattr(planning_claims, "LLM_STREAM_TIMEOUT", 0.01)
-
-    async def scenario():
-        await generator._slots.acquire()
-        try:
-            with pytest.raises(asyncio.TimeoutError):
-                await generator.generate_claims(
-                    "Generate one planning claim.",
-                    source_fact_ids=(),
-                    spatial_source_fact_ids=(),
-                )
-        finally:
-            generator._slots.release()
-
-    asyncio.run(scenario())
-
-
-def test_l3_worker_rejects_empty_human_report_body() -> None:
-    from app.domain.program.worker import L3ReportBodyEmptyError, _require_l3_report_body
-
-    with pytest.raises(L3ReportBodyEmptyError, match="L3_REPORT_BODY_EMPTY"):
-        _require_l3_report_body("  ")
-    assert _require_l3_report_body("【规划】正文") == "【规划】正文"
+    with pytest.raises(L3IntentSummaryEmptyError, match="L3_INTENT_SUMMARY_EMPTY"):
+        _require_l3_intent_summary("  ")
+    assert _require_l3_intent_summary("【规划】摘要") == "【规划】摘要"
 
 
 def test_l3_report_id_is_stable_for_checkpoint_replay() -> None:
@@ -381,18 +394,17 @@ def test_l3_prompt_exposes_split_projections_and_typed_fact_ids(monkeypatch) -> 
     prompt = _build_prompt(
         SimpleNamespace(key="traffic"),
         {"session_id": "prompt-test", "dimension_key": "traffic"},
-        l1_deps="现状道路分布于村庄主要居民点。",
         l2_deps="完善道路连接。",
+        same_layer_contexts="",
     )
 
     assert "report_body" in prompt
-    assert "结构化 schema 是字段、组件类型和参数块的唯一约束来源" in prompt
-    assert "report-synthesis pass" in prompt
+    assert "claims-only" in prompt
     assert "l1:fact:road-one" in prompt
     assert "feature:road:one" in prompt
     assert "source_fact_refs" in prompt
-    assert "现状道路分布于村庄主要居民点。" in prompt
-    assert "旧报告模板中的表格和‘至少列出’只是背景" in prompt
+    assert "现状道路分布于村庄主要居民点。" not in prompt
+    assert "旧报告模板" not in prompt
 
 
 def test_l3_prompt_keeps_dependency_projection_structure_intact(monkeypatch) -> None:
@@ -405,19 +417,12 @@ def test_l3_prompt_keeps_dependency_projection_structure_intact(monkeypatch) -> 
     prompt = _build_prompt(
         SimpleNamespace(key="industry"),
         {"session_id": "prompt-budget-test", "dimension_key": "industry"},
-        l1_deps='{"allowed_direct_dependencies":[{"dimension_key":"traffic",'
-        '"report_id":"report:l1","summary":"现状事实摘要",'
-        '"instruction":{"observations":[{"fact_id":"l1:fact:road"}]}}]}',
-        l2_deps='{"allowed_direct_dependencies":[{"dimension_key":"positioning",'
-        '"report_id":"report:l2","summary":"规划决策摘要",'
-        '"instruction":{"decision":"优先提升可达性"}}]}',
-        same_layer_contexts='{"allowed_direct_dependencies":[{"dimension_key":"industry",'
-        '"report_id":"report:same","summary":"同层元数据"}]}',
+        l2_deps="| decision_type | statement_or_name |\n| --- | --- |\n| objective | 优先提升可达性 |",
+        same_layer_contexts="| claim_family | statement |\n| --- | --- |\n| road | 避免重复道路意图 |",
     )
 
-    assert '"report_id":"report:l1"' in prompt
-    assert '"fact_id":"l1:fact:road"' in prompt
-    assert '"report_id":"report:l2"' in prompt
-    assert '"decision":"优先提升可达性"' in prompt
-    assert '"report_id":"report:same"' in prompt
+    assert "report:l1" not in prompt
+    assert "现状事实摘要" not in prompt
+    assert "优先提升可达性" in prompt
+    assert "避免重复道路意图" in prompt
     assert "已截断" not in prompt

@@ -241,7 +241,7 @@ def test_pending_claim_is_audited_on_projection_without_target_specs():
     ]
 
 
-def test_classifier_marks_missing_typed_parameter_invalid():
+def test_classifier_marks_missing_typed_parameter_pending():
     claim = _claim(
         planning_role="spatial_intervention",
         project_package_ref="pkg-facility",
@@ -253,10 +253,10 @@ def test_classifier_marks_missing_typed_parameter_invalid():
     interventions, pending_claims, dispositions, issues = classify_claims([claim])
 
     assert interventions == []
-    assert pending_claims == []
-    assert dispositions[0].status == "invalid"
-    assert issues[0].code == "claim_admission_incomplete"
-    assert issues[0].severity == "error"
+    assert pending_claims == [claim]
+    assert dispositions[0].status == "pending_grounding"
+    assert issues[0].code == "claim_grounding_pending"
+    assert issues[0].severity == "warning"
 
 
 def test_classifier_assigns_a_disposition_to_every_claim():
@@ -290,7 +290,6 @@ def test_classifier_assigns_a_disposition_to_every_claim():
     assert {item.status for item in dispositions} == {
         "admitted",
         "pending_grounding",
-        "invalid",
         "deferred",
     }
 

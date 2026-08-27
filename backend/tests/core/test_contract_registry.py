@@ -16,7 +16,7 @@ def test_registry_has_one_identity_for_each_production_boundary() -> None:
         "l2.decision",
         "l2.report",
         "l3.claims",
-        "l3.report",
+        "l3.intent_summary",
         "ground.candidate_selection",
         "artifact.delivery_manifest",
         "api.public_event",

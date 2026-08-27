@@ -15,6 +15,11 @@ ACTIVE_DESIGN = {
     "05_MIGRATION.md",
 }
 
+GOVERNANCE_DESIGN = {
+    "DOCUMENTATION_AUTHORITY.md",
+    "DOCUMENT_CLEANUP_MANIFEST.md",
+}
+
 ACTIVE_ARCHITECTURE = {
     "README.md",
     "CURRENT_RUNTIME.md",
@@ -27,12 +32,13 @@ AUTHORITATIVE_CHAIN = (
     "TARGET_PROJECTION",
     "GROUND",
     "GroundedPlanningProblem",
-    "ScenarioOptimizer",
+    "PlanningDeliberationGraph",
     "ScenarioSet",
     "Approval Gate",
     "ApprovedExecutionInput",
-    "Atomic EXECUTE",
-    "PlannedState",
+    "ConstrainedMaterializationGraph",
+    "Atomic Commit",
+    "committed PlannedState",
     "VALIDATE",
     "ValidationCertificate",
     "RECONCILE",
@@ -43,7 +49,7 @@ AUTHORITATIVE_CHAIN = (
 def test_active_document_sets_are_small_and_canonical() -> None:
     design = {path.name for path in (DOCS / "design").glob("*.md")}
     architecture = {path.name for path in (DOCS / "architecture").glob("*.md")}
-    assert design == ACTIVE_DESIGN
+    assert design == ACTIVE_DESIGN | GOVERNANCE_DESIGN
     assert architecture == ACTIVE_ARCHITECTURE
 
 
@@ -53,7 +59,11 @@ def test_active_docs_do_not_link_to_retired_status_ledgers() -> None:
         r"RELATION_AWARE_MODIFICATION_LEDGER|IMPLEMENTATION_GAP_AUDIT"
     )
     active = [DOCS / "README.md"]
-    active += list((DOCS / "design").glob("*.md"))
+    active += [
+        path
+        for path in (DOCS / "design").glob("*.md")
+        if path.name != "DOCUMENT_CLEANUP_MANIFEST.md"
+    ]
     active += list((DOCS / "architecture").glob("*.md"))
     violations = [
         str(path.relative_to(ROOT))
@@ -93,22 +103,25 @@ def test_system_design_preserves_the_authoritative_planning_chain() -> None:
     chain = text.split("正常主链是：", 1)[1].split("```text", 1)[1].split("```", 1)[0]
     positions = [chain.index(name) for name in AUTHORITATIVE_CHAIN]
     assert positions == sorted(positions)
-    assert "现有 SELECT 的目标内核" in text
+    assert "`PlanningDeliberationGraph` 是 SELECT 的决策门面" in text
     assert "不要求各自成为新的顶层图节点" in text
 
 
 def test_target_specs_cover_planning_and_embedding_degradation() -> None:
+    system_design = (DOCS / "design" / "00_SYSTEM_DESIGN.md").read_text(
+        encoding="utf-8"
+    )
     evidence = (DOCS / "design" / "02_EVIDENCE_AND_GROUNDING.md").read_text(
         encoding="utf-8"
     )
     planning = (DOCS / "design" / "03_PLANNING_EXECUTION.md").read_text(
         encoding="utf-8"
     )
-    assert "嵌入服务失效时" in evidence
-    assert "GROUND explicitly forbids final location selection" in evidence
-    assert "A single weighted winner is not a sufficient planning product" in planning
-    assert "An infeasible result is a valid outcome" in planning
-    assert "EXECUTE explicitly forbids re-selecting a location" in planning
+    assert "嵌入服务失效时" in system_design
+    assert "GROUND 明确禁止写 final location 或 recommended scenario。" in evidence
+    assert "ScenarioSet remains the sole authoritative decision artifact" in planning
+    assert "infeasible 是正式、可接受的决策结果。" in planning
+    assert "EXECUTE 消费不可变的 `ApprovedExecutionInput`。" in planning
 
 
 def test_current_runtime_distinguishes_implemented_partial_boundaries() -> None:

@@ -561,30 +561,28 @@ async def test_runner_rejects_untyped_l1_observation_json(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_runner_rejects_untyped_l3_claim_json(monkeypatch):
-    from instructor.core import InstructorRetryException
-    from app.domain.program.claim_draft import L3ClaimOutput
+async def test_runner_isolates_malformed_l3_claim_fields(monkeypatch):
+    from app.domain.program.claim_draft import L3RoughClaimOutput
     from app.infrastructure.llm import structured
 
-    content = '{"claims":[{"claim_id":"land-use-1","statement":"保留现状生态与耕地格局"}]}'
+    class _Runner:
+        async def ainvoke(self, _messages):
+            return {"claims": [{"claim_family": "facility", "source_fact_refs": 7}]}
 
-    class _Completions:
-        async def create(self, **_kwargs):
-            raise _retry_exception_with_content(content)
+    class _LLM:
+        def with_structured_output(self, *_args, **_kwargs):
+            return _Runner()
 
-    class _Client:
-        chat = type("_Chat", (), {"completions": _Completions()})()
+    result = await structured.run_structured_output(
+        L3RoughClaimOutput,
+        [{"role": "user", "content": "return the typed L3 output"}],
+        llm=_LLM(),
+        max_retries=1,
+        timeout=2,
+    )
 
-    monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
-    monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "MiniMax-M2.7-highspeed")
-
-    with pytest.raises(InstructorRetryException):
-        await structured.run_structured_output(
-            L3ClaimOutput,
-            [{"role": "user", "content": "return the typed L3 output"}],
-            max_retries=1,
-            timeout=2,
-        )
+    assert len(result.claims) == 1
+    assert result.claims[0].source_fact_refs == ["7"]
 
 
 @pytest.mark.asyncio
@@ -830,7 +828,7 @@ async def test_runner_passes_typed_contract_and_bounded_retry(monkeypatch):
 async def test_runner_enforces_shared_provider_call_budget_and_console_go_tools_mode(monkeypatch):
     from app.infrastructure.llm import structured
 
-    monkeypatch.setattr("app.core.settings.LLM_MAX_CONCURRENT", 2)
+    monkeypatch.setenv("LLM_MAX_CONCURRENT", "2")
     monkeypatch.setenv("LLM_PROVIDER", "opencode-go")
     monkeypatch.setenv("LLM_REASONING_EFFORT", "low")
     active = 0
@@ -872,7 +870,7 @@ async def test_runner_enforces_shared_provider_call_budget_and_console_go_tools_
 async def test_runner_applies_one_provider_gate_across_stage_scopes(monkeypatch):
     from app.infrastructure.llm import structured
 
-    monkeypatch.setattr("app.core.settings.LLM_MAX_CONCURRENT", 2)
+    monkeypatch.setenv("LLM_MAX_CONCURRENT", "2")
     monkeypatch.setenv("LLM_PROVIDER", "opencode-go")
     monkeypatch.setenv("OPENCODE_GO_MODEL", "deepseek-v4-flash")
     active = 0
@@ -913,7 +911,7 @@ async def test_runner_adapts_only_incomplete_output(monkeypatch):
     from instructor.core import IncompleteOutputException
     from app.infrastructure.llm import structured
 
-    monkeypatch.setattr("app.core.settings.LLM_MAX_CONCURRENT", 2)
+    monkeypatch.setenv("LLM_MAX_CONCURRENT", "2")
     monkeypatch.setenv("LLM_PROVIDER", "opencode-go")
     monkeypatch.delenv("LLM_REASONING_EFFORT", raising=False)
     monkeypatch.setenv("LLM_INCOMPLETE_OUTPUT_MAX_TOKENS", "8192")

@@ -160,7 +160,9 @@ async def test_analyze_dimension_typed_exception_preserves_dimension_without_com
     assert failure["code"] == "llm_typed_output_error"
     assert secret_model_body not in failure["message"]
     assert "completed_dimensions" not in result
-    assert runner_kwargs_seen["max_retries"] == 0
+    # L1 now goes through the centralized extraction-loop/LLM manager path;
+    # the old direct structured-runner kwargs are intentionally no longer part
+    # of this test's contract.
 
 
 def test_typed_output_failure_is_a_transient_code():

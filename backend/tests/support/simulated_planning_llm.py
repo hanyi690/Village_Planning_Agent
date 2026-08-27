@@ -49,8 +49,28 @@ def _claim_component_kind(claim: Any) -> str:
 def _claims_as_provider_output(response_model: type[Any], claims: list[Any]) -> Any:
     rows = []
     for claim in claims:
-        row = claim.model_dump(mode="python", exclude_none=True)
-        row["component_kind"] = _claim_component_kind(claim)
+        family = _claim_component_kind(claim)
+        if family.endswith("_overlay"):
+            family = family.removesuffix("_overlay")
+        row = {
+            "claim_family": family,
+            "statement": _text(getattr(claim, "statement", "")),
+            "planning_role": _text(getattr(claim, "planning_role", "")),
+            "location_hints": list(getattr(claim, "location_hints", []) or []),
+            "constraint_refs": list(getattr(claim, "constraint_refs", []) or []),
+            "objective_refs": list(getattr(claim, "objective_refs", []) or []),
+            "evidence_refs": list(getattr(claim, "evidence_refs", []) or []),
+            "source_fact_refs": list(getattr(claim, "source_fact_refs", []) or []),
+            "grounding_requirements": [
+                "candidate_geometry"
+                if family in {"facility", "road", "axis", "site_area", "zone", "restoration", "protection"}
+                else ""
+            ],
+            "uncertainty": _text(getattr(claim, "uncertainty", "")),
+        }
+        row["grounding_requirements"] = [
+            item for item in row["grounding_requirements"] if item
+        ]
         rows.append(row)
     return response_model.model_validate({"claims": rows})
 
@@ -236,8 +256,8 @@ class SimulatedPlanningProvider:
             'L1ObservationProviderOutput',
             'L1ReportOutput',
             'L2ReportOutput',
-            'L3ReportOutput',
-        } or name in {'L3ProviderClaimOutput'} or name.startswith('L3ClaimOutput') or is_l1_observation_model:
+            'L3IntentSummaryOutput',
+        } or name == 'L3RoughClaimOutput' or is_l1_observation_model:
             dimension_key = self._dimension_from_prompt(prompt)
         if is_l1_observation_model:
             return self.l1_observation_output(dimension_key, prompt)
@@ -307,14 +327,14 @@ class SimulatedPlanningProvider:
             from app.contracts.domain.l2_contracts import L2ReportOutput
 
             return L2ReportOutput(report_body=self.l2_text(dimension_key))
-        if name in {'L3ProviderClaimOutput'} or name.startswith('L3ClaimOutput'):
+        if name == 'L3RoughClaimOutput':
             payload = await self.l3_payload(dimension_key)
             return _claims_as_provider_output(response_model, payload.claims)
-        if name == 'L3ReportOutput':
-            from app.domain.program.claim_draft import L3ReportOutput
+        if name == 'L3IntentSummaryOutput':
+            from app.domain.program.claim_draft import L3IntentSummaryOutput
 
             payload = await self.l3_payload(dimension_key)
-            return L3ReportOutput(report_body=payload.report_body)
+            return L3IntentSummaryOutput(summary_body=payload.report_body)
         if name == 'SourceFeatureSemanticProposalBatch':
             from app.contracts.evidence.source_semantic_contracts import (
                 SourceFeatureSemanticProposal,

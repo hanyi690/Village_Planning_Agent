@@ -152,6 +152,32 @@ def test_packet_candidates_and_relations_become_separate_facts():
     assert "full report span" not in str(projected)
 
 
+def test_analysis_prompt_projection_excludes_packet_candidate_and_relation_facts():
+    subject = FeatureEvidenceRef(
+        identity=BundleFeatureIdentity(
+            bundle_feature_bsm="feature-secret",
+            canonical_name="候选设施",
+            entity_type="facility",
+            role="facility",
+            bsm_kind="source",
+        ),
+        geometry_ref="bundle://feature/secret",
+    )
+    result = ExplorationResult(
+        evidence_bundle=EvidenceBundle(request="设施"),
+        evidence_packet=EvidencePacket(
+            request="设施",
+            candidate_refs=[subject],
+            relation_evidence=[],
+        ),
+    )
+
+    projected = render_analysis_evidence_for_prompt(result)
+
+    assert projected["facts"] == []
+    assert "feature-secret" not in str(projected)
+
+
 def test_conflicting_values_keep_variants_with_unique_fact_ids():
     facts = [
         EvidenceFact(
