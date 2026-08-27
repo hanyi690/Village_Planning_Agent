@@ -240,26 +240,76 @@ def _explicit_spatial_mentions(obs: dict[str, Any]) -> list[dict[str, Any]]:
         ).strip()
         if not target:
             continue
-        scopes: list[str] = []
-        for key in ("village_scopes", "place_scopes"):
-            for value in raw.get(key) or []:
-                scopes.extend(_split_explicit_places(str(value)))
+        raw_scopes = raw.get("scope_mentions")
+        if raw_scopes is None:
+            raw_scopes = [
+                {"name": value, "role": "natural_village"}
+                for value in raw.get("village_scopes") or []
+            ]
+            raw_scopes.extend(
+                {"name": value, "role": "place"}
+                for value in raw.get("place_scopes") or []
+            )
+        scopes: list[dict[str, Any]] = []
+        for value in raw_scopes or []:
+            if isinstance(value, str):
+                value = {"name": value}
+            if not isinstance(value, dict):
+                continue
+            name = str(
+                value.get("name") or value.get("normalized_name") or ""
+            ).strip()
+            if not name:
+                continue
+            scopes.append({
+                "name": name,
+                "normalized_name": str(
+                    value.get("normalized_name") or name
+                ).strip(),
+                "role": _scope_role(value.get("role")),
+                "relation_to_target": str(
+                    value.get("relation_to_target")
+                    or value.get("relation")
+                    or "located_in"
+                ).strip(),
+                "aliases": list(dict.fromkeys(
+                    str(alias).strip()
+                    for alias in (value.get("aliases") or [])
+                    if str(alias).strip()
+                )),
+                "source_quote": str(value.get("source_quote") or "").strip(),
+                "source_refs": list(dict.fromkeys(
+                    str(ref).strip()
+                    for ref in (value.get("source_refs") or [])
+                    if str(ref).strip()
+                )),
+                "source_segment_ids": list(dict.fromkeys(
+                    str(ref).strip()
+                    for ref in (value.get("source_segment_ids") or [])
+                    if str(ref).strip()
+                )),
+                "confidence": (
+                    float(value.get("confidence"))
+                    if isinstance(value.get("confidence"), (int, float))
+                    else 0.0
+                ),
+            })
         mentions.append({
             **raw,
             "target_name": target,
             "normalized_name": str(raw.get("normalized_name") or target).strip(),
             "mention": str(raw.get("mention") or target).strip(),
-            "scopes": list(dict.fromkeys(scopes)),
+            "scope_mentions": scopes,
         })
     return mentions
 
 
-def _extract_location_facts_from_observations(
+def _extract_location_mentions_from_observations(
     instruction: str,
     *,
     dimension_key: str,
     report_id: str,
-) -> list[L1LocationFact]:
+) -> list[LocationMention]:
     """Compile the validated L1 observation projection into typed facts.
 
     The structured observations JSON is the single location-fact source;
@@ -275,7 +325,7 @@ def _extract_location_facts_from_observations(
         payload = payload.get("observations") or []
     if not isinstance(payload, list):
         return []
-    facts: list[L1LocationFact] = []
+    mentions: list[LocationMention] = []
     seen: set[str] = set()
     for item in payload:
         try:
