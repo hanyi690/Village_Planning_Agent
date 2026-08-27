@@ -80,7 +80,12 @@ def _spec(mention):
 def _typed_llm(selected_candidate_id):
     def with_structured_output(response_model, **_kwargs):
         def invoke(prompt):
-            digest = prompt.split("input_digest=", 1)[1].split(";", 1)[0]
+            text = (
+                "\n".join(item["content"] for item in prompt)
+                if isinstance(prompt, list)
+                else prompt
+            )
+            digest = text.split("input_digest=", 1)[1].split(";", 1)[0]
             return response_model(
                 status="selected",
                 selected_candidate_id=selected_candidate_id,
@@ -227,66 +232,6 @@ def test_candidate_line_carries_geometry_and_topology():
     assert "别名" in line
     assert "来源层" in line
     assert "L1事实" in line
-
-
-@pytest.mark.asyncio
-async def test_async_candidate_selection_prompt_carries_full_evidence(monkeypatch):
-    from app.domain.ground import anchors
-    from app.spatial.grounding.call_budget import new_ground_llm_budget
-
-    prompts = []
-
-    class _Structured:
-        def invoke(self, prompt):
-            prompts.append(prompt)
-            candidate_id = prompt.split("candidate_id=", 1)[1].split()[0]
-            digest = prompt.split("input_digest=", 1)[1].split(";", 1)[0].strip()
-            return CandidateSelectionProposal(
-                status="selected",
-                selected_candidate_id=candidate_id,
-                input_digest=digest,
-            )
-
-    class _LLM:
-        def with_structured_output(self, _model, **_kwargs):
-            return _Structured()
-
-    candidate = _candidate("下村吴德芳", "00000000000000000001", "http://e/hazard")
-    candidate.role = "hazard"
-    candidate.aliases = ["金田村下村组吴德芳", "下村组"]
-    candidate.source_layer = "geological_hazard_point"
-    candidate.feature_bsm = "00000000000000000001"
-    candidate.related_parcel_bsms = ["00000000000000000002"]
-    candidate.l1_fact_refs = ["l1:hazard:1"]
-    candidate.evidence_refs = ["bundle:geological_hazard_point"]
-
-    selected = await anchors._llm_reason_candidate(
-        _LLM(),
-        "金田村下村组吴德芳地质灾害点",
-        "hazard",
-        "金田村",
-        [candidate],
-        budget=new_ground_llm_budget(),
-    )
-
-    assert selected is candidate
-    assert prompts
-    prompt = prompts[0]
-    for value in (
-        "金田村下村组吴德芳",
-        "geological_hazard_point",
-        "feature_BSM=00000000000000000001",
-        "关联地块=00000000000000000002",
-        "l1:hazard:1",
-        "bundle:geological_hazard_point",
-    ):
-        assert value in prompt
-    assert "candidate_index" not in prompt
-    assert "candidate_set_digest=" not in prompt
-    assert "input_digest=" in prompt
-    assert "结构化闭集候选选择契约" in prompt
-    assert "allowed_candidate_ids" in prompt
-    assert "selected_candidate_id 必须逐字复制" in prompt
 
 
 def test_sync_resolver_queue_wait_is_bounded(monkeypatch):

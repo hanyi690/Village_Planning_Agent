@@ -6,10 +6,8 @@ def test_ground_production_modules_have_no_place_index_dependency() -> None:
     app_root = Path(__file__).resolve().parents[2] / "app"
     files = (
         app_root / "domain" / "ground" / "aggregate.py",
-        app_root / "domain" / "ground" / "anchors.py",
         app_root / "spatial" / "grounding" / "grounding.py",
         app_root / "spatial" / "grounding" / "resolver.py",
-        app_root / "spatial" / "grounding" / "report_grounder.py",
         app_root / "infrastructure" / "context" / "planning_context.py",
     )
     violations = {

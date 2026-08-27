@@ -19,6 +19,8 @@ async def test_run_rag_is_the_single_unified_evidence_adapter(monkeypatch):
     calls: list[tuple[str, str]] = []
 
     async def retrieve(request, session_id, village_name="", source_versions=None):
+        assert request.project_cognition_digest.startswith("sha256:")
+        assert request.project_scope["village_name"] == "金田村"
         calls.append((request.dimension_key, session_id))
         return ExplorationResult(
             evidence_bundle=EvidenceBundle(
@@ -32,6 +34,16 @@ async def test_run_rag_is_the_single_unified_evidence_adapter(monkeypatch):
     monkeypatch.setattr(
         "app.evidence.retrieval.evidence_service.retrieve_evidence",
         retrieve,
+    )
+    monkeypatch.setattr(
+        "app.infrastructure.context.planning_context_factory.get_cached_context",
+        lambda _session_id: SimpleNamespace(
+            session_id="session-adapter",
+            village_name="金田村",
+            data_snapshot=SimpleNamespace(digest="bundle-digest"),
+            l1_fact_records=[],
+            reports={},
+        ),
     )
     monkeypatch.setattr(
         "app.evidence.retrieval.retrievers.rag_retriever.consume_rag_log",
@@ -52,6 +64,8 @@ async def test_run_rag_is_the_single_unified_evidence_adapter(monkeypatch):
     assert trace["source_types"] == ["rag"]
     assert trace["fact_count"] == 1
     assert trace["kg_confidence"] == 0.8
+    assert trace["project_cognition_digest"].startswith("sha256:")
+    assert trace["project_scope"]["village_name"] == "金田村"
 
 
 @pytest.mark.asyncio
@@ -66,8 +80,9 @@ async def test_l1_followup_reuses_router_and_keeps_evidence_locators(monkeypatch
 
     async def retrieve(request, session_id, village_name="", source_versions=None):
         assert request.request_type == "fact_check"
-        assert "source:local_text" in request.context_refs
-        assert "source:rag" in request.context_refs
+        assert request.context_refs == []
+        assert request.project_cognition_digest.startswith("sha256:")
+        assert request.project_scope["village_name"] == "金田村"
         return ExplorationResult(
             evidence_bundle=EvidenceBundle(
                 request=request.query,
@@ -90,6 +105,16 @@ async def test_l1_followup_reuses_router_and_keeps_evidence_locators(monkeypatch
         "app.evidence.retrieval.evidence_service.retrieve_evidence",
         retrieve,
     )
+    monkeypatch.setattr(
+        "app.infrastructure.context.planning_context_factory.get_cached_context",
+        lambda _session_id: SimpleNamespace(
+            session_id="session-followup",
+            village_name="金田村",
+            data_snapshot=SimpleNamespace(digest="bundle-digest"),
+            l1_fact_records=[],
+            reports={},
+        ),
+    )
 
     context, trace = await dimension_runtime.run_targeted_evidence(
         "traffic",
@@ -105,12 +130,48 @@ async def test_l1_followup_reuses_router_and_keeps_evidence_locators(monkeypatch
     assert evidence_trace["facts"][0]["spatial_refs"] == ["feature:road-1"]
 
 
+def test_analysis_projection_does_not_include_retrieval_trace_or_raw_body():
+    from app.contracts.evidence.evidence_contracts import (
+        EvidenceBundle,
+        EvidenceFact,
+        ExplorationResult,
+    )
+    from app.contracts.evidence.evidence_packet_contracts import EvidencePacket
+    from app.infrastructure.llm import dimension_runtime
+
+    result = ExplorationResult(
+        evidence_bundle=EvidenceBundle(
+            request="道路",
+            facts=[EvidenceFact(statement="村道位于东侧")],
+        ),
+        evidence_packet=EvidencePacket(
+            request="道路",
+            query_trace=[{"sql": "SECRET SQL", "raw_rows": ["SECRET ROW"]}],
+            missing_evidence=["道路等级"],
+        ),
+    )
+
+    context = dimension_runtime._analysis_evidence_context(result)
+
+    assert "村道位于东侧" in context
+    assert "SECRET SQL" not in context
+    assert "SECRET ROW" not in context
+
+
 @pytest.mark.asyncio
-async def test_legacy_rag_defaults_to_settings_disabled_and_reports_reason(monkeypatch):
+async def test_vector_provider_requires_current_context_and_reports_disabled_reason(monkeypatch):
     from app.core import settings
     from app.infrastructure.llm.dimension_runtime import retrieve_vector_context
 
     monkeypatch.setattr(settings, "RAG_ENABLED", False)
+    monkeypatch.setattr(
+        "app.infrastructure.context.planning_context_factory.get_cached_context",
+        lambda _session_id: SimpleNamespace(
+            session_id="session-rag-default-disabled",
+            village_name="金田村",
+            data_snapshot=SimpleNamespace(digest="bundle-digest"),
+        ),
+    )
 
     async def state_values(cls, _session_id):
         return {"config": {}}

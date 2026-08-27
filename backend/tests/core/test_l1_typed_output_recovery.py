@@ -81,6 +81,7 @@ async def test_analyze_dimension_typed_exception_preserves_dimension_without_com
 
     from instructor.core import InstructorRetryException
     from app.domain.assessment import analysis_node
+    from app.infrastructure.llm.dependency_context import DependencyContext
 
     cfg = SimpleNamespace(
         name="交通",
@@ -94,7 +95,12 @@ async def test_analyze_dimension_typed_exception_preserves_dimension_without_com
         return "", None
 
     async def _no_deps(*_args, **_kwargs):
-        return "", ""
+        return DependencyContext(
+            dimension_key="transportation",
+            layer=1,
+            keys=(),
+            artifacts=(),
+        )
 
     async def _publish(*_args, **_kwargs):
         return None
@@ -107,8 +113,10 @@ async def test_analyze_dimension_typed_exception_preserves_dimension_without_com
             return None
 
     secret_model_body = "MODEL_BODY_SHOULD_NOT_LEAK" * 100
+    runner_kwargs_seen: dict[str, object] = {}
 
     async def _typed_failure(*_args, **_kwargs):
+        runner_kwargs_seen.update(_kwargs)
         raise InstructorRetryException(
             secret_model_body,
             last_completion=None,
@@ -119,7 +127,7 @@ async def test_analyze_dimension_typed_exception_preserves_dimension_without_com
     monkeypatch.setattr(analysis_node, "get_dimension_config", lambda _key: cfg)
     monkeypatch.setattr(analysis_node, "get_dimension_layer", lambda _key: 1)
     monkeypatch.setattr(analysis_node, "run_rag", _no_rag)
-    monkeypatch.setattr(analysis_node, "load_dependency_reports", _no_deps)
+    monkeypatch.setattr(analysis_node, "load_dependency_context", _no_deps)
     monkeypatch.setattr(analysis_node, "publish_dimension_start", _publish)
     monkeypatch.setattr(analysis_node, "provider_failure_open", lambda _sid: False)
     monkeypatch.setattr(analysis_node, "dimension_failure_attempt", lambda state, key: {key: 1})
@@ -152,6 +160,7 @@ async def test_analyze_dimension_typed_exception_preserves_dimension_without_com
     assert failure["code"] == "llm_typed_output_error"
     assert secret_model_body not in failure["message"]
     assert "completed_dimensions" not in result
+    assert runner_kwargs_seen["max_retries"] == 0
 
 
 def test_typed_output_failure_is_a_transient_code():

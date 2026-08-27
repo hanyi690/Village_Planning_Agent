@@ -118,19 +118,23 @@ class SimulatedPlanningProvider:
         )
 
     def l1_observation_output(self, dimension_key: str, prompt: str = "") -> Any:
-        from app.domain.assessment.observation_draft import L1ObservationPassOutput
+        from app.domain.assessment.observation_draft import (
+            L1ObservationProviderOutput,
+            L1ProviderObservation,
+        )
 
         legacy = self.l1_output(dimension_key)
         segment_ids, quote = self._source_locator(prompt, dimension_key)
         observations = [
-            item.model_copy(update={
+            L1ProviderObservation.model_validate({
+                **item.model_dump(mode="python"),
                 "source_segment_ids": segment_ids,
                 "source_quote": quote,
                 "status": "confirmed" if segment_ids and quote else "uncertain",
             })
             for item in legacy.observations
         ]
-        return L1ObservationPassOutput(observations=observations)
+        return L1ObservationProviderOutput(observations=observations)
 
     def l1_report_output(self, dimension_key: str) -> Any:
         from app.domain.assessment.observation_draft import L1ReportOutput
@@ -221,17 +225,19 @@ class SimulatedPlanningProvider:
         name = getattr(response_model, '__name__', '')
         prompt = '\n'.join(str(item.get('content') or '') for item in messages)
         dimension_key = ''
-        from app.domain.assessment.observation_draft import L1ObservationPassOutput
+        from app.domain.assessment.observation_draft import L1ObservationProviderOutput
 
         is_l1_observation_model = (
             isinstance(response_model, type)
-            and issubclass(response_model, L1ObservationPassOutput)
+            and issubclass(response_model, L1ObservationProviderOutput)
         )
         if name in {
             'L1ObservationPassOutput',
+            'L1ObservationProviderOutput',
             'L1ReportOutput',
+            'L2ReportOutput',
             'L3ReportOutput',
-        } or name.startswith('L3ClaimOutput') or is_l1_observation_model:
+        } or name in {'L3ProviderClaimOutput'} or name.startswith('L3ClaimOutput') or is_l1_observation_model:
             dimension_key = self._dimension_from_prompt(prompt)
         if is_l1_observation_model:
             return self.l1_observation_output(dimension_key, prompt)
@@ -297,7 +303,11 @@ class SimulatedPlanningProvider:
             )
         if name == 'L1ReportOutput':
             return self.l1_report_output(dimension_key)
-        if name.startswith('L3ClaimOutput'):
+        if name == 'L2ReportOutput':
+            from app.contracts.domain.l2_contracts import L2ReportOutput
+
+            return L2ReportOutput(report_body=self.l2_text(dimension_key))
+        if name in {'L3ProviderClaimOutput'} or name.startswith('L3ClaimOutput'):
             payload = await self.l3_payload(dimension_key)
             return _claims_as_provider_output(response_model, payload.claims)
         if name == 'L3ReportOutput':

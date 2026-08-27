@@ -53,7 +53,7 @@ def _response(target_ids: list[str], *, code: str = "1500") -> dict:
     return {"results": [_item(target_id, code=code) for target_id in target_ids]}
 
 
-def test_classification_schema_uses_stable_ids_and_dynamic_candidate_enum() -> None:
+def test_classification_schema_keeps_runtime_candidates_out_of_provider_schema() -> None:
     model = generator._dynamic_proposal_model(["1510"])
     schema = model.model_json_schema()
     assert "index" not in str(schema)
@@ -63,7 +63,8 @@ def test_classification_schema_uses_stable_ids_and_dynamic_candidate_enum() -> N
         for value in schema["$defs"].values()
         if "selected_code" in value.get("properties", {})
     )["properties"]["selected_code"]
-    assert selected_schema["anyOf"][0]["const"] == "1510"
+    assert selected_schema["anyOf"][0]["type"] == "string"
+    assert "1510" not in str(selected_schema)
     assert "1500" not in str(selected_schema)
 
 
@@ -106,8 +107,10 @@ def test_accepted_target_is_frozen_and_only_failed_target_is_retried(monkeypatch
 
     assert llm.calls == 2
     assert [decision.target_id for decision in result] == ["target-1", "target-2"]
-    assert "target-1" in llm.messages[0][1]["content"]
-    assert "target-1" not in llm.messages[1][1]["content"]
+    first_prompt = "\n".join(str(item.get("content", "")) for item in llm.messages[0])
+    second_prompt = "\n".join(str(item.get("content", "")) for item in llm.messages[1])
+    assert "target-1" in first_prompt
+    assert "target-1" not in second_prompt
     assert result.pending == []
 
 
@@ -163,7 +166,7 @@ def test_unknown_or_ambiguous_proposal_becomes_pending_without_implicit_retries(
     assert llm.calls == 1
 
 
-def test_dynamic_candidate_set_rejects_code_outside_this_input(monkeypatch) -> None:
+def test_dynamic_candidate_set_rejects_code_outside_this_input_locally(monkeypatch) -> None:
     monkeypatch.setattr(
         generator,
         "_targets_with_evidence",
@@ -174,7 +177,7 @@ def test_dynamic_candidate_set_rejects_code_outside_this_input(monkeypatch) -> N
     result = asyncio.run(generator.generate_classification_decisions(object(), llm=llm))
 
     assert result == []
-    assert result.pending[0].reason_code == "SCHEMA_INVALID"
+    assert result.pending[0].reason_code == "unknown_candidate_id"
     assert llm.calls == 1
 
 

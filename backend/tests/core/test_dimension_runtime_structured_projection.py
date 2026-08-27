@@ -55,7 +55,13 @@ async def test_generate_summary_has_one_typed_generation_boundary(monkeypatch) -
 
     calls: list[tuple[str, int, str]] = []
 
-    async def generate_summary_model(dimension_key: str, layer: int, content: str):
+    async def generate_summary_model(
+        dimension_key: str,
+        layer: int,
+        content: str,
+        *,
+        source_artifact=None,
+    ):
         calls.append((dimension_key, layer, content))
         return build_derived_summary(
             dimension_key,
@@ -73,6 +79,7 @@ async def test_generate_summary_has_one_typed_generation_boundary(monkeypatch) -
         "traffic",
         1,
         "报告正文",
+        source_artifact={"report_body": "报告正文", "typed_instruction": {}},
     )
 
     assert calls == [("traffic", 1, "报告正文")]
@@ -92,7 +99,12 @@ async def test_generate_summary_does_not_replace_generation_failure_with_semanti
     )
 
     with pytest.raises(RuntimeError, match="structured generation failed"):
-        await dimension_runtime.generate_summary("traffic", 1, "报告正文")
+        await dimension_runtime.generate_summary(
+            "traffic",
+            1,
+            "报告正文",
+            source_artifact={"report_body": "报告正文", "typed_instruction": {}},
+        )
 
 
 def test_summary_metric_projection_ignores_pydantic_defaults() -> None:
@@ -132,7 +144,15 @@ async def test_pending_summary_contains_no_semantic_excerpt(monkeypatch) -> None
         no_result,
     )
 
-    summary = await generate_summary_model("traffic", 1, "报告中有未确认的规划语句")
+    summary = await generate_summary_model(
+        "traffic",
+        1,
+        "报告中有未确认的规划语句",
+        source_artifact={
+            "report_body": "报告中有未确认的规划语句",
+            "typed_instruction": {},
+        },
+    )
 
     assert summary.summary_status == "pending"
     assert summary.text_summary == ""
@@ -141,24 +161,46 @@ async def test_pending_summary_contains_no_semantic_excerpt(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
-async def test_report_store_uses_the_canonical_summary_boundary(monkeypatch) -> None:
-    from app.infrastructure.reports.report_store import ReportStore
+async def test_summary_runtime_accepts_the_complete_source_artifact(monkeypatch) -> None:
+    from app.infrastructure.llm import dimension_runtime
 
-    calls: list[tuple[str, int, str]] = []
+    calls: list[tuple[str, int, str, object]] = []
 
-    async def generate_summary(dimension_key: str, layer: int, content: str) -> str:
-        calls.append((dimension_key, layer, content))
-        return '{"authority":"derived_summary"}'
+    async def generate_summary_model(
+        dimension_key: str,
+        layer: int,
+        content: str,
+        *,
+        source_artifact=None,
+    ):
+        calls.append((dimension_key, layer, content, source_artifact))
+        from app.data.ingestion.summary_generator import build_derived_summary
+
+        return build_derived_summary(
+            dimension_key,
+            layer,
+            word_count=len(content),
+            text_summary="动态摘要",
+        )
 
     monkeypatch.setattr(
-        "app.infrastructure.llm.dimension_runtime.generate_summary",
-        generate_summary,
+        "app.data.ingestion.summary_generator.generate_summary_model",
+        generate_summary_model,
     )
 
-    result = await ReportStore()._generate_summary("正文", "traffic", 1)
+    source_artifact = {
+        "report_body": "完整正文",
+        "typed_instruction": {"observations": [{"statement": "完整事实"}]},
+    }
+    serialized = await dimension_runtime.generate_summary(
+        "traffic",
+        1,
+        "完整正文",
+        source_artifact=source_artifact,
+    )
 
-    assert result == '{"authority":"derived_summary"}'
-    assert calls == [("traffic", 1, "正文")]
+    assert calls == [("traffic", 1, "完整正文", source_artifact)]
+    assert json.loads(serialized)["text_summary"] == "动态摘要"
 
 
 def test_removed_background_summary_entrypoint_is_not_exported() -> None:

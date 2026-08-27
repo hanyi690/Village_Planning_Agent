@@ -60,6 +60,36 @@ def test_store_artifact_rejects_null_payload(tmp_path):
         )
 
 
+def test_checkpoint_artifact_root_wins_over_current_process_root(tmp_path, monkeypatch):
+    checkpoint_root = tmp_path / "checkpoint-artifacts"
+    process_root = tmp_path / "different-process-root"
+    state = {
+        "run_id": "run-root-bound",
+        "session_id": "run-root-bound",
+        "branch_id": "main",
+        "artifact_schema_version": "3",
+        "artifact_root": str(checkpoint_root),
+        "context_ref": {"session_id": "run-root-bound", "version": "1"},
+        "artifact_refs": {},
+    }
+
+    reference = store_artifact(
+        state,
+        "execution_diagnostics",
+        "execute",
+        "ExecutionDiagnostics",
+        {"status": "checkpoint-root"},
+    )
+    state["artifact_refs"]["execution_diagnostics"] = reference
+    monkeypatch.setenv("BACKEND_RUN_TMP_DIR", str(process_root))
+
+    loaded = load_artifact(state, "execution_diagnostics")
+
+    assert loaded == {"status": "checkpoint-root"}
+    assert (checkpoint_root / "blobs").exists()
+    assert not (process_root / "blobs").exists()
+
+
 def test_load_artifact_rejects_a_persisted_null_payload(tmp_path):
     repository = ContentAddressedArtifactRepository(tmp_path)
     descriptor = repository.put_json(

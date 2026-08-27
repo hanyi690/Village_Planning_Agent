@@ -64,18 +64,16 @@ def test_unit_resolution_batch_parses_typed_payload():
 
 
 def test_legacy_mapping_json_is_rejected():
-    from app.domain.program.flash_unit_repair import _parse_resolution_batch_response
+    from app.domain.program.flash_unit_repair import UnitResolutionBatch
 
-    batch = _parse_resolution_batch_response('{"待定":"ha"}')
-
-    assert batch.resolutions == []
+    with pytest.raises(ValidationError):
+        UnitResolutionBatch.model_validate_json('{"待定":"ha"}')
 
 
 def test_bare_resolution_list_is_rejected():
-    from app.domain.program.flash_unit_repair import _parse_resolution_batch_response
+    from app.domain.program.flash_unit_repair import UnitResolutionBatch
 
-    batch = _parse_resolution_batch_response(
-        '[{"claim_id":"c1","field_path":"site_area_parameters.footprint_area.unit","raw_unit":"待定","quantity_kind":"area","normalized_unit":"ha","status":"resolved"}]'
-    )
-
-    assert batch.resolutions == []
+    with pytest.raises(ValidationError):
+        UnitResolutionBatch.model_validate_json(
+            '[{"claim_id":"c1","field_path":"site_area_parameters.footprint_area.unit","raw_unit":"待定","quantity_kind":"area","normalized_unit":"ha","status":"resolved"}]'
+        )

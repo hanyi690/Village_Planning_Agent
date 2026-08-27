@@ -47,11 +47,15 @@ async def test_configured_summary_path_keeps_plain_text_out_of_semantic_fields(m
         "land_use_planning",
         3,
         "建设用地 12 公顷，### 新增道路，森林覆盖率 40%",
+        source_artifact={
+            "report_body": "建设用地 12 公顷，### 新增道路，森林覆盖率 40%",
+            "typed_instruction": {},
+        },
     )
 
     assert summary.metrics == {}
     assert summary.key_points == []
-    assert summary.summary_status == "deterministic"
+    assert summary.summary_status == "disabled"
     assert summary.authority == "derived_summary"
 
 

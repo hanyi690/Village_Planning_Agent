@@ -57,18 +57,6 @@ async def test_dimension_worker_transport_error_uses_provider_failure_channel():
     assert result["dimension_retry_counts"] == {"traffic": 1}
 
 
-def test_grounding_fallback_budget_stops_serial_llm_calls(monkeypatch):
-    from app.domain.ground import anchors
-
-    monkeypatch.setattr("app.core.settings.GROUND_MAX_LLM_CALLS", 2)
-    monkeypatch.setattr("app.core.settings.GROUND_LLM_CALL_TIMEOUT_S", 30)
-    budget = anchors._new_ground_llm_budget()
-
-    assert anchors._reserve_ground_llm_call(budget) == 30
-    assert anchors._reserve_ground_llm_call(budget) == 30
-    assert anchors._reserve_ground_llm_call(budget) is None
-
-
 def test_grounding_budget_is_reused_within_scope_and_replaced_between_requests():
     from types import SimpleNamespace
 
@@ -85,17 +73,6 @@ def test_grounding_budget_is_reused_within_scope_and_replaced_between_requests()
     assert next_request["scope_key"] == "run:two"
 
 
-def test_name_backfill_budget_is_independent_from_anchor_budget():
-    from app.domain.ground import anchors
-
-    anchor_budget = anchors._new_ground_llm_budget()
-    name_budget = anchors._new_name_backfill_budget()
-
-    assert name_budget is not anchor_budget
-    assert name_budget["remaining"] == anchor_budget["remaining"]
-    assert name_budget["scope_key"] == "name_backfill"
-
-
 def test_dimension_send_always_has_official_run_timeout(monkeypatch):
     from app.workflow.layers.layer_router import _send_worker
 
@@ -107,57 +84,6 @@ def test_dimension_send_always_has_official_run_timeout(monkeypatch):
     assert send.timeout is not None
     assert send.timeout.run_timeout == 17.5
     assert send.timeout.idle_timeout is None
-
-
-@pytest.mark.asyncio
-async def test_grounding_fallbacks_are_bounded_concurrent(monkeypatch):
-    from types import SimpleNamespace
-
-    from app.domain.ground import anchors
-
-    monkeypatch.setattr("app.core.settings.GROUND_MAX_LLM_CALLS", 8)
-    monkeypatch.setattr("app.core.settings.GROUND_LLM_CALL_TIMEOUT_S", 30)
-    monkeypatch.setattr("app.core.settings.GROUND_LLM_MAX_CONCURRENT", 2)
-    budget = anchors._new_ground_llm_budget()
-    candidate = SimpleNamespace(
-        canonical_name="candidate",
-        entity_type="village",
-        role="village",
-        source_bsms=["bsm-1"],
-        geometry_ref="POINT(1 1)",
-        score=0.5,
-    )
-    active = 0
-    peak = 0
-
-    class FakeLLM:
-        def with_structured_output(self, response_model, **_kwargs):
-            class _Structured:
-                async def ainvoke(self, prompt):
-                    nonlocal active, peak
-                    active += 1
-                    peak = max(peak, active)
-                    await asyncio.sleep(0.02)
-                    active -= 1
-                    candidate_id = prompt.split("candidate_id=", 1)[1].split()[0]
-                    digest = prompt.split("input_digest=", 1)[1].split(";", 1)[0]
-                    return response_model(
-                        status="selected",
-                        selected_candidate_id=candidate_id,
-                        input_digest=digest,
-                    )
-
-            return _Structured()
-
-    results = await asyncio.gather(*[
-        anchors._llm_reason_candidate(
-            FakeLLM(), "mention", "village", "hint", [candidate], budget=budget
-        )
-        for _ in range(5)
-    ])
-
-    assert all(result is candidate for result in results)
-    assert peak == 2
 
 
 @pytest.mark.asyncio
@@ -191,3 +117,46 @@ async def test_structured_timeout_includes_provider_queue_wait(monkeypatch):
             llm=ShouldNotRun(),
             timeout=0.01,
         )
+
+
+@pytest.mark.asyncio
+async def test_structured_provider_timeout_can_start_after_queue(monkeypatch):
+    from pydantic import BaseModel
+
+    from app.infrastructure.llm.structured import run_structured_output
+
+    class Result(BaseModel):
+        value: str
+
+    gate = asyncio.Semaphore(1)
+    await gate.acquire()
+
+    async def locked_gate():
+        return gate
+
+    monkeypatch.setattr(
+        "app.infrastructure.llm.factory.get_llm_semaphore",
+        locked_gate,
+    )
+
+    class FakeLLM:
+        def with_structured_output(self, *_args, **_kwargs):
+            class _Structured:
+                async def ainvoke(self, _messages):
+                    return Result(value="after-queue")
+
+            return _Structured()
+
+    task = asyncio.create_task(
+        run_structured_output(
+            Result,
+            [{"role": "user", "content": "return value"}],
+            llm=FakeLLM(),
+            timeout=0.1,
+            timeout_includes_queue=False,
+        )
+    )
+    await asyncio.sleep(0.02)
+    gate.release()
+
+    assert await task == Result(value="after-queue")

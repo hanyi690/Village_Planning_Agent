@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 
 from app.domain.program.claim_draft import (
     FacilityPlanningParametersDraft,
@@ -185,27 +184,57 @@ def test_apply_unit_resolution_batch_rolls_back_failed_reverification():
 
 
 def test_flash_repair_units_is_field_scoped_per_quantity_kind(monkeypatch):
-    from app.domain.program.flash_unit_repair import flash_repair_units
+    from app.domain.program.flash_unit_repair import (
+        UnitResolutionBatch,
+        flash_repair_units,
+    )
     from app.infrastructure.llm import factory as llm_factory
 
     prompts: list[str] = []
 
-    async def _fake_ainvoke(prompt: str):
-        prompts.append(prompt)
-        return SimpleNamespace(
-            content=(
-                '{"resolutions":['
-                '{"claim_id":"site-2","field_path":"site_area_parameters.footprint_area.unit","raw_unit":"待定","quantity_kind":"area","normalized_unit":"ha","status":"resolved"},'
-                '{"claim_id":"site-count","field_path":"site_area_parameters.capacity.unit","raw_unit":"待定","quantity_kind":"count","normalized_unit":"个","status":"resolved"},'
-                '{"claim_id":"len-1","field_path":"road_parameters.length.unit","raw_unit":"ha","quantity_kind":"length","normalized_unit":"m","status":"resolved"}'
-                "]}"
-            )
+    async def _fake_structured(response_model, messages, **kwargs):
+        assert response_model is UnitResolutionBatch
+        assert kwargs["contract_key"] == "program.unit_repair"
+        prompts.append(str(messages))
+        return UnitResolutionBatch.model_validate(
+            {
+                "resolutions": [
+                    {
+                        "claim_id": "site-2",
+                        "field_path": "site_area_parameters.footprint_area.unit",
+                        "raw_unit": "待定",
+                        "quantity_kind": "area",
+                        "normalized_unit": "ha",
+                        "status": "resolved",
+                    },
+                    {
+                        "claim_id": "site-count",
+                        "field_path": "site_area_parameters.capacity.unit",
+                        "raw_unit": "待定",
+                        "quantity_kind": "count",
+                        "normalized_unit": "个",
+                        "status": "resolved",
+                    },
+                    {
+                        "claim_id": "len-1",
+                        "field_path": "road_parameters.length.unit",
+                        "raw_unit": "ha",
+                        "quantity_kind": "length",
+                        "normalized_unit": "m",
+                        "status": "resolved",
+                    },
+                ]
+            }
         )
 
     monkeypatch.setattr(
         llm_factory,
         "create_flash_llm",
-        lambda *args, **kwargs: SimpleNamespace(ainvoke=_fake_ainvoke),
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "app.infrastructure.llm.structured.run_structured_output",
+        _fake_structured,
     )
 
     result = asyncio.run(flash_repair_units(_build_draft_set(), "s-flash"))

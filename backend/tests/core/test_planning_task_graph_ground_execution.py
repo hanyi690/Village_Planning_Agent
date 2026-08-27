@@ -25,6 +25,7 @@ from app.contracts.spatial.grounded_problem import (
     GroundedTargetDomain,
     GroundingBinding,
 )
+from app.contracts.spatial.candidate_geometry import CandidateGeometry
 from app.domain.ground.task_graph_executor import execute_planning_task_graph
 from app.domain.program.target_projection.planning_task_graph_compiler import (
     compile_planning_task_graph,
@@ -197,6 +198,68 @@ def test_candidate_producer_blocks_without_source_backed_candidate_domain(tmp_pa
 
     assert executed.tasks[0].status == "blocked"
     assert executed.tasks[0].transitions[-1].reason == "missing_ground_output_binding"
+
+
+def test_existing_road_exact_line_uses_source_identity_task_graph(tmp_path) -> None:
+    graph = compile_planning_task_graph(PlanningIntentGraph(nodes=[
+        PlanTargetNode(
+            target_id="road:existing",
+            target_kind="road",
+            asset_kind="road",
+            operation="upgrade",
+        ),
+    ]))
+
+    assert {
+        task.capability
+        for task in graph.tasks
+    } == {
+        "evidence.source_identity",
+        "network.candidate",
+        "network.solver",
+    }
+    assert not any(
+        task.capability in {"evidence.endpoint_binding", "evidence.network_snapshot"}
+        for task in graph.tasks
+    )
+
+    geometry = CandidateGeometry(
+        candidate_id="candidate:road:existing",
+        target_id="road:existing",
+        kind="line",
+        role="execution_geometry",
+        wkt="LINESTRING (113 23, 113.001 23.001)",
+        granularity="exact_feature",
+        spatial_domain_kind="exact_feature",
+        source_feature_ids=["road-feature:existing"],
+        identity_confidence=1.0,
+        geometry_confidence=1.0,
+        hard_constraint_status="passed",
+    )
+    problem = GroundedPlanningProblem(
+        candidate_domains=[GroundedCandidateDomain(
+            target_id="road:existing",
+            candidate_ids=[geometry.candidate_id],
+            candidate_geometry_refs=[geometry.candidate_id],
+            status="resolved",
+        )],
+        candidate_geometries=[geometry],
+    )
+    executed = execute_planning_task_graph(
+        graph,
+        grounded_problem=problem,
+        artifact_refs=_artifact_refs(tmp_path),
+    )
+    tasks = {task.task_id: task for task in executed.tasks}
+    source_task = next(
+        task for task in tasks.values() if task.capability == "evidence.source_identity"
+    )
+    candidate_task = next(
+        task for task in tasks.values() if task.task_kind == "candidate_producer"
+    )
+
+    assert source_task.status == "resolved"
+    assert candidate_task.status == "resolved"
 
 
 def test_missing_precedes_event_is_deferred_to_its_owner(tmp_path) -> None:

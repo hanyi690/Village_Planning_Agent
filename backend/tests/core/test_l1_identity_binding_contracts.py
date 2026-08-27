@@ -36,23 +36,6 @@ def test_observations_keep_independent_ids_and_bind_to_one_entity():
     assert binding.observation_refs == ["obs-1", "obs-2"]
 
 
-def test_village_anchor_is_scope_not_exact_feature():
-    from app.contracts.spatial.grounding_contracts import GroundedAnchor
-
-    anchor = GroundedAnchor(
-        location_fact_ref="fact-1",
-        mention="卫生室",
-        normalized_name="卫生室",
-        role="facility",
-        geometry_ref="village_anchor:社前村",
-        source_bsms=["parcel-1", "parcel-2"],
-        best_effort=True,
-    )
-
-    assert anchor.geometry_granularity == "village_scope"
-    assert anchor.geometry_granularity != "exact_feature"
-
-
 def test_observation_snapshot_can_be_stored_and_reloaded(tmp_path):
     from app.contracts.evidence.identity_contracts import EvidenceObservation
     from app.evidence.identity.observation_store import ObservationStore

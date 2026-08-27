@@ -90,6 +90,18 @@ def test_repair_schema_exposes_only_typed_operations() -> None:
     assert "abstain" in str(schema)
 
 
+def test_repair_provider_schema_does_not_embed_runtime_program_ids() -> None:
+    from app.domain.program import semantic_repair
+
+    program = PlanningProgram(interventions=[_road("road-1"), _road("road-2")])
+    model = semantic_repair._dynamic_repair_model(program)
+    schema_text = str(model.model_json_schema())
+
+    assert model is ProgramSemanticRepairCandidate
+    assert "road-1" not in schema_text
+    assert "road-2" not in schema_text
+
+
 def test_legacy_patch_and_diagnostic_fields_are_not_accepted() -> None:
     with pytest.raises(ValidationError):
         ProgramSemanticRepairCandidate.model_validate(

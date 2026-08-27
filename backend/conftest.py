@@ -19,14 +19,21 @@ if str(BACKEND_ROOT) not in sys.path:
 # pytest's rootdir is selected from backend/pytest.ini even when the command
 # is launched from the repository root.  Fixture discovery must therefore not
 # depend on the caller's current directory.
-pytest_plugins = ["tests.fixtures.db"]
-
-
 def pytest_collection_modifyitems(items):
     for item in items:
         path = str(item.fspath).replace("\\", "/")
         if "/tests/e2e/" in path:
             item.add_marker(pytest.mark.e2e)
+        elif "/tests/acceptance/" in path:
+            item.add_marker(pytest.mark.acceptance)
+        elif "/tests/characterization/" in path:
+            item.add_marker(pytest.mark.characterization)
+        elif "/tests/contracts/" in path:
+            item.add_marker(pytest.mark.contracts)
+        elif "/tests/integration/" in path:
+            item.add_marker(pytest.mark.integration)
+        elif "/tests/core/" in path:
+            item.add_marker(pytest.mark.unit)
 
 
 def pytest_configure(config):

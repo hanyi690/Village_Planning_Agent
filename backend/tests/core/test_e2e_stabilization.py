@@ -5,7 +5,6 @@ Each test maps to an acceptance item in docs/design plans:
 - target_projection L3 gate route (P0.5)
 - identical-fingerprint VALIDATE replay cap + per-session budget (P0.4)
 - empty spatial deferral = plain approve (P0.1)
-- blocked VALIDATE compilation auto-defers targets (P0.3)
 """
 
 from __future__ import annotations
@@ -16,7 +15,6 @@ import pytest
 
 from app.workflow.gate_policy import GATE_ROUTE_POLICY
 from app.workflow import root_graph
-from app.workflow.stages import validate as validate_stage
 from app.domain.program.claim_draft import (
     PlanningClaimDraft,
     PlanningClaimDraftSet,
@@ -161,47 +159,6 @@ async def test_empty_spatial_defer_is_plain_approve(monkeypatch):
     assert result.get("human_review_resume_consumed") is True
 
 
-# VALIDATE no longer mutates approval state through a compatibility hook.
-def test_auto_defer_blocked_targets_builds_ledger_and_passes(monkeypatch):
-    compilation = SimpleNamespace(
-        unresolved=[SimpleNamespace(target_ids=["t1", "t2"])]
-    )
-    impact = SimpleNamespace(reason="no deterministic repair policy")
-    state = {"session_id": "s1", "artifact_refs": {}}
-    working_state = {"artifact_refs": {}}
-
-    persisted = {}
-
-    def fake_persist(ws, stage, schema_id, payload):
-        persisted[schema_id] = payload
-        return {"ref": schema_id}
-
-    decision = validate_stage._auto_defer_blocked_targets(
-        state,
-        compilation,
-        impact,
-        working_state,
-        load_ref=lambda *a, **k: None,
-        persist=fake_persist,
-    )
-    assert decision is None
-    assert persisted == {}
-
-
-def test_auto_defer_blocked_targets_none_without_ids():
-    compilation = SimpleNamespace(unresolved=[SimpleNamespace(target_ids=[])])
-    impact = SimpleNamespace(reason="integrity failure")
-    decision = validate_stage._auto_defer_blocked_targets(
-        {"session_id": "s1"},
-        compilation,
-        impact,
-        {"artifact_refs": {}},
-        load_ref=lambda *a, **k: None,
-        persist=lambda *a, **k: None,
-    )
-    assert decision is None
-
-
 # ?? P0.1 (root cause of run #6 dead state): GROUND approve must continue ??
 def test_approve_ground_routes_to_select_never_end():
     assert root_graph._approve_ground(
@@ -213,25 +170,6 @@ def test_approve_default_continues_forward_for_known_stages():
     assert root_graph._approve_default({}, "target_projection") == "ground"
     assert root_graph._approve_default({}, "ground") == "select"
     assert root_graph._approve_default({}, "reconcile") == "deliver"
-
-
-def test_auto_defer_blocked_targets_fails_closed_on_non_target_findings():
-    compilation = SimpleNamespace(
-        unresolved=[
-            SimpleNamespace(target_ids=["t1"]),
-            SimpleNamespace(target_ids=[]),
-        ]
-    )
-    impact = SimpleNamespace(reason="mixed findings")
-    decision = validate_stage._auto_defer_blocked_targets(
-        {"session_id": "s1"},
-        compilation,
-        impact,
-        {"artifact_refs": {}},
-        load_ref=lambda *a, **k: None,
-        persist=lambda *a, **k: None,
-    )
-    assert decision is None
 
 
 # SELECT auto-deferral requires a complete typed gate and interrupt state.
@@ -391,36 +329,6 @@ async def test_select_human_approve_persists_approved_execution_input(monkeypatc
     assert result["artifact_refs"]["approved_execution_input"] == {
         "descriptor_digest": "ref:ApprovedExecutionInput"
     }
-
-
-# EXECUTE never mutates an approval plan to defer unresolved classification.
-def test_execute_defers_unclassified_targets(monkeypatch):
-    from app.workflow.stages import execute as ex
-    from app.contracts.workflow.execution_plan_contracts import (
-        ExecutionPlan,
-        TargetAssignment,
-        WorkerTask,
-        WorkerType,
-    )
-
-    tasks = [
-        WorkerTask(
-            task_id=f"parcel:{tid}",
-            worker_type=WorkerType.PARCEL_TRANSFORMATION,
-            target_id=tid,
-            target_type="site_area",
-            expected_output_kind="parcel",
-            assignment=TargetAssignment(
-                target_id=tid, target_type="site_area", status="placed",
-                expected_output_kind="parcel",
-            ),
-        )
-        for tid in ("a", "b", "c")
-    ]
-    plan = ExecutionPlan(plan_id="p", worker_tasks=tasks, deferred_tasks=[])
-    diags = [{"target_id": "a"}, {"target_id": "b"}]
-    out = ex._defer_unclassified_targets({"artifact_refs": {}}, plan, None, diags)
-    assert out is None
 
 
 # ?? P1.9: HITL approve may dispatch provider_resume_dispatch (allowlist) ??

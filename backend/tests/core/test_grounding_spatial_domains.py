@@ -42,15 +42,13 @@ def _context(index, parcels):
         ),
         current_parcels=lambda: parcels,
         evidence_graph=None,
-        grounded_anchors=[],
-        village_anchors=[],
         village_name="测试村",
         data_snapshot=SimpleNamespace(digest="bundle-domain-test"),
         l1_snapshot_ref="l1:test",
     )
 
 
-def test_ambiguous_semantic_recall_stays_as_one_planning_domain():
+def test_ambiguous_semantic_recall_exposes_independent_planning_domains():
     parcels = [
         _parcel("P-1", 116.0, 24.0, 116.01, 24.01),
         _parcel("P-2", 116.01, 24.0, 116.02, 24.01),
@@ -90,13 +88,14 @@ def test_ambiguous_semantic_recall_stays_as_one_planning_domain():
     result = ground_aggregate([spec], context)
 
     assert not result.unresolved
-    assert len(result.candidates) == 1
-    candidate = result.candidates[0]
-    assert candidate.source_parcels == ["P-1", "P-2"]
-    assert candidate.geometry is not None
-    assert candidate.geometry.spatial_domain_kind == "parcel_set"
-    assert candidate.candidate_bbox == (116.0, 24.0, 116.02, 24.01)
-    assert candidate.available_area_ha == 2.0
+    assert len(result.candidates) == 2
+    assert [candidate.source_parcels for candidate in result.candidates] == [
+        ["P-1"],
+        ["P-2"],
+    ]
+    assert all(candidate.geometry is not None for candidate in result.candidates)
+    assert all(candidate.geometry.granularity == "parcel_extent" for candidate in result.candidates)
+    assert sum(candidate.available_area_ha for candidate in result.candidates) == 2.0
 
     corridor_result = ground_aggregate(
         [spec],

@@ -16,7 +16,6 @@ from app.data.model.spatial_types import CurrentAnnotation
 from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
 from app.infrastructure.kg.builder import KGBuilder
 from app.infrastructure.kg.ontology import PLN
-from app.spatial.grounding.village_cluster_mapper import build_village_clusters
 
 
 def _annotation() -> CurrentAnnotation:
@@ -94,23 +93,3 @@ def test_generated_feature_bsm_survives_kg_evidence_and_bundle_restore() -> None
     restored.add(_annotation())
     bsms = [item.bsm for item in restored.points.get("annotations_current")]
     assert bsms == ["44142611000000000001", "44142611000000000002"]
-
-
-def test_spatial_candidate_indexes_are_input_order_invariant() -> None:
-    parcels = [
-        SimpleNamespace(
-            bsm=f"P{i}",
-            dlbm="1340",
-            area_sqm=100.0,
-            geometry={"type": "Point", "coordinates": list(point)},
-        )
-        for i, point in enumerate(((116.0, 24.80), (116.0, 24.82), (116.02, 24.80)))
-    ]
-
-    def signature(items):
-        return [
-            (cluster.index, tuple(sorted(cluster.bsms)), cluster.centroid)
-            for cluster in build_village_clusters(items)
-        ]
-
-    assert signature(parcels) == signature(list(reversed(parcels)))

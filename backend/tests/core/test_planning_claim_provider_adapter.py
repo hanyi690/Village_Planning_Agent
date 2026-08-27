@@ -64,38 +64,31 @@ def test_provider_adapter_retries_malformed_nested_json(monkeypatch):
     assert "PlanningClaimSet only" not in invoker.messages[0][1]["content"]
 
 
-def test_provider_adapter_builds_dynamic_fact_id_closed_set() -> None:
+def test_provider_adapter_closes_fact_ids_after_structured_parse() -> None:
     from app.infrastructure.llm.planning_claims import _dynamic_claim_output_model
 
     model = _dynamic_claim_output_model(
         ["l1:fact:current", "l1:fact:background"],
         ["l1:fact:current"],
     )
-    schema_text = str(model.model_json_schema())
+    output = model.model_validate({
+        "claims": [{
+            "component_kind": "facility",
+            "claim_id": "facility-1",
+            "intervention_action": "new",
+            "facility_parameters": {"action": "new"},
+            "source_fact_refs": ["l1:fact:background"],
+        }],
+    })
+    from app.domain.program.worker import _sanitize_l3_provider_component
 
-    assert "l1:fact:current" in schema_text
-    assert "l1:fact:background" in schema_text
-    with pytest.raises(ValidationError):
-        model.model_validate({
-            "claims": [{
-                "component_kind": "facility",
-                "claim_id": "facility-1",
-                "intervention_action": "new",
-                "facility_parameters": {"action": "new"},
-                "source_fact_refs": ["l1:fact:background"],
-            }],
-        })
-    empty_model = _dynamic_claim_output_model([], [])
-    with pytest.raises(ValidationError):
-        empty_model.model_validate({
-            "claims": [{
-                "component_kind": "facility",
-                "claim_id": "facility-empty-catalog",
-                "intervention_action": "new",
-                "facility_parameters": {"action": "new"},
-                "source_fact_refs": [None],
-            }],
-        })
+    sanitized, diagnostics = _sanitize_l3_provider_component(
+        output.claims[0],
+        source_fact_ids=("l1:fact:current",),
+        spatial_source_fact_ids=("l1:fact:current",),
+    )
+    assert sanitized["source_fact_refs"] == []
+    assert any("l3_source_fact_closed_set" in item for item in diagnostics)
 
 
 def test_provider_adapter_fail_closes_tool_call_missing_without_reask(monkeypatch) -> None:
@@ -402,7 +395,7 @@ def test_l3_prompt_exposes_split_projections_and_typed_fact_ids(monkeypatch) -> 
     assert "旧报告模板中的表格和‘至少列出’只是背景" in prompt
 
 
-def test_l3_prompt_bounds_upstream_background_for_provider_context(monkeypatch) -> None:
+def test_l3_prompt_keeps_dependency_projection_structure_intact(monkeypatch) -> None:
     from app.domain.program.worker import _build_prompt
 
     monkeypatch.setattr(
@@ -412,11 +405,19 @@ def test_l3_prompt_bounds_upstream_background_for_provider_context(monkeypatch) 
     prompt = _build_prompt(
         SimpleNamespace(key="industry"),
         {"session_id": "prompt-budget-test", "dimension_key": "industry"},
-        l1_deps="L1" * 10000,
-        l2_deps="L2" * 10000,
-        same_layer_contexts="same" * 10000,
+        l1_deps='{"allowed_direct_dependencies":[{"dimension_key":"traffic",'
+        '"report_id":"report:l1","summary":"现状事实摘要",'
+        '"instruction":{"observations":[{"fact_id":"l1:fact:road"}]}}]}',
+        l2_deps='{"allowed_direct_dependencies":[{"dimension_key":"positioning",'
+        '"report_id":"report:l2","summary":"规划决策摘要",'
+        '"instruction":{"decision":"优先提升可达性"}}]}',
+        same_layer_contexts='{"allowed_direct_dependencies":[{"dimension_key":"industry",'
+        '"report_id":"report:same","summary":"同层元数据"}]}',
     )
 
-    assert len(prompt) < 24000
-    assert "【L1 现状分析已截断】" in prompt
-    assert "【L2 规划思路已截断】" in prompt
+    assert '"report_id":"report:l1"' in prompt
+    assert '"fact_id":"l1:fact:road"' in prompt
+    assert '"report_id":"report:l2"' in prompt
+    assert '"decision":"优先提升可达性"' in prompt
+    assert '"report_id":"report:same"' in prompt
+    assert "已截断" not in prompt

@@ -11,6 +11,7 @@ from app.domain.assessment.source_index import build_l1_source_index
 from app.domain.assessment.observation_draft import (
     L1DemandFact,
     L1ObservationPassOutput,
+    L1ObservationProviderOutput,
     L1ReportOutput,
     QuarantinedObservation,
     build_l1_observation_output_model,
@@ -130,7 +131,7 @@ async def test_l1_loop_calls_only_observe_and_report(monkeypatch) -> None:
         calls.append(response_model)
         messages_seen.append(messages)
         if isinstance(response_model, type) and issubclass(
-            response_model, L1ObservationPassOutput
+            response_model, L1ObservationProviderOutput
         ):
             return response_model.model_validate(
                 {
@@ -161,16 +162,80 @@ async def test_l1_loop_calls_only_observe_and_report(monkeypatch) -> None:
         runner_kwargs={"max_retries": 0},
     )
 
-    assert issubclass(calls[0], L1ObservationPassOutput)
+    assert issubclass(calls[0], L1ObservationProviderOutput)
     assert calls[1] is L1ReportOutput
     assert result.cursor is not None
     assert result.cursor.status == "complete"
     assert result.observations[0].source_refs == [segment.source_ref]
     observe_prompt = str(messages_seen[0])
-    assert '根对象只能包含 observations 和 diagnostics' in observe_prompt
-    assert '不能把单条 fact 直接作为根对象' in observe_prompt
+    assert 'L1ObservationProviderOutput 工具 schema 为准' in observe_prompt
     assert '本维度闭集 ["spatial_entity","spatial_relation","scoped_metric","constraint","risk","document_observation"]' in observe_prompt
     assert "同一语义族内不同子类" in observe_prompt
+
+
+@pytest.mark.asyncio
+async def test_l1_loop_pages_large_source_and_merges_observations(monkeypatch) -> None:
+    from app.domain.assessment import l1_extraction_loop
+
+    source = "\n".join(
+        f"第{index}段：现有村道一条，雨季通行困难。" + "资料" * 320
+        for index in range(10)
+    )
+    index = build_l1_source_index({"village_data": source})
+    assert len(index.source_segments) >= 4
+    calls: list[str] = []
+    observe_messages: list[str] = []
+
+    async def fake_runner(response_model, messages, **_kwargs):
+        if isinstance(response_model, type) and issubclass(
+            response_model, L1ObservationProviderOutput
+        ):
+            observe_messages.append(str(messages[0]["content"]))
+            page_number = len(observe_messages)
+            segment = (
+                index.source_segments[0]
+                if page_number == 1
+                else index.source_segments[-1]
+            )
+            calls.append("observe")
+            return response_model.model_validate(
+                {
+                    "observations": [
+                        {
+                            "fact_type": "spatial_entity",
+                            "status": "confirmed",
+                            "entity_type": "road",
+                            "name": f"村道-{page_number}",
+                            "locator": {},
+                            "source_segment_ids": [segment.segment_id],
+                            "source_quote": segment.text[:80],
+                        }
+                    ]
+                }
+            )
+        calls.append("report")
+        return L1ReportOutput(report_body="按来源页合并后的交通现状。")
+
+    monkeypatch.setattr(
+        "app.infrastructure.llm.structured.run_structured_output",
+        fake_runner,
+    )
+    result = await l1_extraction_loop.run_l1_dimension_loop(
+        dimension_key="traffic",
+        prompt="交通现状",
+        source_index=index,
+        runner_kwargs={"max_retries": 0},
+    )
+
+    assert calls == ["observe", "observe", "report"]
+    assert len(result.observations) == 2
+    assert result.cursor is not None
+    assert result.cursor.source_page_index == 2
+    assert result.cursor.source_page_count == 2
+    assert "【L1 source page 1/2】" in observe_messages[0]
+    assert "【L1 source page 2/2】" in observe_messages[1]
+    assert "【L1 source index】" in observe_messages[0]
+    assert "【L1 source index】" in observe_messages[1]
 
 
 @pytest.mark.asyncio

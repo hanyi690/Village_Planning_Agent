@@ -520,14 +520,10 @@ class RecordedPlanningProvider:
                 ]
             )
 
-        if name == "_GMappingSet":
-            from app.spatial.grounding.village_cluster_mapper import _GMappingSet
-
-            return _GMappingSet(entries=[])
-
         dimension_key = self._dimension_from_prompt(prompt)
-        if name.startswith("L1ObservationPassOutput"):
-            return self.l1_observation_output(dimension_key)
+        if name.startswith(("L1ObservationPassOutput", "L1ObservationProviderOutput")):
+            result = self.l1_observation_output(dimension_key)
+            return response_model.model_validate(result.model_dump(mode="python"))
         if name == "L1ReportOutput":
             return self.l1_report_output(dimension_key)
         if name == "L2DecisionSet":

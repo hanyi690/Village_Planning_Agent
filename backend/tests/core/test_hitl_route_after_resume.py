@@ -84,9 +84,15 @@ def test_ground_approve_with_defer_forwards_to_select():
     assert _approve_ground(state, "ground") == "select"
 
 
-def test_select_approve_with_defer_forwards_to_execute():
+def test_select_approve_with_scoped_deferral_reenters_select():
     from app.workflow.root_graph import _approve_select
 
     state = _gate_state("select")
-    assert _approve_select(state, "select") == "execute"
+    state["scoped_replan_required"] = True
+    assert _approve_select(state, "select") == "select"
 
+
+def test_select_approve_without_executable_artifacts_fails_closed():
+    from app.workflow.root_graph import _approve_select
+
+    assert _approve_select(_state(paused_stage="select"), "select") == "end_diagnostic"

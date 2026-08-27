@@ -1,4 +1,4 @@
-from app.domain.validation.closed_set import (
+from app.contracts.llm.closed_set_contracts import (
     CandidateDescriptor,
     select_closed_set_candidate,
     validate_exact_batch_membership,

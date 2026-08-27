@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
+
 import pytest
 
 
@@ -43,6 +45,52 @@ def test_metadata_inference_uses_typed_output_and_pending_on_failure(monkeypatch
     )
     assert pending["status"] == "pending"
     assert pending["doc_type"] == ""
+
+
+def test_rag_query_generation_uses_bounded_typed_batch(monkeypatch):
+    from app.contracts.llm.rag_contracts import RagQueryBatch
+    from app.infrastructure.rag import service as rag_service
+
+    calls: list[dict] = []
+
+    async def fake_run(response_model, messages, **kwargs):
+        calls.append({"response_model": response_model, "messages": messages, **kwargs})
+        return RagQueryBatch(queries=["村庄 公共服务 规划标准", "道路 交通 规范"])
+
+    monkeypatch.setattr(rag_service, "create_flash_llm", lambda **_: object())
+    monkeypatch.setattr(
+        "app.infrastructure.llm.structured.run_structured_output",
+        fake_run,
+    )
+
+    service = rag_service.RagService.__new__(rag_service.RagService)
+    cfg = SimpleNamespace(
+        key="public_services",
+        name="公共服务",
+        rag_query="检索公共服务设施规划标准",
+        phase_id="layer1",
+        depends_on=[],
+        layer_depends_on=[],
+        phase_depends_on=[],
+    )
+    from app.infrastructure.context import planning_context_factory
+
+    monkeypatch.setattr(
+        planning_context_factory,
+        "get_cached_context",
+        lambda _session_id: SimpleNamespace(
+            session_id="test",
+            village_name="测试村",
+            version=1,
+            content_hash="snapshot",
+        ),
+    )
+    queries = asyncio.run(service.generate_queries(cfg, {"session_id": "test"}))
+
+    assert queries == ["村庄 公共服务 规划标准", "道路 交通 规范"]
+    assert calls[0]["response_model"] is RagQueryBatch
+    assert calls[0]["contract_key"] == "rag.query_batch"
+    assert calls[0]["max_retries"] == 0
 
 
 def test_outline_proposal_uses_stable_heading_ids_and_exact_coverage(monkeypatch):

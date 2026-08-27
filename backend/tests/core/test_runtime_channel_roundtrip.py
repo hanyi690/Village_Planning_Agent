@@ -39,7 +39,8 @@ def test_runtime_channel_is_a_declared_workflow_state_field():
 def test_initial_state_carries_runtime_channel():
     state = initial_workflow_state({"session_id": "s1", "phase": "layer1", "paused_stage": "ground"})
     assert "runtime" in state
-    assert state["runtime"]["paused_stage"] == "ground"
+    assert state["paused_stage"] == "ground"
+    assert "paused_stage" not in state["runtime"]
 
 
 def test_pack_and_materialize_roundtrip_preserves_stage_local_keys():

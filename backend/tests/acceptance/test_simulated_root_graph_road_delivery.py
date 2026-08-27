@@ -40,10 +40,8 @@ async def test_simulated_root_graph_reaches_road_line_and_transport_landuse(
         await make_session_with_uploads(session_id, '金田村', uploads=_uploads())
 
         from app.infrastructure.context.planning_context_factory import get_cached_context
-        from app.infrastructure.llm import planning_claims
         from app.infrastructure.llm import structured
         from app.evidence.identity import flash_source_semantic_classifier as source_classifier
-        from app.domain.program import worker as l3_worker
         from app.infrastructure.llm.planning_claims import PlanningClaimGenerator
 
         async def current_fact_id(kind: str = 'road') -> str:
@@ -121,8 +119,6 @@ async def test_simulated_root_graph_reaches_road_line_and_transport_landuse(
             semantic_source_marker='/4/',
         )
         monkeypatch.setattr(structured, 'run_structured_output', provider.structured_output)
-        monkeypatch.setattr(planning_claims, 'run_structured_output', provider.structured_output)
-        monkeypatch.setattr(source_classifier, 'run_structured_output', provider.structured_output)
         monkeypatch.setattr(PlanningClaimGenerator, '_get_llm', lambda _self: provider)
 
         # The real source-semantic boundary is enabled, but its provider

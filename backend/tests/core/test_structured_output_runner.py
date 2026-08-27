@@ -17,6 +17,52 @@ class _TextResult(BaseModel):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "required_phrase"),
+    [
+        ("tools", "typed response tool"),
+        ("json_schema", "JSON Schema response_format"),
+        ("json", "JSON content"),
+    ],
+)
+async def test_runner_injects_one_protocol_instruction_after_domain_system(
+    monkeypatch, mode, required_phrase
+):
+    from app.infrastructure.llm import structured
+
+    seen: list[list[dict]] = []
+
+    class _Runner:
+        async def ainvoke(self, input_messages):
+            seen.append(input_messages)
+            return _Result(value=7)
+
+    class _LLM:
+        def with_structured_output(self, *_args, **_kwargs):
+            return _Runner()
+
+    monkeypatch.setenv("LLM_STRUCTURED_MODE", mode)
+    result = await structured.run_structured_output(
+        _Result,
+        [
+            {"role": "system", "content": "domain extraction rules"},
+            {"role": "user", "content": "source material"},
+        ],
+        contract_key="l1.observe",
+        llm=_LLM(),
+        max_retries=0,
+        timeout=2,
+    )
+
+    assert result == _Result(value=7)
+    assert len(seen) == 1
+    assert [item["role"] for item in seen[0]] == ["system", "system", "user"]
+    assert seen[0][0]["content"] == "domain extraction rules"
+    assert "[structured-output-protocol:v1]" in seen[0][1]["content"]
+    assert required_phrase in seen[0][1]["content"]
+
+
+@pytest.mark.asyncio
 async def test_injected_minimax_llm_uses_function_calling(monkeypatch):
     from app.infrastructure.llm import structured
 
@@ -42,6 +88,83 @@ async def test_injected_minimax_llm_uses_function_calling(monkeypatch):
 
     assert result == _Result(value=7)
     assert calls[0]["method"] == "function_calling"
+
+
+@pytest.mark.asyncio
+async def test_injected_json_fallback_uses_current_runnable_interface_once(monkeypatch):
+    from app.infrastructure.llm import structured
+
+    methods: list[str] = []
+    invocations: list[tuple[str, object]] = []
+
+    class _Runner:
+        def __init__(self, method):
+            self.method = method
+
+        async def ainvoke(self, messages):
+            invocations.append((self.method, messages))
+            if self.method == "function_calling":
+                raise ValueError("strict schema unsupported by this model")
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content='{"value": 7}'),
+                        finish_reason="stop",
+                    )
+                ]
+            )
+
+    class _LLM:
+        def with_structured_output(self, _response_model, *, method):
+            methods.append(method)
+            return _Runner(method)
+
+    monkeypatch.setenv("LLM_PROVIDER", "minimax")
+    monkeypatch.setenv("LLM_STRUCTURED_MODE", "tools")
+
+    result = await structured.run_structured_output(
+        _Result,
+        [{"role": "user", "content": "return seven"}],
+        llm=_LLM(),
+        allow_content_json=True,
+        max_retries=0,
+        timeout=2,
+    )
+
+    assert result == _Result(value=7)
+    assert methods == ["function_calling", "json_mode"]
+    assert [method for method, _messages in invocations] == methods
+    assert all(isinstance(messages, list) for _method, messages in invocations)
+    assert "JSON content" in invocations[1][1][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_injected_type_error_is_not_retried_as_legacy_prompt(monkeypatch):
+    from app.infrastructure.llm import structured
+
+    calls = 0
+
+    class _Runner:
+        async def ainvoke(self, messages):
+            nonlocal calls
+            calls += 1
+            assert isinstance(messages, list)
+            raise TypeError("current runnable rejected the request")
+
+    class _LLM:
+        def with_structured_output(self, *_args, **_kwargs):
+            return _Runner()
+
+    with pytest.raises(TypeError, match="current runnable"):
+        await structured.run_structured_output(
+            _Result,
+            [{"role": "user", "content": "return seven"}],
+            llm=_LLM(),
+            max_retries=0,
+            timeout=2,
+        )
+
+    assert calls == 1
 
 
 @pytest.mark.asyncio
@@ -217,6 +340,36 @@ async def test_runner_rejects_complete_content_json_after_instructor_retry(
         )
 
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_tool_call_records_safe_request_shape(monkeypatch):
+    from app.infrastructure.llm import structured
+
+    class _Completions:
+        async def create(self, **_kwargs):
+            raise _retry_exception_with_content('{"value": 7}')
+
+    class _Client:
+        chat = type("_Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
+    monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "MiniMax-M2.7-highspeed")
+
+    with pytest.raises(Exception) as raised:
+        await structured.run_structured_output(
+            _Result,
+            [{"role": "user", "content": "return seven"}],
+            contract_key="l1.observe",
+            max_retries=0,
+            timeout=2,
+        )
+
+    summary = structured.structured_failure_summary(raised.value)
+    assert "contract=l1.observe" in summary
+    assert "request=" in summary
+    assert "message_shape" in summary
+    assert "return seven" not in summary
 
 
 @pytest.mark.asyncio
@@ -457,6 +610,8 @@ async def test_runner_classifies_plain_markdown_as_tool_call_missing(monkeypatch
             timeout=2,
         )
     assert structured.structured_failure_code(raised.value) == "TOOL_CALL_MISSING"
+    assert raised.value.structured_response_shape["tool_calls_count"] == 0
+    assert raised.value.structured_response_shape["message_content_length"] > 0
 
 
 @pytest.mark.asyncio
@@ -711,6 +866,46 @@ async def test_runner_enforces_shared_provider_call_budget_and_console_go_tools_
     assert peak == 2
     assert requests[0]["extra_body"]["thinking"]["type"] == "disabled"
     assert "reasoning_effort" not in requests[0]
+
+
+@pytest.mark.asyncio
+async def test_runner_applies_one_provider_gate_across_stage_scopes(monkeypatch):
+    from app.infrastructure.llm import structured
+
+    monkeypatch.setattr("app.core.settings.LLM_MAX_CONCURRENT", 2)
+    monkeypatch.setenv("LLM_PROVIDER", "opencode-go")
+    monkeypatch.setenv("OPENCODE_GO_MODEL", "deepseek-v4-flash")
+    active = 0
+    peak = 0
+
+    class _Completions:
+        async def create(self, **kwargs):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0.02)
+            active -= 1
+            return _Result(value=7)
+
+    class _Client:
+        chat = type("_Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
+    monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "deepseek-v4-flash")
+
+    results = await asyncio.gather(*[
+        structured.run_structured_output(
+            _Result,
+            [{"role": "user", "content": "return seven"}],
+            timeout=2,
+            max_concurrent=2,
+            semaphore_scope=scope,
+        )
+        for scope in ("rag", "l1", "rag", "l1", "rag", "l1")
+    ])
+
+    assert len(results) == 6
+    assert peak == 2
 
 
 @pytest.mark.asyncio
@@ -984,6 +1179,35 @@ def test_instructor_client_uses_tools_mode_and_provider_scoped_cache(monkeypatch
     assert first is second
     assert created[0]["mode"] is instructor_client.instructor.Mode.TOOLS
     assert created[0]["client"]["base_url"] == "https://opencode.ai/zen/go/v1"
+
+
+def test_instructor_client_selects_json_object_mode_for_opencode_go(monkeypatch):
+    from app.infrastructure.llm import instructor_client
+
+    instructor_client._cached_clients.clear()
+    created: list[dict] = []
+
+    class _Wrapped:
+        pass
+
+    monkeypatch.setenv("LLM_STRUCTURED_MODE", "json_schema")
+    monkeypatch.setattr(
+        instructor_client,
+        "_provider_connection",
+        lambda: ("opencode-go", "test-key", "https://opencode.ai/zen/go/v1"),
+    )
+    monkeypatch.setattr(instructor_client, "OpenAI", lambda **kwargs: kwargs)
+    monkeypatch.setattr(
+        instructor_client.instructor,
+        "from_openai",
+        lambda client, **kwargs: (
+            created.append({"client": client, **kwargs}) or _Wrapped()
+        ),
+    )
+
+    instructor_client.get_instructor_client()
+
+    assert created[0]["mode"] is instructor_client.instructor.Mode.JSON
 
 
 def test_minimax_structured_client_defaults_to_tools_mode(monkeypatch):
