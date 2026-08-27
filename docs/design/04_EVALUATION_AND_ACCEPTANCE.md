@@ -37,9 +37,9 @@
 
 GROUND 不以 final selection score 验收。它以候选身份、几何、来源、约束测量和缺口报告的正确性验收。
 
-## 4. Planning/solver benchmark
+## 4. Planning deliberation/solver benchmark
 
-测试集包含可行、多解、Pareto、容量冲突、网络约束、全部不可行和预算终止问题。至少记录：
+测试集包含可行、多解、Pareto、容量冲突、网络约束、全部不可行、上游缺口和预算终止问题。除确定性 solver 正确性外，还必须评估 LLM 是否真正依据 observation 改进方案，而不是只生成解释。至少记录：
 
 - `hard_constraint_violation_count`；
 - `feasible_scenario_recall`：在可枚举或 gold set 中召回的可行/关键替代比例；
@@ -49,12 +49,19 @@ GROUND 不以 final selection score 验收。它以候选身份、几何、来�
 - deterministic fingerprint stability；
 - infeasibility explanation accuracy；
 - source membership preservation。
+- `prototype_validity_rate`：LLM prototype 仅引用闭集 IDs 且通过 proposal validator 的比例；
+- `scenario_structure_diversity`：非文字改写的结构性方案 archetype 数量；
+- `tool_observation_grounding_rate`：正式方案主张可追溯到确定性 tool observation 的比例；
+- `critic_useful_revision_rate`：critic finding 触发新计算、有效修订或 typed upstream return 的比例；
+- `deliberation_information_gain_rounds` 与 zero-gain stop correctness；
+- upstream return routing accuracy；
+- LLM/provider unavailable 时的 deterministic baseline 和正确降级率。
 
-一个 winner 即使合法，也不能单独通过多方案验收。至少要证明替代方案和推荐策略被保存，或者明确证明问题只有一个可行方案。
+一个 winner 即使合法，也不能单独通过多方案验收。至少要证明替代方案、critic、工具 observation 和推荐策略被保存，或者明确证明问题只有一个可行方案。流畅但没有新 observation、没有结构差异或违反闭集引用的 deliberation 不计为智能提升。
 
 ## 5. Execution/replay benchmark
 
-测试集覆盖多 worker、任一 worker 失败、批准后 fingerprint 漂移、重复 resume、旧 artifact、验证失败和交付投影。至少记录：
+测试集覆盖 deterministic fast path、复杂 recipe planning、可恢复 topology/precision error、非等价恢复、任一 worker 失败、批准后 fingerprint 漂移、重复 resume、旧 artifact、验证失败和交付投影。至少记录：
 
 - `selected_to_materialized_coverage`：被批准选择中成功物化且身份一致的比例；
 - unexpected materialization count；
@@ -64,6 +71,12 @@ GROUND 不以 final selection score 验收。它以候选身份、几何、来�
 - `replay_fingerprint_stability`：相同输入重放的关键 fingerprint 稳定率；
 - resume idempotency；
 - delivery run-root consistency。
+- recipe proposal validity and allowlist compliance；
+- recovery diagnosis accuracy；
+- equivalence acceptance/rejection accuracy；
+- outcome-envelope violation rejection rate；
+- repeated recovery fingerprint rejection；
+- model/tool/commit side-effect replay count（必须为 0）。
 
 ## 6. Acceptance levels
 

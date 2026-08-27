@@ -1,65 +1,139 @@
-# Planning and Execution
+# LLM-Native Planning Deliberation and Constrained Execution
 
 > Status: TARGET
-> Authority: Normative planning, optimization, approval, materialization, validation, reconciliation and delivery behavior.
+> Authority: Normative SELECT deliberation, solver/tool orchestration, approval, constrained materialization, execution recovery, validation, reconciliation and delivery behavior.
+> Current implementation: `../architecture/CURRENT_RUNTIME.md`.
+> Related invariants: `00_SYSTEM_DESIGN.md`, `01_CONTRACTS_AND_INVARIANTS.md`, `02_EVIDENCE_AND_GROUNDING.md`, `04_EVALUATION_AND_ACCEPTANCE.md`, `05_MIGRATION.md`.
 
-## 1. From evidence to formal planning problem
+## 0. Executive decision
 
-L3 的 `PlanningProgram` 定义目标、理由、关系、数量、优先级和期望结果；TARGET_PROJECTION 将它编译成原子 typed targets 和可计算要求；GROUND 绑定真实候选、几何、网络、约束因子和证据，形成求解器的封闭输入 `GroundedPlanningProblem`。
+SELECT 和 EXECUTE 必须继承 GROUND 的核心范式：充分使用 LLM 的结构化理解、方案构思、联合推理、反证、工具规划和错误诊断能力，同时把运行时身份、精确计算、硬约束、几何写入和正式提交留给确定性组件。
 
-形式化问题必须区分：
+旧设计把 SELECT 近似等同于 `ScenarioOptimizer`，把 EXECUTE 近似等同于无认知能力的 materializer DAG。该边界虽然避免了模型直接写 GIS，却产生了新的问题：
 
-- decision variables：选择哪些候选、分配多少容量、建立哪些关系；
-- hard constraints：任何正式可行方案都必须满足；
-- soft preferences：允许权衡并以 penalty/score 表达；
-- objectives：需要最小化或最大化的可解释指标；
-- uncertainty：数据误差、推断几何或情景参数；
-- scope：候选全集、baseline、snapshot、时间与空间范围。
+- 求解器只能回答已经被完整形式化的问题，不能主动发现目标遗漏、关系冲突、方案结构和工具选择不合理；
+- 固定 optimizer facade 难以覆盖设施、道路、用地组合、分区、生态和开放性构思等异质任务；
+- 方案解释被放在求解之后，无法反向触发受控补算、重组或 critic；
+- EXECUTE 遇到真实数据形态、拓扑异常或 worker 失败时，只能机械失败，或把恢复逻辑藏进 worker；
+- planner、solver、worker 和 recovery 的责任散落在 Python 分支中，checkpoint 看不到真实认知轮次。
 
-求解器不能读取未绑定的自由文本并自行补充问题定义。
+因此，本设计作出以下规范决定：
 
-### 1.1 Planning content hierarchy and executable admission
+1. SELECT 实现为 `PlanningDeliberationGraph`，而不是一次 `ScenarioOptimizer.solve()` 调用；
+2. solver portfolio、GIS analysis、network analysis 和 scenario evaluator 都是 SELECT 可调用的确定性工具；
+3. LLM 负责 decision case framing、方案原型、工具计划、跨目标联合推理、trade-off 审议、critic 和推荐理由；
+4. LLM 只能引用当前 `GroundedPlanningProblem` 中的闭集 IDs，不能创造候选、坐标、约束通过结论或 source identity；
+5. 确定性 validator 负责 candidate membership、硬约束、指标、几何、资源容量、fingerprint 和 SolverCertificate；
+6. SELECT 的权威输出仍是一个 `ScenarioSet`，但必须增加 deliberation trace、方案来源和有界完整性说明；
+7. EXECUTE 实现为 `ConstrainedMaterializationGraph`，在获批 outcome envelope 内允许 LLM 规划物化 recipe、解释 observation、诊断失败并提出等价恢复；
+8. EXECUTE 的恢复只能改变“如何物化”，不能改变“物化什么”；任何候选替换、路线变化、面积变化、语义变化或硬约束放宽都必须回 SELECT/GROUND/HUMAN；
+9. 所有模型调用、tool execution、validation、artifact commit 和 graph routing 必须是分离节点；
+10. SELECT 与 EXECUTE 都必须具备 information-gain/equivalence gate、预算、checkpoint、resume、幂等和 typed stop semantics。
 
-L3 不是“把报告里的每句话变成任务”的解析器。`PlanningProgram` 必须区分 evidence statement、indicator、constraint、objective、scenario archetype、project package、spatial intervention 和 non-spatial action。项目包是规划管理单元，空间干预才是候选的执行单元。
+## 1. Stage ownership and authority
 
-TARGET_PROJECTION 只接收通过 target admission 的空间干预。准入至少要求：
+### 1.1 SELECT answers “what coherent plan should be approved?”
 
-- 指回项目包和原始 claim/source refs；
-- 明确干预类型及其是否需要 point/line/polygon/network materialization；
-- 有位置要求、候选生成规则或已知空间对象引用；
-- 有可验证的数量、关系或完成条件；
-- 与单纯事实、指标、约束、目标和非空间治理行动明确区分。
+SELECT 消费已经接地的闭合问题，但它不是简单地为候选打分。它必须：
 
-未通过准入的内容不是被丢弃，而是继续作为证据、目标函数、约束依据、情景说明或非空间交付项。系统不得采用“所有非 action claim 都是 spatial intervention”的默认规则。
+- 理解目标、项目包、关系、情景和政策偏好的整体结构；
+- 判断哪些目标应联合决策，哪些可以独立求解；
+- 选择最小充分的 tool/solver 组合；
+- 形成多个结构不同且有意义的方案原型；
+- 对每个原型执行确定性可行性和指标计算；
+- 根据工具 observation 修订方案，而不是凭语言自信宣称可行；
+- 让独立 critic 检查遗漏、单一化、目标替代、证据误用和不公平 trade-off；
+- 保留 Pareto alternatives、推荐政策、反事实和不可行解释；
+- 在缺失接地输入时提出 typed return request，而不是自行补造事实。
 
-## 2. Candidate generation and ownership
+### 1.2 EXECUTE answers “how can the approved outcome be materialized faithfully?”
 
-候选召回和身份归 GROUND；候选组合和方案选择归 ScenarioOptimizer。GROUND 可以按确定性硬前提排除不可能成员，但必须记录排除原因。对需要整体保留的 `all_members`，求解器不能将成员误当成互斥备选；`choose_subset` 必须有明确 cardinality 或容量依据。
+EXECUTE 消费不可变的 `ApprovedExecutionInput`。它可以智能地选择受允许的物化 recipe、排序依赖、解释工具错误和提出等价修复，但不得重新规划。
 
-候选闭合后生成 problem fingerprint。此后任何成员、几何、属性、constraint factor 或 snapshot 改变都形成新问题版本，并使旧 ScenarioSet 和批准失效。
+审批冻结的是结果语义和允许的变换包络，而不是把每个底层库调用提前写死。只要恢复动作可被确定性证明与获批结果等价，EXECUTE 可以在 staging 内重试；无法证明等价就停止并返回最早责任阶段。
 
-### 2.1 Parcel availability and subgeometry invariant
+### 1.3 Deterministic authority remains non-delegable
 
-候选必须把“源地块身份”和“规划可用面”分开表达：
+以下权威不得交给 LLM：
 
-- `fully_unavailable`：源地块在当前约束、避让或 setback 下没有可执行面积；不得只因为仍有源 BSM 就进入 EXECUTE；
-- `partially_available`：源地块只有一部分可用，候选几何必须是裁切后的 footprint，同时保留 `source_area_ha`、`eligible_area_ha`、`excluded_area_ha`、`planning_area_ha`、`coverage_ratio` 和 remainder 诊断；
-- `fully_available`：整块源地块可作为候选，但仍不能把候选身份与源 BSM 混为一谈；
-- `unknown`：没有足够的裁切/约束事实时只能诊断或等待补证，不能假定整块可用。
+- runtime candidate/source feature identity；
+- WKT、GeoJSON、坐标和精确 geometry membership；
+- hard constraint truth、面积/距离/容量/拓扑计算；
+- solver feasible/optimal/bound 状态；
+- approved input、scenario、snapshot 和 artifact digest；
+- execution equivalence、pre-commit integrity 和 atomic commit；
+- ValidationCertificate、ReconciliationReport 和正式 DeliveryManifest。
 
-面积契约还必须满足 `0 <= planning_area_ha <= eligible_area_ha <= source_area_ha`（当对应字段存在）；`excluded_area_ha` 不得超过 `source_area_ha`。这不是展示字段，而是 SELECT 共享容量和 EXECUTE 子几何物化的硬边界，任何违反都必须在候选契约处拒绝，不能交给 worker 兜底。
+“充分使用 LLM”不等于让模型替代计算；它意味着让模型持续决定下一步应该问什么、组合什么、调用什么、质疑什么，以及如何解释 observation。
 
-大地块的候选切割属于 GROUND/SUITABILITY 的确定性几何派生，不得在 EXECUTE 恢复成完整 BSM。EXECUTE 只物化获批 footprint，并把剩余面作为同一源地块的 preserve/remainder 变更；邻接 BSM 和邻接证据随任务、变更集和 PlannedState 传递，但“相邻”本身不是合并或改写授权。只有显式的 typed adjacency/topology relation 和对应 worker task 才能把周围地块纳入同一执行范围，并且必须在 SELECT/approval 中冻结其成员与几何。
+## 2. SELECT contracts
 
-## 3. Hard constraints, soft preferences, and objectives
+### 2.1 GroundedPlanningProblem admission
 
-硬约束来源可以是有证据的法规、L3 明确不可违反的业务要求或可验证的空间/容量条件。软偏好表达成本、美观、便利、公平、复用等可权衡目标。每个 ConstraintSpec 必须引用语义来源、证据和 evaluator，不得仅凭 prompt 文字决定是否满足。
+SELECT 只接收通过 planning GROUND gate 的 `GroundedPlanningProblem`。输入至少包含：
 
-objective vector 的定义来自 L2/L3，指标编译来自 TARGET_PROJECTION，可测数据来自 GROUND，方案值由 ScenarioOptimizer 计算。权重只用于声明的推荐策略，不能抹去原始多维值和 Pareto 关系。
+- admitted targets and project/package relations；
+- candidate domains、selection modes 和 candidate geometry refs；
+- Bundle/KG/network/demand/shared-resource snapshot refs；
+- hard constraints、soft preferences、objectives 和 evaluator refs；
+- relation/constraint measurements；
+- GeometryRequirement satisfaction；
+- uncertainty、unresolved、deferred 和 grounding round refs；
+- stable problem fingerprint。
 
-## 4. ScenarioSet and Pareto alternatives
+required candidate、geometry、constraint factor 或 relation 未闭合时，不得进入正式 deliberation。允许生成 diagnostic decision case，但不得产生 feasible scenario、推荐或 approval input。
 
-ScenarioOptimizer 是现有 SELECT 阶段的目标内核，不是并列的新顶层阶段。它只消费 `GroundedPlanningProblem`，输出：
+### 2.2 DecisionCase
+
+SELECT 先把问题编译为可审议案件，而不是直接调用一个通用求解器：
+
+```python
+class DecisionCase(BaseModel):
+    case_id: str
+    target_refs: list[str]
+    project_package_refs: list[str]
+    candidate_domain_refs: list[str]
+    relation_refs: list[str]
+    constraint_refs: list[str]
+    objective_refs: list[str]
+    shared_resource_refs: list[str]
+    decision_shape: Literal[
+        "independent_choice",
+        "joint_assignment",
+        "network_design",
+        "spatial_layout",
+        "corridor_design",
+        "scenario_composition",
+        "mixed",
+    ]
+    required_tool_capabilities: list[str]
+    uncertainty_refs: list[str]
+    success_condition: str
+    input_digest: str
+```
+
+case grouping 可以由 LLM 提议，但必须由 deterministic compiler 验证：共享容量、互斥候选、显式关系或同一项目包不能被错误拆开；无耦合的案件也不得因语言相似被强行合并。
+
+### 2.3 Closed-set ScenarioPrototype
+
+```python
+class ScenarioPrototype(BaseModel):
+    prototype_id: str
+    case_refs: list[str]
+    selected_candidate_ids: list[str]
+    relation_realization_refs: list[str]
+    allocation_intents: list[dict]
+    tool_action_refs: list[str]
+    scenario_archetype: str
+    design_rationale: str
+    expected_tradeoffs: list[str]
+    unresolved_questions: list[str]
+    input_digest: str
+```
+
+`ScenarioPrototype` 不是可行方案，也不能进入审批。只有 deterministic evaluator 校验 membership、完成全部工具计算、满足硬约束并生成稳定 fingerprint 后，才能升级为 `PlanningScenario`。
+
+### 2.4 ScenarioSet remains the sole authoritative decision artifact
 
 ```text
 ScenarioSet
@@ -67,120 +141,559 @@ ScenarioSet
 ├── feasible_scenario_ids
 ├── pareto_scenario_ids
 ├── recommended_scenario_id
-├── recommendation_policy
+├── recommendation_policy and rationale
 ├── objective definitions and vectors
+├── trade-off / counterfactual explanations
 ├── infeasibility/conflict explanation
-└── SolverCertificate
+├── DecisionDeliberationAudit refs
+├── bounded-search statement
+└── SolverCertificate[]
 ```
 
-每个 PlanningScenario 保存 target selections、feature intents、relation satisfaction、objective vector、findings、status 和 fingerprint。`ScenarioSet` 是 SELECT 唯一权威产物；`SiteSelectionDecision` 不属于目标架构，迁移完成后必须删除，不能长期作为第二决策结果或 worker 输入。
+`SiteSelectionDecision`、worker projection 或自然语言推荐都不是第二权威结果。一个方案可以由多个异质工具共同证明；每个 certificate 必须绑定 problem/scenario/tool/model/version/input digest。
 
-当 SELECT/HUMAN 明确把目标写入 `DeferralLedger` 时，系统不得只修改旧的
-`SiteSelectionDecision` 或 `ExecutionPlan`。SELECT 必须从原始问题生成一个新的 scoped
-`GroundedPlanningProblem`：移除已延期目标及其候选域、几何、绑定和相关关系，保留
-`parent_problem_fingerprint`、`deferred_target_ids`、`scope_reason` 与 source refs，再以
-该 scoped problem 重新运行 `ScenarioOptimizer`。新的 `ScenarioSet`、`PlanningScenario`
-和 `ApprovedExecutionInput` 必须绑定新的 problem fingerprint；旧 approval 不能沿用。
-这一步是“剩余目标可独立规划和执行”的必要条件，不是对旧方案的局部打补丁。
+## 3. SELECT as a deliberation subgraph
 
-A single weighted winner is not a sufficient planning product. 系统至少要保留非支配替代、关键 trade-off、推荐策略和未推荐原因。规模受限时可返回有界子集，但必须说明枚举/搜索范围、截断规则和 bound status。
-
-An infeasible result is a valid outcome when it carries a constraint-conflict explanation. 它应包含冲突约束、相关目标、证据引用、是否存在最小放宽和求解终止状态；不可行结果不得进入审批执行。
-
-## 5. Solver and external critics
-
-ScenarioOptimizer 可以使用穷举、MILP/CP-SAT、图算法、启发式或组合流程，但必须提供稳定输入、确定性 seed 或可重放设置、模型 digest、solver version、停止状态和可行性复核。
-
-外部模型或 LLM critic 可以解释 trade-off、检查目标遗漏和生成供人工阅读的对比，不得：
-
-- 覆盖硬约束 evaluator；
-- 创造 candidate 或 coordinates；
-- 删除“不好看”的可行方案；
-- 把无可行解改写成推荐方案；
-- 修改 SolverCertificate。
-
-SolverCertificate 证明的是“给定问题和模型怎样被求解”，不证明需求或候选在开放世界绝对完整。
-
-### 5.1 Solver portfolio and materializer boundary
-
-ScenarioOptimizer 是稳定的决策门面和结果汇总器，不是要求所有村庄、所有目标都运行同一个多目标优化模型。它根据问题结构选择最小充分后端：
-
-| 问题 | 主要决策后端 | 进入求解器前必须由 GROUND 提供 |
-|---|---|---|
-| 单设施选址 | hard filtering + deterministic ranking / Pareto | 候选、指标、排除原因 |
-| 多设施覆盖 | facility-location / CP-SAT | 候选、需求点、容量和距离矩阵 |
-| 用地组合 | MILP / CP-SAT / bounded enumeration | 地块身份、面积、兼容性和政策因子 |
-| 道路连通 | graph search、shortest path、Steiner/network heuristic | 网络快照、端点、成本和禁入边 |
-| 分区布局 | adjacency/topology constraint solver | 可用面、邻接矩阵和拓扑规则 |
-| 生态避让 | GIS overlay + hard exclusion，再做方案比较 | 生态敏感图层、缓冲规则和可用域 |
-| 线性走廊 | network/corridor algorithm | 端点、网络或成本面、避让因子 |
-| 小规模人工候选 | deterministic Pareto | 有限候选和可解释指标 |
-| 开放性空间构思 | LLM 方案原型，随后重新 grounding 和确定性求解/校验 | 真实底图、约束、已有要素和可用范围 |
-
-LLM 适合提出方案原型、发现遗漏目标和解释 trade-off；它不能代替候选身份、硬约束 evaluator、最短路/覆盖/拓扑计算或可重复的可行性证明。多目标优化只在存在真实冲突的多个可测目标时启用；简单问题使用过滤、排序或单一确定性算法，不为形式统一强造 objective vector。
-
-当前网络关系的最小生产输入约定为：`PlanningContext` 从权威 `roads_current` 构建 `network:road:current` 的 `NetworkGraphSnapshot`；road typed claim 的 `road_parameters.connects` 由 TARGET_PROJECTION 编译为 `typed_road_endpoint` relation，GROUND 只有在该快照存在时才绑定 `ConnectParameters`，不能用邻近线或文本路名猜端点。L3/GROUND 仍必须产出可执行的 typed endpoint/reference 和（coverage 时）`DemandSnapshot`，并在参数中显式引用相同 ref。Context 只接受明确命名的 `demand_points`/`population_demand` 图层，且每个点必须有 `demand_id`、数值 `demand_value` 与 `demand_unit`；现状注记、人口表和设施数量不会被猜成需求点。`network_relation_bounded` 只消费这些冻结输入，缺任何一项就保持 `unknown/diagnostic-only`，不得退化成单设施选址。
-
-任何会比较替代、选择 candidate membership、决定 route/layout 或改变规划结果的算法都必须在批准之前完成。EXECUTE 内的 facility、road、site-area 等 worker 必须重构为 materializer：输入是已冻结的 candidate IDs 和 geometry refs，输出是可审计的 ChangeSet；它们不得自行选址、寻路或布局。
-
-## 6. Approval and immutable execution input
-
-审批门从 ScenarioSet 选择一个 scenario，冻结为 `ApprovedExecutionInput`。该契约至少绑定：PlanningProgram、GroundedPlanningProblem、ScenarioSet、selected PlanningScenario、被选 candidate IDs、获批 geometry refs/digests、baseline/snapshots、允许的确定性物化容差、approval actor/time/policy 和各自 fingerprints/digests。
-
-批准后出现任何内容漂移都使输入 `stale`，必须重新求解或重新批准。审批可以选择 Pareto 方案或改变政策偏好，但不能批准违反硬约束的方案。
-
-EXECUTE 只接受 `ApprovedExecutionInput`。`ExecutionPlan` 是从该输入机械投影出的 materializer DAG，不是独立的规划决策源；无法从获批候选和几何完整生成 DAG 时，必须在 worker 启动前失败。
-
-## 7. Atomic materialization
-
-EXECUTE 在 staging/clone 状态中准备批准输入允许的 ChangeSet，materializer worker 逐项报告 approved candidate/geometry 输入引用、输出 feature 和失败。只有当所有获批任务均可物化且 pre-commit 检查通过时，才一次性提交正式 PlannedState。若业务决定延期目标，必须先形成新的 scoped problem、ScenarioSet 和 ApprovedExecutionInput；EXECUTE 不接受包含 deferred task 的正式批次。
-
-生产执行图只保留 `approval_boundary → route_tasks → prepare_inputs → task_scheduler → merge_worker_results → geometry_materialize → planned_state_builder → execution_review` 八个可达节点。`task_scheduler` 按 `ExecutionPlan` 的依赖批次调用 site/zone/facility/axis/road/action materializer；同一源 BSM 的获批 `site_footprint` 任务可在一个 worker 调用内合并，以便只生成一个容量/剩余面账本，其他 worker 类型保持任务隔离并在 merge 阶段汇合。旧的“每类 worker 一个 LangGraph 节点/静态并行 fan-out”不再是生产路径，避免形成第二执行入口。
-
-staging 必须持久化为 `ExecutionStaging` artifact：它记录 approved input、ExecutionPlan、各个 `staged_*` child refs、worker 成败、commit ID 和诊断。`status=committed` 才能把 child refs 投影到正式 `ExecutionResult`；`status=aborted` 只能供诊断和恢复审计，不能被 VALIDATE/DELIVER 当作正式 PlannedState 输入。
+### 3.1 Parent graph and state
 
 ```mermaid
-sequenceDiagram
-    participant A as ApprovedExecutionInput
-    participant E as EXECUTE
-    participant S as Staging state
-    participant V as Pre-commit validation
-    participant C as Committed state
-    A->>E: frozen scenario and fingerprints
-    E->>S: materialize complete ChangeSet
-    S->>V: independent checks
-    alt all required changes valid
-        V->>C: atomic commit
-    else any required change fails
-        V-->>E: abort with typed failure (worker failure / integrity error)
-    end
+flowchart LR
+    G[GroundedPlanningProblem] --> P[prepare_select_input]
+    P --> S[[PlanningDeliberationGraph]]
+    S --> A[apply_select_output]
+    A --> H[Approval / HUMAN]
+    H --> X[ApprovedExecutionInput]
 ```
 
-EXECUTE explicitly forbids re-selecting a location（禁止重新选址）, substituting a second-best candidate, changing objectives, retrieving new planning evidence or partially committing an official state. 无法物化时返回 typed failure，由路由送回 GROUND、SELECT 或人工门。
+```python
+class PlanningDeliberationState(TypedDict):
+    invocation_ref: str
+    problem_ref: str
+    problem_fingerprint: str
+    decision_case_refs: list[str]
+    round_number: int
+    prototype_refs: list[str]
+    tool_action_refs: list[str]
+    tool_observation_refs: list[str]
+    evaluated_scenario_refs: list[str]
+    critic_finding_refs: list[str]
+    return_request_refs: list[str]
+    decision_audit_refs: list[str]
+    scenario_set_ref: str | None
+    information_gain: float
+    budget_ledger_ref: str
+    exit_status: str
+```
 
-## 8. Independent validation and repair routing
+state 只保存 refs。完整 geometry、网络图和大矩阵由工具节点按 ref 水合，不进入 prompt 或 checkpoint；同 stable ID 不同 digest 是冲突，不能 last-write-wins。
 
-VALIDATE 从获批输入和已物化状态独立重算：硬约束、关系、数量/容量、selected-to-materialized coverage、意外产物、geometry validity、source/scenario lineage 和 snapshot 一致性。它同时生成详细 `ValidationReport` 和简洁可门控的 `ValidationCertificate`。
+### 3.2 Nodes and loop
 
-ValidationCertificate 至少关联 approved input、scenario、baseline、PlannedState digests，并报告 hard violation count、覆盖率、lineage consistency 和 accepted/rejected。VALIDATE 不得直接修复结果；它只定位最早责任阶段：物化偏差回 EXECUTE，候选/测量错误回 GROUND，模型约束错误回 TARGET_PROJECTION/L3，方案错误回 SELECT。
+```mermaid
+flowchart TD
+    S([START]) --> A[admit_problem]
+    A --> C[compile_decision_cases]
+    C --> B[compute_deterministic_baselines]
+    B --> F[frame_deliberation]
+    F --> P[propose_scenarios_and_tools]
+    P --> V[validate_proposals]
+    V --> T[execute_decision_tools]
+    T --> E[evaluate_scenarios]
+    E --> K[critic]
+    K --> G[assess_decision_gaps]
+    G -->|new computation or revision| P
+    G -->|grounding/specification gap| R[compile_return_request]
+    G -->|complete / bounded / infeasible| O[compile_scenario_set]
+    R --> O
+    O --> Q[persist_and_gate]
+    Q --> Z([END])
+```
 
-RECONCILE 对账 PlanningProgram、GroundedPlanningProblem、approved scenario、PlannedState 和 ValidationCertificate，发现目标遗漏、成员丢失、版本串联或未经批准的替换。SolverCertificate、ValidationCertificate 和 ReconciliationReport 分别证明求解、物化和跨阶段覆盖，不能互相替代。
+#### `admit_problem`
 
-## 9. Delivery and replay
+- 校验 artifact、branch、snapshot、candidate 和 problem fingerprint；
+- 拒绝 provisional/incomplete problem 进入正式路径；
+- replay 命中已提交相同 fingerprint 时直接复用；
+- 不调用 LLM。
 
-DELIVER 只投影已通过验证和对账的同一 run-root 成果，生成地图图层、报告、导出和 `DeliveryManifest`。正式 manifest 必须引用 approval、scenario、PlannedState、ValidationCertificate 和 ReconciliationReport。缺失/失败证书、任何仍在获批执行集合中的 deferred task，或未通过对账的运行只能产生 diagnostic-only manifest，不能产生正式或 `partial` 交付。业务延期必须先回到 scoped problem，重新求解并审批一个本身完整的新批次；延期目标被排除在这个新批次之外时，剩余批次可以形成受控的 `partial` 交付，但必须明确 `statutory_complete=false`，并且不能把延期目标计入已规划成果。
+#### `compile_decision_cases`
 
-Replay 在相同输入、solver 设置、baseline 和 snapshot 下必须保持关键 fingerprints 稳定。恢复执行不得调用旧的隐式 `latest`，不得混用其他 run 的 artifact，也不得在没有新批准时重新执行已提交 worker。
+- deterministic compiler 按 shared resource、relation、project package 和 selection mode 形成 baseline groups；
+- LLM 可提出 merge/split proposal 并说明原因；
+- validator 确认显式耦合未被拆散、无依据耦合未被引入。
 
-## 10. Forbidden shortcuts
+#### `compute_deterministic_baselines`
 
-- GROUND 直接输出 final location 或 recommended scenario；
-- SELECT 同时维护多个相互覆盖的权威选择对象；
-- 只返回单一加权 winner，不保留 Pareto/trade-off；
-- 求解器创建 coordinates 或静默改变 source membership；
-- 将 unresolved hard constraint 降级为 warning 后继续执行；
-- EXECUTE 从 `SiteSelectionDecision`、自由 dict 或旧 artifact 猜测执行输入；
-- EXECUTE 失败后自行 re-select / 重新选址；
-- 用未显式 deferred 的部分 worker 成功构造正式 PlannedState；受控 partial 批次只能包含 scoped problem 中明确保留、且在同一 approved task set 内完整成功的 worker，不能把未纳入批次的延期目标伪装成已完成；
-- VALIDATE 修改几何或方案使自己通过；
-- DELIVER 拼接不同 snapshot/run-root 的地图、报告和导出。
+- 执行 hard filtering、单目标基线、现状/不行动基线和显然 dominated 检查；
+- 计算 case size、组合复杂度和可用 tool capabilities；
+- 不因 baseline 排名删除仍合法的多样化候选。
+
+#### `frame_deliberation`
+
+LLM 识别目标冲突与协同、scenario archetypes、需要的 solver/GIS/network/simulation tool、上游缺口，以及必须留给人工的价值判断。输出是结构化 framing proposal，不能改变输入契约。
+
+#### `propose_scenarios_and_tools`
+
+- LLM 从闭合 candidate IDs 组合少量有区分度的 `ScenarioPrototype`；
+- 同时产生 allowlisted `DecisionToolActionProposal`；
+- 每个 action 声明 question、tool capability、input refs 和 expected information gain；
+- 不允许自由代码、自由 SQL、坐标、source ID 或未注册 evaluator；
+- 方案多样性来自不同空间结构/政策取向，不是同一 winner 的文字改写。
+
+#### `validate_proposals`
+
+验证 candidate membership/input digest、cardinality、all_members、共享容量、关系、tool schema、预算、allowlist 和 idempotency fingerprint。无效 proposal 只返回 typed finding，不执行工具。
+
+#### `execute_decision_tools`
+
+对独立 action 并行执行。工具只消费冻结 refs，返回结构化 observation；区分 infeasible、timeout、provider unavailable、unsupported 和 internal error；结果只增加测量/证明，不静默改写 prototype。
+
+#### `evaluate_scenarios`
+
+- 重算全部 hard constraints、relations、objective vector 和 resource ledger；
+- 验证 GIS/network/solver 产物的 geometry/source/snapshot lineage；
+- 只有验证通过的 prototype 才升级为 `PlanningScenario`；
+- 计算 Pareto、dominance、bound 和反事实；
+- 生成一个或多个 `SolverCertificate`。
+
+#### `critic`
+
+critic 独立检查目标/关系/群体/场景遗漏、proxy metric 偷换、方案同质化、选择性忽略反证与不确定性、软硬约束混淆、未探索的结构性替代，以及推荐理由是否由 observation 支持。
+
+critic 可以 reject、要求新工具计算、新 prototype 或 return request；不能宣告 hard constraint 通过，也不能创造 candidate。
+
+#### `assess_decision_gaps`
+
+deterministic assessor 决定下一轮、完成或返回上游。正信息增益至少来自：
+
+```text
+new validated scenario structure
+new deterministic metric/certificate
+new feasible/infeasible result
+new Pareto or dominance relation
+resolved critic finding
+newly isolated upstream grounding/specification gap
+```
+
+只有语言理由变化、相同候选重排、重复 tool action 或模型置信度变化不计为信息增益。
+
+#### `compile_return_request`
+
+返回请求必须为以下 typed contract：
+
+- `grounding_required`：candidate、geometry、network、measurement 或 source gap；
+- `specification_required`：目标、关系、数量、hard/soft 语义不完整；
+- `human_preference_required`：Pareto 之间存在未编码价值判断；
+- `problem_infeasible`：带冲突集、搜索边界和最小放宽建议；
+- `budget_exhausted` / `provider_unavailable`：保留 bounded-search state。
+
+#### `compile_scenario_set` and `persist_and_gate`
+
+- 编译唯一权威 `ScenarioSet`；
+- 推荐只能指向 feasible + validated + Pareto/bounded 集合成员；
+- recommendation 可以由 LLM 综合解释，但 membership 与数值必须确定性验证；
+- 持久化 rounds、tool observations、critic findings 和 certificates；
+- gate 是确定性函数，LLM 不自行结束阶段。
+
+### 3.3 Solver/tool portfolio
+
+`ScenarioOptimizer` 保留为兼容 facade 时，只能路由确定性工具，不能继续代表完整 SELECT：
+
+| 决策形态 | LLM 的认知职责 | 确定性工具 |
+|---|---|---|
+| 单设施选址 | 识别有意义替代、解释 trade-off、检查 proxy | hard filter、ranking、Pareto |
+| 多设施覆盖 | 构造覆盖策略原型、发现公平性遗漏 | facility-location、CP-SAT、distance matrix |
+| 用地组合 | 形成项目组合和分期原型、检查共享资源 | MILP/CP-SAT/bounded enumeration |
+| 道路连通 | 提出网络策略原型、比较服务与生态影响 | graph search、shortest path、Steiner/heuristic |
+| 分区布局 | 提出 layout archetype、识别关系冲突 | topology/adjacency solver、overlay |
+| 生态避让 | 解释保护目标与收益代价 | exclusion overlay、constraint evaluator |
+| 线性走廊 | 提出 corridor strategy 和对比维度 | cost surface、network/corridor algorithm |
+| 混合规划 | 分解/联合 case、协调跨工具 observation | 多工具编排 + cross-case resource validator |
+| 开放性构思 | 生成 source-grounded 原型并主动自我批判 | closed-set validation、GIS/solver evaluation |
+
+工具选择由问题形态驱动，不为形式统一强造多目标模型。LLM 可以规划工具序列，但不能伪造 observation。
+
+### 3.4 Budgets and replay
+
+预算至少分为 `case_framing_budget`、`scenario_synthesis_budget`、`decision_tool_budget`、`critic_budget`、`explanation_budget` 和 `format_recovery_budget`。
+
+每个 LLM 调用按完整 input digest 缓存；每个 tool action 按 action fingerprint 幂等；每个 PlanningScenario 按 problem + selections + observations + evaluator versions 指纹化。resume 不得重复已提交的模型或昂贵工具调用。
+
+## 4. Deferral, infeasibility and human authority
+
+显式延期不能对旧方案打补丁。系统必须从原问题生成新的 scoped `GroundedPlanningProblem`，记录 `parent_problem_fingerprint`、`deferred_target_ids`、scope reason 和 source refs，再完整运行 SELECT。旧 ScenarioSet、推荐和 approval 均失效。
+
+infeasible 是正式、可接受的决策结果。它必须包含冲突约束、相关目标、证据引用、solver termination、搜索边界和可选最小放宽；它不能进入审批执行。
+
+人工可以选择 Pareto 方案、声明政策偏好、批准显式证据降级、修改 soft preference、明确修改 hard constraint 或延期目标。人工不能把 invalid candidate、缺失执行几何、solver infeasible 或 stale fingerprint 变成技术有效。
+
+## 5. Approval freezes an outcome envelope
+
+审批从 `ScenarioSet` 选择一个 scenario，生成 `ApprovedExecutionInput`，并冻结：
+
+- selected candidate/source IDs；
+- exact approved geometry refs/digests；
+- relations、quantities、attributes、land-use semantics 和 resource allocations；
+- allowed deterministic materialization recipes；
+- allowed topology/precision repair classes；
+- numeric/geometry tolerances；
+- forbidden substitutions；
+- required worker outputs and coverage；
+- problem/scenario/snapshot/evaluator fingerprints。
+
+该集合称为 `ApprovedOutcomeEnvelope`。它使 EXECUTE 可以智能选择等价实现路径，同时不能越过批准语义。任何 envelope 内容漂移都使 approval `stale`。
+
+## 6. EXECUTE as a constrained materialization subgraph
+
+### 6.1 Cognitive role
+
+真实 GIS 物化会遇到 multipolygon、invalid ring、precision mismatch、字段差异、拓扑冲突、driver 限制或可恢复 worker error。把恢复散落为 if/else 会不断形成隐式第二规划器。
+
+LLM 在 EXECUTE 中是“受批准包络约束的操作规划者和诊断者”：它读取紧凑 observation，选择注册 recipe，解释失败并提出 typed recovery；确定性 validator 决定 recovery 是否与获批结果等价。
+
+### 6.2 Execution contracts
+
+```python
+class MaterializationCase(BaseModel):
+    case_id: str
+    approved_task_refs: list[str]
+    approved_candidate_ids: list[str]
+    approved_geometry_refs: list[str]
+    required_output_specs: list[str]
+    allowed_recipe_ids: list[str]
+    equivalence_contract_ref: str
+    dependency_refs: list[str]
+    input_digest: str
+
+class MaterializationActionProposal(BaseModel):
+    case_ref: str
+    recipe_id: str
+    input_refs: list[str]
+    parameter_profile_ref: str
+    expected_outputs: list[str]
+    rationale: str
+    input_digest: str
+
+class ExecutionObservation(BaseModel):
+    action_ref: str
+    status: Literal["succeeded", "failed", "retryable", "unsupported"]
+    output_refs: list[str]
+    metrics: dict[str, float]
+    diagnostics: list[dict]
+    side_effect_digest: str
+
+class RecoveryProposal(BaseModel):
+    failed_action_ref: str
+    recovery_class: str
+    replacement_recipe_id: str
+    parameter_adjustments: dict
+    expected_equivalence: str
+    return_stage_if_rejected: str
+```
+
+LLM 不得在 proposal 中携带新坐标、自由 geometry、candidate/source ID 或写操作 body。
+
+### 6.3 Nodes and recovery loop
+
+```mermaid
+flowchart TD
+    S([START]) --> A[admit_approved_input]
+    A --> C[compile_materialization_cases]
+    C --> P[deterministic_preflight]
+    P --> R[plan_materialization_recipes]
+    R --> V[validate_action_plan]
+    V --> X[execute_in_staging]
+    X --> O[observe_and_measure]
+    O --> D[diagnose]
+    D --> G[assess_execution_state]
+    G -->|equivalent recovery exists| Y[propose_recovery]
+    Y --> E[validate_equivalence]
+    E -->|accepted| X
+    E -->|rejected| F[compile_typed_failure]
+    G -->|non-recoverable| F
+    G -->|all cases complete| K[precommit_validation]
+    K -->|pass| M[atomic_commit]
+    K -->|fail| F
+    M --> Q[persist_execution_result]
+    F --> Q
+    Q --> Z([END])
+```
+
+#### `admit_approved_input`
+
+验证 ScenarioSet/member、problem、approval、baseline、snapshot 和 ApprovedOutcomeEnvelope。stale/missing/provisional 输入在任何 worker 或 LLM 调用前失败；committed fingerprint replay 直接复用。
+
+#### `compile_materialization_cases`
+
+从获批 outcome 形成 facility/road/site/zone/axis/action cases，显式构建依赖和共享 source parcel ledger。同一 source BSM 的多 footprint 可以组成一个资源 case；compiler 不新增 planning member。
+
+#### `deterministic_preflight`
+
+水合并重验 source/geometry/snapshot、面积、CRS、有效性、availability 和 envelope tolerance，枚举 recipe capabilities。单一明确路径允许零 LLM 调用直达 staging。
+
+#### `plan_materialization_recipes`
+
+LLM 依据 case shape、依赖和 capability 选择注册 recipe/顺序；复杂 mixed-worker 批次可被分成 staging waves，但仍只有一次正式原子提交。输出 only IDs + refs + profile，不生成自由执行代码。
+
+#### `validate_action_plan`
+
+验证 recipe allowlist、参数 profile、dependency DAG、幂等 key，以及计划是否覆盖全部且仅覆盖 approved tasks。拒绝 candidate substitution、未批准输出或语义变化。
+
+#### `execute_in_staging` and `observe_and_measure`
+
+tool adapter 在 clone/staging 执行 recipe；每个 action 返回 typed observation、output refs、metrics 和 side-effect digest。异常文本视为数据，完整 geometry 留在 deterministic store，LLM 只看摘要、指标和稳定 refs。
+
+#### `diagnose` and `propose_recovery`
+
+LLM 可以区分 driver/schema/topology/precision/dependency 等失败类别，选择已注册的等价 repair recipe，在 tolerance 内建议精度、切片顺序或序列化 profile，并解释为什么必须返回上游。
+
+LLM 不可以：
+
+- 选择 second-best candidate；
+- 改 route/layout/footprint、用途、数量、容量或 target；
+- 扩大 approved geometry envelope；
+- 放松 hard constraint；
+- 从邻接地块、scope、bbox 或 centroid 创建新成员；
+- 通过语言重写把不等价恢复描述为等价。
+
+#### `validate_equivalence`
+
+恢复动作必须由确定性 checker 证明：
+
+```text
+same approved member identity
+same semantic output type and attributes
+geometry within approved digest/tolerance policy
+same relation and resource allocation
+no new side-effect target
+all hard constraints remain satisfied
+```
+
+任一项无法证明就拒绝恢复并返回 typed failure。
+
+#### `assess_execution_state`
+
+只有新 worker observation、新 validated recovery class、新 dependency resolution 或新 preflight measurement 允许新一轮。重复错误、相同 recovery fingerprint 或纯语言解释变化不构成进展。
+
+#### `precommit_validation` and `atomic_commit`
+
+- 独立检查 selected-to-staged coverage、unexpected outputs、geometry validity、resource ledger 和 lineage；
+- 所有 approved tasks 必须在同一正式批次完整成功；
+- 一次性提交 `PlannedState` / `ChangeSet`；
+- 失败时 staging 标记 `aborted`，不得投影正式结果；
+- commit node 不含 LLM 调用，不处于可重复 interrupt 节点。
+
+### 6.4 Budgets and replay
+
+预算至少区分 `recipe_planning_budget`、`diagnosis_budget`、`recovery_budget`、`format_recovery_budget` 和 worker retry budget。模型调用按 observation digest 缓存，recipe/repair action 按 fingerprint 幂等。resume 不得重复已成功的 staging side effect 或正式 commit。
+
+## 7. Validation, reconciliation and repair routing
+
+VALIDATE 从 `ApprovedExecutionInput` 和 committed state 独立重算 hard constraints、关系、数量/容量、selected-to-materialized coverage、unexpected outputs、geometry validity、source/scenario lineage 和 snapshot 一致性。
+
+VALIDATE 不修复结果，只定位责任：
+
+| Finding | Return stage |
+|---|---|
+| artifact/serialization/topology 物化偏差，获批 outcome 未变 | EXECUTE |
+| candidate identity、geometry、measurement 或 source 错误 | GROUND |
+| 方案成员、路线、布局或 trade-off 错误 | SELECT |
+| 目标、关系、数量或 hard/soft 编译错误 | TARGET_PROJECTION / L3 |
+| 无法编码的价值判断或批准变化 | HUMAN |
+
+RECONCILE 对账 PlanningProgram、GroundedPlanningProblem、ScenarioSet、ApprovedExecutionInput、PlannedState 和 ValidationCertificate。DELIVER 只投影同一 run-root、通过验证和对账的成果。
+
+## 8. Worked boundary examples
+
+### 8.1 Facility near a named place
+
+```text
+GROUND
+  → SearchScopeRef + source-backed eligible parcels
+SELECT LLM
+  → compact-service / low-impact / balanced prototypes over parcel IDs
+SELECT tools
+  → accessibility, capacity, exclusion and Pareto observations
+SELECT critic
+  → rejects proxy-only recommendation and requests fairness metric
+ScenarioSet
+  → validated alternatives + recommendation rationale
+EXECUTE LLM
+  → chooses registered facility-footprint recipe
+EXECUTE validator
+  → proves output equals approved parcel subgeometry
+```
+
+LLM 从未创造地点或坐标，但实质参与了方案结构、补算决策、反证和解释。
+
+### 8.2 Road connection
+
+LLM 可以提出“最短连接”“避让优先”“多村公平连接”等 route strategy prototypes，并规划 shortest-path/cost-surface/network tools。实际端点、禁入边、route geometry 和 cost 由冻结网络快照与确定性算法产生。EXECUTE 只能物化获批 route ref；若 driver 无法写入曲线，可在 tolerance 内使用已批准的 densify/segment recipe，不能重新寻路。
+
+### 8.3 Shared source parcel
+
+LLM 可以联合审议同一 BSM 上两个项目 footprint 的分期、组合和公共空间取舍；共享容量和不重叠由 solver 证明。EXECUTE 可以调整切片/写入顺序，但必须生成两个获批 footprint 与统一 preserve remainder，不能恢复成完整 BSM 或吞掉剩余面。
+
+## 9. Stop semantics
+
+SELECT：
+
+```text
+scenario_set_complete
+scenario_set_bounded
+problem_infeasible
+grounding_required
+specification_required
+human_preference_required
+provider_unavailable
+budget_exhausted
+invalid_input_lineage
+```
+
+EXECUTE：
+
+```text
+committed
+aborted_recoverable
+aborted_return_ground
+aborted_return_select
+aborted_human_required
+provider_unavailable
+budget_exhausted
+stale_approval
+invalid_input_lineage
+```
+
+budget/provider failure 不能伪装成 infeasible、可行、已执行或已验证。
+
+## 10. Observability and metrics
+
+SELECT 至少报告：
+
+```text
+decision_cases_total
+scenario_prototypes_total
+validated_scenarios_total
+distinct_scenario_archetypes
+decision_tool_actions_by_type
+tool_observations_reused
+hard_constraint_rejections
+critic_findings_total / resolved
+rounds_with_positive_information_gain
+pareto_scenarios_total
+upstream_return_requests_by_type
+llm_calls_by_purpose
+```
+
+EXECUTE 至少报告：
+
+```text
+materialization_cases_total
+deterministic_fast_path_cases
+recipe_planning_calls
+worker_actions_by_recipe
+execution_observations_by_status
+recovery_proposals_total / accepted / rejected
+equivalence_check_failures
+repeated_recovery_fingerprints_rejected
+selected_to_staged_coverage
+unexpected_staged_outputs
+atomic_commit_status
+```
+
+日志必须能回答：为什么构造这个方案、为什么调用这个工具、observation 如何改变下一轮、critic 拒绝了什么、为什么推荐该 scenario、为什么某次恢复等价或不等价，以及最终由哪个 stage 负责失败。
+
+## 11. Testing strategy
+
+### 11.1 SELECT
+
+- LLM proposal 含未知 candidate/source ID、坐标或 WKT 时拒绝；
+- same candidate IDs + changed input digest 时拒绝；
+- coupled targets 不得被拆成独立 case；
+- alternatives 必须结构不同，除非可证明唯一；
+- tool observation 之前不得宣告 hard constraint 通过；
+- critic 可触发新计算，但不能创建 candidate；
+- identical round 不产生正信息增益；
+- feasible、Pareto、recommended 和 certificate membership 一致；
+- upstream gap 不生成 formal ScenarioSet；
+- checkpoint replay 不重复模型或 solver/tool 调用。
+
+### 11.2 EXECUTE
+
+- deterministic single-recipe case 允许零 LLM 调用；
+- complex case 可由 LLM 选择 allowlisted recipe；
+- 自由代码、自由 geometry 或未注册 recipe 拒绝；
+- candidate substitution、route change、footprint expansion 和 hard-constraint relaxation 拒绝；
+- precision/topology repair 只有通过 equivalence checker 才可重试；
+- 相同 failure/recovery fingerprint 不重复执行；
+- worker 部分成功不生成正式 PlannedState；
+- aborted staging 不被 VALIDATE/DELIVER 消费；
+- replay 不重复 staging side effect 或 atomic commit；
+- selected-to-materialized coverage 为 100%，unexpected count 为 0。
+
+### 11.3 Real-run acceptance
+
+至少使用单设施、多设施/共享地块、道路、分区/生态和 mixed-worker 五类 fixture，并在两个不同村庄运行。每类必须展示真实 LLM framing/prototype/critic 回合（简单 fast path 除外）、真实 deterministic observation、observation-driven revision、同一 lineage、一个可恢复异常和一个必须返回上游的非等价异常，以及无重复副作用的 replay。
+
+## 12. Current implementation replacement map
+
+| Current concept | Target replacement |
+|---|---|
+| `ScenarioOptimizer` 作为 SELECT 全部智能 | 保留为 deterministic tool facade；新增 `PlanningDeliberationGraph` |
+| 固定 task-type 分支直接产出推荐 | LLM framing/prototype/tool plan → deterministic evaluation → critic loop |
+| 单个 `SolverCertificate` | 支持多 tool certificate，由 ScenarioSet 汇总 |
+| explanation after solver | explanation/critic 成为 observation-driven loop |
+| `ExecutionPlan` 作为完全机械投影 | ApprovedOutcomeEnvelope 下的 validated recipe plan |
+| worker 内隐式 recovery | observation → diagnosis → typed recovery → equivalence validation |
+| worker 决策或静默 fallback | 删除；不等价变化返回 GROUND/SELECT/HUMAN |
+| static per-worker fan-out | 统一 scheduler/tool registry 按 dependency cases 调度 |
+
+目标文件组织：
+
+```text
+backend/app/domain/select/subgraph.py
+backend/app/domain/select/subgraph_state.py
+backend/app/domain/select/nodes/{admit,cases,frame,propose,tools,evaluate,critic,assess,compile,persist}.py
+backend/app/domain/select/tools/{registry,solver,gis,network,simulation}.py
+backend/app/domain/execute/subgraph.py
+backend/app/domain/execute/subgraph_state.py
+backend/app/domain/execute/nodes/{admit,cases,preflight,plan,validate,execute,observe,diagnose,recover,equivalence,commit,persist}.py
+backend/app/domain/execute/recipes/{registry,geometry,parcel,road,facility,zone}.py
+```
+
+## 13. Final invariants
+
+```text
+INV-S01  SELECT is a deliberation graph; no single solver or LLM call is the whole decision stage.
+INV-S02  LLM scenario proposals reference only current closed candidate IDs and input digests.
+INV-S03  Only deterministic evaluators establish hard-constraint, metric, geometry and solver truth.
+INV-S04  Every formal PlanningScenario descends from a validated prototype and tool observations.
+INV-S05  ScenarioSet is the sole authoritative SELECT artifact and preserves alternatives, critique and bounds.
+INV-S06  A new deliberation round requires new computation, validated structure, resolved critique or typed upstream gap.
+INV-S07  LLM may recommend only among deterministically feasible scenarios; approval remains explicit authority.
+INV-S08  Deferral creates a new scoped problem and invalidates old scenarios and approval.
+INV-X01  EXECUTE may choose and repair method only inside ApprovedOutcomeEnvelope.
+INV-X02  EXECUTE never changes approved member, geometry semantics, route/layout, quantity, capacity or hard constraints.
+INV-X03  Every recovery is typed, allowlisted, fingerprinted and deterministically proven equivalent.
+INV-X04  Model calls, tool execution, equivalence validation and commit are separate nodes.
+INV-X05  Formal PlannedState requires one atomic commit after 100% approved-task coverage.
+INV-X06  Repeated failure/recovery fingerprints cannot create fake progress or repeated side effects.
+INV-X07  Non-equivalent recovery returns to the earliest responsible stage; it is never hidden in a worker fallback.
+INV-X08  Replay cannot repeat committed model, solver, worker, external or atomic-commit side effects.
+```
+
+## 14. Definition of done
+
+- SELECT 真实执行 framing → prototype/tool planning → deterministic observation → evaluation → critic/assess 的有界循环；
+- LLM 能发现遗漏、提出结构不同方案、选择工具、根据新 observation 修订并解释 trade-off；
+- 所有候选身份、坐标、硬约束和证书仍由确定性边界控制；
+- solver portfolio 是工具层，不再等同于 SELECT；
+- ScenarioSet 保留 prototype/round/tool/critic lineage 和 bounded-search statement；
+- ApprovedOutcomeEnvelope 明确冻结结果语义和允许恢复包络；
+- EXECUTE 对复杂批次真实执行 recipe planning、observation、diagnosis 和等价 recovery；
+- deterministic happy path 可以零 LLM 调用；
+- 不等价恢复全部返回上游，没有 worker 内重新选址、重新寻路、自由 geometry 或静默 fallback；
+- staging、atomic commit、validation、reconcile 和 replay 完整性测试通过；
+- 至少两个村庄、五类规划任务和 mixed-worker fresh run 证明该架构不是金田村专用流程。
+
+只有达到这些条件，SELECT 和 EXECUTE 才能像新的 GROUND 一样，既真正使用 LLM 的智能，又不牺牲空间身份、可计算约束和正式交付的可审计性。

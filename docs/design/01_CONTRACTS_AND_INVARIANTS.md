@@ -12,8 +12,10 @@ PlanningProblemSpec / PlanningProgram {claims, objectives, project packages}
 → EvidenceRequirement + EvidenceCoverage
 → admitted executable target specs
 → GroundedPlanningProblem
-→ ScenarioSet { PlanningScenario[], SolverCertificate }
-→ ApprovedExecutionInput
+→ PlanningDeliberationGraph { prototypes, tool observations, critic rounds }
+→ ScenarioSet { PlanningScenario[], SolverCertificate[], deliberation audit }
+→ ApprovedExecutionInput { ApprovedOutcomeEnvelope }
+→ ConstrainedMaterializationGraph { recipes, observations, equivalence checks }
 → PlannedState / ChangeSet
 → ValidationCertificate
 → ReconciliationReport
@@ -32,13 +34,13 @@ PlanningProblemSpec / PlanningProgram {claims, objectives, project packages}
 | `EvidenceCoverage` | Evidence plane | evidence controller → gate/requester | requirement-set fingerprint、source/query scope、run ID | insufficient/source-exhausted/human-required/budget-exhausted | 声称开放世界绝对完整 |
 | `ProjectPackage` / target admission | L3 planning domain | L3 → TARGET_PROJECTION | package/claim IDs、source refs、intervention type、admission reason/revision | non-spatial/not-admitted/incomplete/human-required | 把事实、指标、约束或任意非行动 claim 自动升级为可执行空间目标 |
 | `SpatialQuery` | Spatial query domain | TARGET_PROJECTION/GROUND → spatial adapter | AST fingerprint、snapshot、CRS、query version | invalid/unresolved/unsupported | 用自由 SQL、自由文本或 LLM 坐标越过 AST |
-| `GroundedPlanningProblem` | GROUND/SELECT scoped re-solve | GROUND → ScenarioOptimizer → approval/EXECUTE | problem ID、fingerprint、scope policy、parent problem fingerprint、deferred target IDs、baseline/snapshot refs、source artifact refs | unresolved/deferred/not-candidate-complete | 记录最终 winner 或静默更改 L3 目标；不允许无 lineage 地缩小问题范围 |
+| `GroundedPlanningProblem` | GROUND/SELECT scoped re-solve | GROUND → PlanningDeliberationGraph → approval | problem ID、fingerprint、scope policy、parent problem fingerprint、deferred target IDs、baseline/snapshot refs、source artifact refs | unresolved/deferred/not-candidate-complete | 记录最终 winner、让 SELECT 创造候选或无 lineage 地缩小问题范围 |
 | `ConstraintSpec` | Planning domain | L3/TARGET_PROJECTION/GROUND → optimizer/validator | constraint ID、semantic revision、evidence refs、evaluator version | unmeasurable/conflicting/unresolved | 把 soft preference 当 hard constraint，或无依据修改阈值 |
-| `ScenarioSet` | SELECT planning domain | ScenarioOptimizer → approval/RECONCILE | set ID、problem fingerprint、solver/model digest | infeasible/bounded/budget-exhausted | 只保留 winner、隐藏替代和不可行解释 |
-| `PlanningScenario` | SELECT planning domain | ScenarioOptimizer → ScenarioSet/approval/EXECUTE | scenario ID、problem fingerprint、scenario fingerprint | infeasible/not-selected/superseded | 创造坐标、改变 candidate membership |
-| `SolverCertificate` | SELECT planning domain | ScenarioOptimizer → ScenarioSet/RECONCILE | problem/model/input digest、solver version、seed | infeasible/timeout/unknown-bound | 宣称证明需求理解或开放世界候选完整性 |
-| `ApprovedExecutionInput` | Approval boundary | policy/human gate → EXECUTE | approval ID、scenario/problem/baseline fingerprints、approval digest | expired/revoked/stale/mismatched | 批准后换方案、换 baseline 或允许执行器重选 |
-| `ExecutionPlan` | Execution domain | approved scenario projection → materializer workers | plan ID、approved-input fingerprint、DAG/version | unmaterializable/worker-blocked | 脱离 ApprovedExecutionInput 成为规划事实源，或把求解/选址委托给 worker |
+| `ScenarioSet` | SELECT planning domain | PlanningDeliberationGraph → approval/RECONCILE | set ID、problem fingerprint、prototype/tool/critic digests、solver/model digests | infeasible/bounded/upstream-required/budget-exhausted | 只保留 winner、隐藏替代/critic/搜索边界，或把未验证 prototype 当方案 |
+| `PlanningScenario` | SELECT planning domain | validated prototype + tool observations → ScenarioSet/approval | scenario ID、problem fingerprint、scenario fingerprint | infeasible/not-selected/superseded | 无确定性 observation 宣称可行，创造坐标或改变 candidate membership |
+| `SolverCertificate` | SELECT tool domain | deterministic tools → ScenarioSet/RECONCILE | problem/scenario/tool/input digest、solver version、seed | infeasible/timeout/unknown-bound | 接受 LLM 自报计算，或宣称证明需求理解/开放世界完整性 |
+| `ApprovedExecutionInput` | Approval boundary | policy/human gate → EXECUTE | approval ID、scenario/problem/baseline fingerprints、outcome-envelope/approval digest | expired/revoked/stale/mismatched | 批准后换方案/baseline，或允许 recipe/recovery 越过 outcome envelope |
+| `MaterializationRecipePlan` | Execution domain | ConstrainedMaterializationGraph → materializer tools | plan ID、approved-input/envelope fingerprint、recipe/action digests | unmaterializable/worker-blocked/non-equivalent | 脱离 ApprovedExecutionInput 成为规划事实源、携带自由写操作或改变获批 outcome |
 | `ExecutionStaging` | Execution domain | EXECUTE → VALIDATE/RECONCILE/diagnostic | staging ID、approved/plan refs、staged child refs、commit ID/status | staged/aborted/committed | 把 staged child 当作已提交 PlannedState，或失败后提升正式 refs |
 | `PlannedState` | Execution domain | atomic EXECUTE → VALIDATE/RECONCILE | state/change-set fingerprint、baseline and run-root lineage | staged/aborted/partial-diagnostic | 部分正式提交或混合 snapshot |
 | `ValidationCertificate` | Validation domain | VALIDATE → RECONCILE/DELIVER | certificate digest、approved input/scenario/planned-state digests | rejected/incomplete/stale | 自动改方案、掩盖 hard violation |
@@ -54,9 +56,9 @@ INV-02 No spatial target becomes executable without an authoritative or explicit
 
 INV-03 GROUND recalls and binds candidates; it never selects the final scenario.
 
-INV-04 SELECT/solver never creates coordinates or silently changes source membership.
+INV-04 SELECT LLM may frame, prototype, plan tools, critique and recommend only over closed IDs; deterministic tools alone establish geometry, metrics, hard-constraint and solver truth.
 
-INV-05 EXECUTE consumes an approved immutable scenario and never re-selects a location.
+INV-05 EXECUTE may plan recipes and diagnose failures only inside an immutable ApprovedOutcomeEnvelope; every recovery is deterministically proven equivalent and never re-selects a location.
 
 INV-06 VALIDATE measures the materialized result independently from generation.
 
@@ -70,7 +72,7 @@ INV-10 Delivery is complete only when the same run-root and snapshot lineage rea
 
 INV-11 A planning claim, indicator, constraint, objective, or non-spatial action never becomes an executable spatial target merely because it is not labelled as narrative text.
 
-INV-12 Any operation that compares alternatives, selects candidate membership, chooses a route, or changes the planning outcome executes before approval; EXECUTE may only deterministically materialize frozen selections and geometry.
+INV-12 Any operation that compares alternatives, selects candidate membership, chooses a route, or changes the planning outcome executes before approval; EXECUTE cognition is limited to choosing and repairing the materialization method without changing the frozen outcome.
 
 INV-13 Formal execution is all-or-nothing. `partial` is a diagnostic staging outcome, never a committed `PlannedState` or formally deliverable result.
 
@@ -159,11 +161,11 @@ artifact，RAG/EXPLORE 只能补充带 locator 的证据，不能成为事实或
 
 - `ScenarioSet.problem_fingerprint` 必须等于其输入 `GroundedPlanningProblem.fingerprint`。
 - 显式 deferred target 触发的 scoped `GroundedPlanningProblem` 必须保留 `parent_problem_fingerprint`、`deferred_target_ids`、`scope_reason` 和 source refs；其 `ScenarioSet.problem_fingerprint` 必须等于 scoped problem fingerprint。
-- `ApprovedExecutionInput` 必须引用 `ScenarioSet` 中存在的一个 `PlanningScenario`，并冻结两者 fingerprint。
+- `ApprovedExecutionInput` 必须引用 `ScenarioSet` 中存在的一个 `PlanningScenario`，冻结两者 fingerprint，并携带 `ApprovedOutcomeEnvelope`、允许 recipe/repair classes 与 tolerance policy。
 - 任何获批后发生的问题、候选、约束、baseline 或 scenario 变更都会使批准失效。
-- EXECUTE 的所有 worker 只能读取同一 `ApprovedExecutionInput` 派生的 `ExecutionPlan`。
+- EXECUTE 的所有 recipe/tool action 只能读取同一 `ApprovedExecutionInput` 派生、通过验证的 `MaterializationRecipePlan`；恢复动作还必须通过 equivalence checker。
 - 每个进入 TARGET_PROJECTION 的空间目标必须携带 target-admission lineage，指回项目包、原始 claim/source refs、空间干预类型和准入理由；未准入内容保留在 PlanningProgram，但不能进入 GROUND/EXECUTE。
-- facility-location、CP-SAT/MILP、图搜索、走廊算法、邻接/拓扑求解和 Pareto 比较属于 SELECT 的 solver portfolio。对应 EXECUTE worker 只能写入获批候选、route 或 layout，不得重新运行决策算法。
+- facility-location、CP-SAT/MILP、图搜索、走廊算法、邻接/拓扑求解和 Pareto 比较是 SELECT deliberation graph 的确定性工具。LLM 规划调用和解释 observation，但不得伪造结果；EXECUTE 只能物化获批 candidate/route/layout。
 - 原子执行要么提交批准输入允许的完整 ChangeSet（显式 deferred 目标已从执行计划排除），要么不改变正式状态；worker/L4 失败产物只能进入诊断区。
 - `ValidationCertificate` 必须独立关联 approved input、selected scenario、baseline 和 PlannedState digests。
 - 每个可执行 `ScenarioFeature` 必须显式携带至少一个 `relation_ids` lineage；核心权威模型不得隐式生成关系 ID。没有关系因子的 reference adapter 也必须在自己的边界写入可审计的 reference scope ID。
@@ -182,9 +184,9 @@ Fingerprint 用于判断内容身份，revision 用于表达演进顺序，artif
 |---|---|---|
 | Evidence gate | 必需要求被支持或获得明确降级批准 | EXPLORE / requester / HUMAN |
 | Grounding gate | 候选、身份、几何和硬约束测量均达到 candidate completeness | GROUND / L3 / HUMAN |
-| Solver gate | 有可行方案或有可证明的 infeasible 解释 | SELECT / L3 / HUMAN |
+| Deliberation gate | 有经工具 observation 验证的可行替代/推荐，或有可证明的 infeasible/typed upstream request | SELECT / GROUND / L3 / HUMAN |
 | Approval gate | 选定方案及全部 fingerprints 被明确批准 | HUMAN / policy owner |
-| Execution gate | 完整 ChangeSet 在 staging 中成功生成 | EXECUTE / GROUND / SELECT |
+| Execution gate | 完整 ChangeSet 在 staging 中成功生成，所有 recovery 通过 equivalence，coverage=100% 且无意外输出 | EXECUTE / GROUND / SELECT / HUMAN |
 | Validation gate | hard violations 为零，覆盖和 lineage 达标 | 责任阶段 / HUMAN |
 | Delivery gate | ValidationCertificate 与 ReconciliationReport 均接受 | VALIDATE / responsible stage |
 

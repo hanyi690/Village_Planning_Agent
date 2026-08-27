@@ -1,3 +1,6 @@
+opencode
+
+
 # Village Planning Agent System Design
 
 > Status: TARGET
@@ -18,7 +21,7 @@
 非目标：
 
 - 不承诺开放世界中的“所有相关证据”，只承诺在声明的来源、查询计划、预算和停止原因内实现 **bounded completeness**；
-- 不允许 LLM 直接创造坐标、GIS 成员身份、硬约束通过结论或最终方案；
+- 不允许 LLM 创造坐标、GIS 成员身份或硬约束通过结论；LLM 方案原型和推荐必须受闭集引用、确定性工具 observation、critic 和审批约束，不能直接成为正式方案；
 - 不把单一加权最高分、单一向量相似结果或现状图复制视为完整规划；
 - 不让检索、GROUND、EXECUTE、VALIDATE 或 DELIVER 越权重新做方案选择；
 - 不以文档存在、模型输出成功或局部单元测试替代端到端验收。
@@ -52,13 +55,13 @@ Evidence plane: requirements, retrieval, provenance, contradiction, sufficiency
 
 Decision plane: grounded candidates, hard/soft constraints, alternatives, optimization
 
-它把 L3 规划意图投影为类型化目标，由 GROUND 绑定真实实体、候选域、几何、网络和约束因子，再由 ScenarioOptimizer 在封闭问题中生成多个可行方案、Pareto 前沿、推荐方案和 SolverCertificate。GROUND 负责召回和绑定，求解器负责组合与比较，两者不得互相越权。
+它把 L3 规划意图投影为类型化目标，由 GROUND 绑定真实实体、候选域、几何、网络和约束因子，再由 `PlanningDeliberationGraph` 通过 LLM framing/方案原型/tool planning/critic 与确定性 solver、GIS、network evaluator 的 observation-driven 循环生成多个可行方案、Pareto 前沿、推荐方案和 SolverCertificate。GROUND 负责召回和绑定；SELECT 负责受约束的方案综合与审议；确定性工具负责计算和证明。
 
 ### Execution plane
 
 Execution plane: approval, immutable scenario, materialization, validation, reconciliation
 
-它将被批准方案冻结为 `ApprovedExecutionInput`，在临时状态中原子物化，独立验证结果，并通过 RECONCILE 对账整个 lineage。任何硬约束失败、版本漂移或物化缺失都会阻止正式交付。
+它将被批准方案及其 `ApprovedOutcomeEnvelope` 冻结为 `ApprovedExecutionInput`。`ConstrainedMaterializationGraph` 可以在包络内让 LLM 选择注册 recipe、诊断 observation 和提出等价恢复，但所有恢复都必须经确定性 equivalence checker 验证；随后在临时状态中原子物化、独立验证并通过 RECONCILE 对账 lineage。
 
 ## 4. End-to-end planning loop
 
@@ -74,11 +77,11 @@ flowchart TD
     L3 --> Projection["TARGET_PROJECTION：类型化目标编译"]
     Projection --> Ground["GROUND：实体、候选、几何与约束绑定"]
     Ground --> Problem["GroundedPlanningProblem"]
-    Problem --> Optimizer["ScenarioOptimizer：SELECT 的唯一决策核心"]
+    Problem --> Optimizer["PlanningDeliberationGraph：LLM 审议 + 确定性工具"]
     Optimizer --> Set["ScenarioSet：可行方案 / Pareto / 推荐 / SolverCertificate"]
     Set --> Approval["策略门 / 人工审批"]
     Approval --> Approved["ApprovedExecutionInput"]
-    Approved --> Execute["Atomic EXECUTE：严格物化获批方案"]
+    Approved --> Execute["Constrained EXECUTE：包络内智能物化与等价恢复"]
     Execute --> Staging["ExecutionStaging：staged / committed / aborted"]
     Staging --> State["committed PlannedState / ChangeSet"]
     State --> Validate["VALIDATE：独立测量与硬门控"]
@@ -94,11 +97,11 @@ L1 / L2 / L3
 → TARGET_PROJECTION
 → GROUND
 → GroundedPlanningProblem
-→ ScenarioOptimizer（现有 SELECT 的目标内核）
+→ PlanningDeliberationGraph（LLM framing / prototype / tool / critic loop）
 → ScenarioSet
 → Approval Gate
 → ApprovedExecutionInput
-→ Atomic EXECUTE
+→ ConstrainedMaterializationGraph → Atomic Commit
 → ExecutionStaging → committed PlannedState
 → VALIDATE
 → ValidationCertificate
@@ -115,20 +118,20 @@ L1 / L2 / L3
 
 ## 5. Stage responsibilities
 
-| 阶段 | 权威职责 | 主要产物 | 明确禁止 |
-|---|---|---|---|
-| L1 | 唯一读取并分析原始输入；在每个维度内通过有界 observe→validate→report 循环建立带 source span 的 typed facts、问题和不确定性 | `L1Snapshot`（含 `L1SourceIndex`、typed facts、pass diagnostics） | 把推测写成空间事实，或让 L2/L3/Project Bank/GROUND 重新解析 `village_data` |
-| L2 | 形成策略、偏好、目标方向及其依据 | strategy/objective view | 直接选地点或创建约束计算结果 |
-| L3 | 将事实、指标、约束、目标、方案原型和项目包分层，定义“规划什么、为何规划、什么算好” | `PlanningProgram` / `PlanningProblemSpec` / project packages | 把每条规划主张自动变成空间任务，或决定最终候选成员/坐标 |
-| TARGET_PROJECTION | 只将通过执行准入的空间干预编译为原子、类型化、可接地目标 | admitted typed target specs / `IntentCompilationResult` | 把证据陈述、指标、目标或非空间行动机械投影为空间目标 |
-| EXPLORE | 按证据要求检索、定位、融合和报告缺口 | evidence claims/coverage | 生成最终候选、几何或方案 |
-| GROUND | 解析实体，绑定数据快照、候选域、几何、网络和约束因子 | `GroundedPlanningProblem` | 最终选择方案或用评分替代求解 |
-| SELECT | 通过 ScenarioOptimizer 生成可行替代、Pareto 和推荐；显式延期后按 scoped problem 重求解 | `ScenarioSet` + `SolverCertificate`；必要时新的 scoped `GroundedPlanningProblem` | 创建坐标、改变来源成员、隐藏不可行或沿用旧问题/审批 |
-| Approval | 冻结被批准方案、问题、baseline 和审批身份 | `ApprovedExecutionInput` | 批准后静默换方案或换快照 |
-| EXECUTE | 由细分 materializer worker 在 staging 状态严格物化获批候选/几何并原子提交 | `ExecutionStaging` → `PlannedState` / `ChangeSet` | 重新选址、比较候选、规划路径/布局，或把未声明 deferred 的失败任务混入正式提交 |
-| VALIDATE | 独立重算硬约束、覆盖和 lineage | `ValidationReport` + `ValidationCertificate` | 自动修改方案来让检查通过 |
-| RECONCILE | 对账意图、问题、方案、执行、验证和交付覆盖 | `ReconciliationReport` | 吞掉遗漏或用人工审批抹去事实错误 |
-| DELIVER | 从同一 run-root 和 snapshot lineage 生成成果视图 | `DeliveryManifest` | 再检索、再规划或替换方案 |
+| 阶段              | 权威职责                                                                                                                                | 主要产物                                                                                    | 明确禁止                                                                    |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| L1                | 唯一读取并分析原始输入；在每个维度内通过有界 observe→validate→report 循环建立带 source span 的 typed facts、问题和不确定性            | `L1Snapshot`（含 `L1SourceIndex`、typed facts、pass diagnostics）                       | 把推测写成空间事实，或让 L2/L3/Project Bank/GROUND 重新解析`village_data` |
+| L2                | 形成策略、偏好、目标方向及其依据                                                                                                        | strategy/objective view                                                                     | 直接选地点或创建约束计算结果                                                |
+| L3                | 将事实、指标、约束、目标、方案原型和项目包分层，定义“规划什么、为何规划、什么算好”                                                    | `PlanningProgram` / `PlanningProblemSpec` / project packages                            | 把每条规划主张自动变成空间任务，或决定最终候选成员/坐标                     |
+| TARGET_PROJECTION | 只将通过执行准入的空间干预编译为原子、类型化、可接地目标                                                                                | admitted typed target specs /`IntentCompilationResult`                                    | 把证据陈述、指标、目标或非空间行动机械投影为空间目标                        |
+| EXPLORE           | 按证据要求检索、定位、融合和报告缺口                                                                                                    | evidence claims/coverage                                                                    | 生成最终候选、几何或方案                                                    |
+| GROUND            | 解析实体，绑定数据快照、候选域、几何、网络和约束因子                                                                                    | `GroundedPlanningProblem`                                                                 | 最终选择方案或用评分替代求解                                                |
+| SELECT            | 通过 LLM-native deliberation subgraph 形成方案原型、规划确定性工具、依据 observation 修订并 critic，再生成可行替代、Pareto 和推荐       | `ScenarioSet` + deliberation audit + `SolverCertificate[]`；必要时 typed return request | 创造坐标/来源成员、让模型自证硬约束、隐藏不可行或沿用旧问题/审批            |
+| Approval          | 冻结被批准方案、问题、baseline 和审批身份                                                                                               | `ApprovedExecutionInput`                                                                  | 批准后静默换方案或换快照                                                    |
+| EXECUTE           | 在`ApprovedOutcomeEnvelope` 内由 LLM 规划注册 recipe、诊断 observation、提出等价恢复，并由确定性 worker/checker 在 staging 中原子物化 | materialization audit +`ExecutionStaging` → `PlannedState` / `ChangeSet`             | 重新选址/寻路/布局、执行不等价恢复、放松硬约束或部分正式提交                |
+| VALIDATE          | 独立重算硬约束、覆盖和 lineage                                                                                                          | `ValidationReport` + `ValidationCertificate`                                            | 自动修改方案来让检查通过                                                    |
+| RECONCILE         | 对账意图、问题、方案、执行、验证和交付覆盖                                                                                              | `ReconciliationReport`                                                                    | 吞掉遗漏或用人工审批抹去事实错误                                            |
+| DELIVER           | 从同一 run-root 和 snapshot lineage 生成成果视图                                                                                        | `DeliveryManifest`                                                                        | 再检索、再规划或替换方案                                                    |
 
 目标向量由 L2/L3 定义方向和优先级，TARGET_PROJECTION 编译指标，GROUND 绑定可测量数据，ScenarioOptimizer 计算各方案实际值。求解器不能自行发明目标或权重。
 
@@ -159,21 +162,21 @@ PlanningProgram
 
 ### Algorithm and worker ownership
 
-`ScenarioOptimizer` 是 SELECT 的决策门面，不要求用一种通用算法解决所有规划任务。它按问题类型路由到受约束的求解后端，并将结果统一封装为 `ScenarioSet`：
+`PlanningDeliberationGraph` 是 SELECT 的决策门面；`ScenarioOptimizer` 降为确定性 tool facade。LLM 根据案件结构提出方案原型、规划工具并解释 observation，solver portfolio 负责可重放计算和证明，最终统一封装为 `ScenarioSet`：
 
-| 任务类型 | GROUND | SELECT / solver portfolio | EXECUTE |
-|---|---|---|---|
-| 单设施选址 | 生成并测量候选 | 硬过滤、排序、Pareto 比较 | 物化获批候选 |
-| 多设施覆盖 | 候选、需求点、距离/容量矩阵 | facility-location / CP-SAT | 物化获批设施集合 |
-| 用地组合 | 地块、兼容性、面积和政策因子 | MILP / CP-SAT / bounded enumeration；当前已接入 `parcel_assignment_bounded` 处理闭合的共享 BSM 容量组合 | 写入获批地块组合及属性 |
-| 道路连通 | 网络、端点、禁入区、成本 | 图搜索、最短路、Steiner/network heuristic | 物化获批 route geometry |
-| 分区布局 | 可用面、邻接关系和拓扑因子 | adjacency/topology constraint solver | 物化获批分区几何 |
-| 生态避让 | 生态图层和 hard exclusion overlay | 可行域裁剪及方案比较 | 物化获批且已裁剪的结果 |
-| 线性走廊 | 网络/栅格成本面和端点 | network/corridor algorithm | 物化获批走廊 |
-| 小规模人工候选比较 | 候选及指标 | 确定性 Pareto | 物化人工批准项 |
-| 开放性空间构思 | 真实底图和约束上下文 | LLM 生成方案原型，随后重新 grounding 和确定性检查 | 只物化通过检查并获批的原型 |
+| 任务类型           | GROUND                            | SELECT / solver portfolio                                                                                | EXECUTE                    |
+| ------------------ | --------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------- |
+| 单设施选址         | 生成并测量候选                    | 硬过滤、排序、Pareto 比较                                                                                | 物化获批候选               |
+| 多设施覆盖         | 候选、需求点、距离/容量矩阵       | facility-location / CP-SAT                                                                               | 物化获批设施集合           |
+| 用地组合           | 地块、兼容性、面积和政策因子      | MILP / CP-SAT / bounded enumeration；当前已接入`parcel_assignment_bounded` 处理闭合的共享 BSM 容量组合 | 写入获批地块组合及属性     |
+| 道路连通           | 网络、端点、禁入区、成本          | 图搜索、最短路、Steiner/network heuristic                                                                | 物化获批 route geometry    |
+| 分区布局           | 可用面、邻接关系和拓扑因子        | adjacency/topology constraint solver                                                                     | 物化获批分区几何           |
+| 生态避让           | 生态图层和 hard exclusion overlay | 可行域裁剪及方案比较                                                                                     | 物化获批且已裁剪的结果     |
+| 线性走廊           | 网络/栅格成本面和端点             | network/corridor algorithm                                                                               | 物化获批走廊               |
+| 小规模人工候选比较 | 候选及指标                        | 确定性 Pareto                                                                                            | 物化人工批准项             |
+| 开放性空间构思     | 真实底图和约束上下文              | LLM 生成方案原型，随后重新 grounding 和确定性检查                                                        | 只物化通过检查并获批的原型 |
 
-边界判定规则是：只要一个算法会比较替代、改变候选成员、选择路线或改变规划结果，它就属于批准之前的 GROUND/SELECT；EXECUTE worker 只允许在冻结容差内做确定性的格式转换、切片、拓扑修复、序列化和写入。worker 的细分是工程并行与物化职责，不赋予规划决策权。
+边界判定规则是：只要一个动作会比较替代、改变候选成员、选择路线或改变规划结果，它就属于批准之前的 GROUND/SELECT。EXECUTE 中的 LLM 只能选择获批包络内的注册物化 recipe、解释工具 observation 和提出等价恢复；worker 只执行确定性转换、切片、拓扑修复、序列化和写入，equivalence checker 对任何恢复拥有否决权。
 
 ### Parcel availability, sub-parcel allocation, and adjacency
 
@@ -205,15 +208,15 @@ PlanningProgram
 
 完成状态是逐级门控，不是一个模糊的 `success`：
 
-| 状态 | 最低条件 |
-|---|---|
-| `evidence_sufficient` | 所有必需 EvidenceRequirement 已支持或获明确降级批准；范围和缺口已记录 |
-| `candidate_complete` | 每个可执行目标都有闭合集、身份、几何、快照、CRS 和排除记录；无未批准的关键 unresolved |
-| `scenario_feasible` | 至少一个方案满足全部硬约束，或以冲突解释正式返回 infeasible |
-| `scenario_optimal_or_bounded` | 已给出最优、可证明界限、Pareto 前沿或明确的预算终止状态 |
-| `execution_complete` | 获批方案全部物化、无意外对象、原子提交成功 |
-| `validation_passed` | 硬约束违规为零，selected-to-materialized coverage 为 100%，快照 lineage 一致 |
-| `delivery_complete` | 同一 run-root/snapshot 的地图、报告、导出和证书都进入 `DeliveryManifest` |
+| 状态                            | 最低条件                                                                              |
+| ------------------------------- | ------------------------------------------------------------------------------------- |
+| `evidence_sufficient`         | 所有必需 EvidenceRequirement 已支持或获明确降级批准；范围和缺口已记录                 |
+| `candidate_complete`          | 每个可执行目标都有闭合集、身份、几何、快照、CRS 和排除记录；无未批准的关键 unresolved |
+| `scenario_feasible`           | 至少一个方案满足全部硬约束，或以冲突解释正式返回 infeasible                           |
+| `scenario_optimal_or_bounded` | 已给出最优、可证明界限、Pareto 前沿或明确的预算终止状态                               |
+| `execution_complete`          | 获批方案全部物化、无意外对象、原子提交成功                                            |
+| `validation_passed`           | 硬约束违规为零，selected-to-materialized coverage 为 100%，快照 lineage 一致          |
+| `delivery_complete`           | 同一 run-root/snapshot 的地图、报告、导出和证书都进入`DeliveryManifest`             |
 
 如果规划问题被证明不可行，系统可以完成“诊断任务”，但不能把它标记为 `scenario_feasible` 或正式交付。有效的 infeasible 结果必须携带冲突约束、涉及目标、证据引用和可供人工选择的最小放宽建议。
 
@@ -228,7 +231,7 @@ PlanningProgram
 - 同时以 `SiteSelectionDecision`、聚合选择和 `PlanningScenario` 作为多个权威选择结果；
 - 只生成一个加权 winner，且不报告可行替代、Pareto 或不可行原因；
 - 把每条非行动 claim 一对一投影为可执行空间目标；
-- 让 EXECUTE worker 执行候选比较、设施选址、道路寻路或分区布局等规划决策；
+- 让 EXECUTE worker 或诊断 LLM 执行候选比较、设施选址、道路寻路或分区布局等规划决策；
 - 允许 EXECUTE 在运行时重选地点或部分提交正式状态；
 - 以 ValidationReport 中零散 findings 代替可门控的 `ValidationCertificate`；
 - 用日期状态页、实施台账或模块蓝图重新定义总体主链；

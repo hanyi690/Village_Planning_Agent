@@ -18,3 +18,13 @@ def pytest_collection_modifyitems(items):
         path = str(item.fspath).replace("\\", "/")
         if "/tests/e2e/" in path:
             item.add_marker(pytest.mark.e2e)
+        elif "/tests/acceptance/" in path:
+            item.add_marker(pytest.mark.acceptance)
+        elif "/tests/characterization/" in path:
+            item.add_marker(pytest.mark.characterization)
+        elif "/tests/contracts/" in path:
+            item.add_marker(pytest.mark.contracts)
+        elif "/tests/integration/" in path:
+            item.add_marker(pytest.mark.integration)
+        elif "/tests/core/" in path:
+            item.add_marker(pytest.mark.unit)

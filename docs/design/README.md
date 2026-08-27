@@ -8,7 +8,7 @@
 - [00_SYSTEM_DESIGN.md](00_SYSTEM_DESIGN.md)：产品结果、三平面架构、权威主链和完成定义。
 - [01_CONTRACTS_AND_INVARIANTS.md](01_CONTRACTS_AND_INVARIANTS.md)：契约所有权、身份、lineage、门控和不变量。
 - [02_EVIDENCE_AND_GROUNDING.md](02_EVIDENCE_AND_GROUNDING.md)：证据要求、混合检索、自然语言空间查询和 GROUND。
-- [03_PLANNING_EXECUTION.md](03_PLANNING_EXECUTION.md)：ScenarioOptimizer、ScenarioSet、审批、原子执行和验证。
+- [03_PLANNING_EXECUTION.md](03_PLANNING_EXECUTION.md)：LLM-native 方案审议、确定性工具、ScenarioSet、ApprovedOutcomeEnvelope、受约束智能物化和原子提交。
 - [04_EVALUATION_AND_ACCEPTANCE.md](04_EVALUATION_AND_ACCEPTANCE.md)：基准、指标、验收门槛和回归证据。
 - [05_MIGRATION.md](05_MIGRATION.md)：当前实现到目标契约的唯一迁移清单。
 
