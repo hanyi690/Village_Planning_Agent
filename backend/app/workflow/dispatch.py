@@ -189,9 +189,9 @@ class DispatchPolicy(BaseModel):
         "validate": ("execution_result",),
         "reconcile": (
             "planning_program", "target_projection", "grounding_result", "scenario_set", "planning_scenario", "approved_execution_input",
-            "execution_plan", "execution_result",
+            "execution_plan", "execution_result", "validation_certificate",
         ),
-        "deliver": ("execution_result", "validation_report", "reconciliation_report", "execution_plan"),
+        "deliver": ("execution_result", "validation_certificate", "final_manifest", "execution_plan"),
     }
 
     def authorize(

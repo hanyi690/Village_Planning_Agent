@@ -13,7 +13,7 @@ CLAIMS_OUTPUT_GUIDE = """
 
 允许的 claim_family 只能使用当前维度语义契约中的粗粒度类别，例如 objective、constraint、action、facility、road、axis、zone、site_area、restoration、protection。类别只表示意图类型，不表示已经拥有对应的空间对象。
 
-source_fact_refs 只能逐字复制当前 L1 facts 中出现的 fact_id；没有合适事实时使用空数组。location_hints 只能是来源支持的自然语言线索，不是实体 ID。grounding_requirements 只描述后续 GROUND 需要核实的事实类型或关系，不填写 relation object、candidate ID 或 geometry。
+source_fact_refs 只能逐字复制当前 L1 facts 中出现的 fact_id；evidence_refs 只能逐字复制当前证据 projection 中出现的稳定 fact_id/source_refs/evidence_refs，不能把证据原文、推测、解释或新 ID 放进引用字段；没有合适引用时使用空数组。location_hints 只能是来源支持的自然语言线索，不是实体 ID。grounding_requirements 只描述后续 GROUND 需要核实的事实类型或关系，不填写 relation object、candidate ID 或 geometry。
 """
 
 

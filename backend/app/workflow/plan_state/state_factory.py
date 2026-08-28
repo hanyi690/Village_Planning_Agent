@@ -1,7 +1,7 @@
-"""Single canonical state factory for production and tests.
+"""Single canonical state factory for production.
 
-All state construction goes through this factory. Test fixtures use the
-same factory with different parameters; no separate test-only constructor.
+All production state construction goes through this factory. There is no
+separate test-only constructor or state channel.
 """
 from __future__ import annotations
 
@@ -112,7 +112,9 @@ class StateFactory:
             "upstream_gates": [],
             "stage_audit": {},
             "retry_counts": {},
-            "dimension_retry_counts": {},
+        "dimension_retry_counts": {},
+        "provider_resume_dimensions": [],
+        "provider_resume_dimension": None,
             "dimension_retry_limit": max(0, int(settings.DIMENSION_RETRY_LIMIT)),
             "max_retries": BUSINESS_RETRY_LIMIT,
             "error_feedback": {},

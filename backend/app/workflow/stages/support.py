@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 
 _RETRY_ROUTES: Dict[str, frozenset[str]] = {
     "target_projection": frozenset({"REPAIR", "REVISE", "L3"}),
-    "ground": frozenset({"EXPLORE"}),
+    "ground": frozenset({"EXPLORE", "HUMAN"}),
     "select": frozenset({"RETRY_GROUND"}),
     "validate": frozenset({"RETRY_EXECUTE", "RETRY_SELECT", "RETRY_GROUND", "RETRY_TARGET_PROJECTION", "RETRY_L3"}),
     "reconcile": frozenset({"RETRY_EXECUTE", "RETRY_L3"}),
@@ -141,7 +141,7 @@ def _adopt_context(state: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
 async def _require_context(state: Dict[str, Any]) -> Any:
     from app.workflow.layers.context_bootstrap import bootstrap_context_node
-    from app.infrastructure.context.planning_context_factory import get_cached_context
+    from app.infrastructure.context_runtime.manager import get_cached_context
 
     session_id = state.get("session_id", "")
     context = get_cached_context(session_id) if session_id else None

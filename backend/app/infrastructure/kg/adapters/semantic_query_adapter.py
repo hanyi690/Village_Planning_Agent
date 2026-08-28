@@ -47,7 +47,7 @@ class KGSemanticQueryAdapter(SemanticQueryPort):
         return self.query_entities(run_id, name)
 
     def query_relations(self, run_id: str, entity_id: str, relation: str) -> list[dict[str, Any]]:
-        from app.contracts.spatial.spatial_reference_contracts import SpatialReferenceSpec
+        from app.contracts.ground.spatial_reference_contracts import SpatialReferenceSpec
 
         spec = SpatialReferenceSpec(type="topological", topo=relation)
         result = _resolve_topological(self._kg, spec, [entity_id])

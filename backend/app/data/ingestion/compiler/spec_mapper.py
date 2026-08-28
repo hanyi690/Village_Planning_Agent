@@ -11,17 +11,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from app.evidence.identity.source_feature_binding import (
+from app.infrastructure.evidence_runtime.identity.source_feature_binding import (
     build_existing_facility_source_binding,
     build_existing_road_source_binding,
 )
-from app.contracts.domain.l3_contracts import PlanningIntervention
+from app.contracts.l3.l3_contracts import PlanningIntervention
 from app.contracts.evidence.identity_contracts import (
     EvidenceObservation,
     GroundedEntityBinding,
 )
-from app.contracts.workflow.parse_result_contracts import ParseDiagnostic
-from app.contracts.spatial.spatial_reference_contracts import (
+from app.contracts.target_projection.parse_result_contracts import ParseDiagnostic
+from app.contracts.ground.spatial_reference_contracts import (
     RefObject,
     SpatialReferenceSpec,
 )

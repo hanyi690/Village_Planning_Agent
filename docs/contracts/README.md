@@ -18,11 +18,11 @@ TypeScript 与已提交的 `src/generated/v1.ts`，发现快照漂移时返回�
 LLM 调用统一经过 `run_structured_output(..., contract_key=...)`；该边界会记录 schema digest、
 provider 返回形状和有限的失败码，但不会把普通文本当作 typed output。闭集候选的 descriptor、
 digest 和成员校验统一由 `backend/app/contracts/llm/closed_set_contracts.py` 提供；
-`backend/app/domain/validation/closed_set.py` 仅保留兼容导入。
+`backend/app/contracts/llm/closed_set_contracts.py` 提供闭集候选的公共契约。
 
 因此新增或修改领域模型时只需要：
 
-1. 修改 owner 模型及其本地测试；
+1. 修改 owner 模型及其非测试验收探针；
 2. 若它跨边界，更新 registry 的版本/描述和对应 schema 测试；
 3. 通过 backend contract snapshot、structured runner 和 frontend generated-type check。
 

@@ -9,17 +9,17 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from app.domain.delivery.aggregate import deliver_aggregate
-from app.domain.delivery.delivery_renderer import render_delivery_artifacts
-from app.domain.delivery.delivery_snapshot_builder import build_spatial_delivery_products
-from app.domain.delivery.gate import evaluate_deliver_gate, summarize_planning_output
-from app.contracts.artifacts.deferral_contracts import DeferralLedger
-from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, ExecutionResult
-from app.contracts.spatial.parcel_change_contracts import ParcelChangeSet
-from app.contracts.spatial.planned_state_contracts import PlannedState
-from app.contracts.artifacts.reconciliation_contracts import ReconciliationReport
-from app.contracts.artifacts.validation_report_contracts import ValidationReport
-from app.contracts.artifacts.validation_certificate_contracts import ValidationCertificate
+from app.workflow.delivery.aggregate import deliver_aggregate
+from app.workflow.delivery.delivery_renderer import render_delivery_artifacts
+from app.workflow.delivery.delivery_snapshot_builder import build_spatial_delivery_products
+from app.workflow.delivery.gate import evaluate_deliver_gate, summarize_planning_output
+from app.contracts.delivery.deferral_contracts import DeferralLedger
+from app.contracts.execute.execution_plan_contracts import ExecutionPlan, ExecutionResult
+from app.contracts.execute.parcel_change_contracts import ParcelChangeSet
+from app.contracts.execute.planned_state_contracts import PlannedState
+from app.contracts.delivery.reconciliation_contracts import FinalManifest
+from app.contracts.validation.validation_report_contracts import ValidationReport
+from app.contracts.validation.validation_certificate_contracts import ValidationCertificate
 from app.workflow.stage_adapter import persist_stage_artifact
 from app.workflow.stages.support import (
     _adopt_context,
@@ -166,7 +166,7 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
     validation_certificate = _load_ref_artifact(
         state, "validation_certificate", ValidationCertificate
     )
-    from app.domain.validation.relation_validation import FinalScenarioValidation
+    from app.workflow.validation.relation_validation import FinalScenarioValidation
 
     final_relation_validation = _load_ref_artifact(
         state,
@@ -176,13 +176,13 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
     scenario_required = bool(
         (state.get("artifact_refs") or {}).get("planning_scenario")
     )
-    reconciliation_report = _load_ref_artifact(state, "reconciliation_report", ReconciliationReport)
+    reconciliation_report = _load_ref_artifact(state, "final_manifest", FinalManifest)
     execution_plan = _load_ref_artifact(state, "execution_plan", ExecutionPlan)
     deferral_ledger = _load_ref_artifact(state, "deferral_ledger", DeferralLedger)
-    from app.contracts.domain.l3_contracts import PlanningProgram
-    from app.contracts.planning.approval import ApprovedExecutionInput
-    from app.contracts.spatial.grounding_contracts import GroundingResult
-    from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
+    from app.contracts.l3.l3_contracts import PlanningProgram
+    from app.contracts.select.approval import ApprovedExecutionInput
+    from app.contracts.ground.grounding_contracts import GroundingResult
+    from app.contracts.target_projection.parse_result_contracts import IntentCompilationResult
 
     program = _load_ref_artifact(state, "planning_program", PlanningProgram)
     projection = _load_ref_artifact(state, "target_projection", IntentCompilationResult)
@@ -193,7 +193,7 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     ledger_ref = None
     if execution_plan is not None:
-        from app.contracts.artifacts.deferral_contracts import HumanDeferralDecision, TargetDeferral
+        from app.contracts.delivery.deferral_contracts import HumanDeferralDecision, TargetDeferral
 
         ledger_entries = list(getattr(deferral_ledger, "entries", None) or [])
         ledger_ids = {str(entry.target_id) for entry in ledger_entries}

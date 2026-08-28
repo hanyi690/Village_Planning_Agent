@@ -76,7 +76,7 @@ async def _maybe_extract_bindings(
         if layer == 1:
             try:
                 from app.infrastructure.artifacts.runtime import load_artifact
-                from app.contracts.domain.l1_contracts import L1Snapshot
+                from app.contracts.l1.l1_contracts import L1Snapshot
 
                 refs = dict((state or {}).get("artifact_refs") or {})
                 migrated = dict(state or {})

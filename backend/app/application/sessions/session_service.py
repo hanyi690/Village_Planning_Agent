@@ -38,7 +38,7 @@ async def _cancel_session_tasks(session_id: str) -> bool:
 
 async def _clear_session_context(session_id: str) -> bool:
     try:
-        from app.infrastructure.context.planning_context_factory import (
+        from app.infrastructure.context_runtime.manager import (
             _context_cache,
             invalidate_planning_context,
         )
@@ -64,7 +64,7 @@ async def _delete_session_kg(session_id: str) -> bool:
     try:
         from app.infrastructure.kg.manager import get_kg_manager
         get_kg_manager().remove_session(session_id)
-        from app.evidence.retrieval.evidence_service import clear_session_evidence_cache
+        from app.modules.evidence.application import clear_session_evidence_cache
         clear_session_evidence_cache(session_id)
         return True
     except Exception as e:
@@ -114,7 +114,7 @@ async def _clear_session_sse(session_id: str) -> bool:
 
 async def _clear_session_evidence(session_id: str) -> bool:
     try:
-        from app.evidence.retrieval.evidence_service import _EVIDENCE_CACHE
+        from app.modules.evidence.application import _EVIDENCE_CACHE
         for key in [k for k in _EVIDENCE_CACHE if k[0] == session_id]:
             _EVIDENCE_CACHE.pop(key, None)
         return True
@@ -125,7 +125,7 @@ async def _clear_session_evidence(session_id: str) -> bool:
 
 async def _clear_provider_failures(session_id: str) -> bool:
     try:
-        from app.infrastructure.llm.dimension_runtime import reset_provider_failure
+        from app.infrastructure.evidence_runtime.dimension_runtime import reset_provider_failure
         reset_provider_failure(session_id)
         return True
     except Exception as e:

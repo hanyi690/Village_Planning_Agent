@@ -336,7 +336,7 @@ class LLMManager:
         call_id = f"llm:{input_digest[:16]}"
         started = time.perf_counter()
         try:
-            from app.infrastructure.llm import structured as structured_output
+            from app.infrastructure.structured_runtime import parser as structured_output
 
             result = await structured_output.run_structured_output(
                 spec.response_model,
@@ -371,7 +371,7 @@ class LLMManager:
             if not isinstance(result, spec.response_model):
                 result = spec.response_model.model_validate(result)
         except Exception as exc:
-            from app.infrastructure.llm.structured import structured_failure_code
+            from app.infrastructure.structured_runtime.parser import structured_failure_code
 
             await self._emit(
                 LLMCallRecord(

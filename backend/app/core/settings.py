@@ -94,7 +94,6 @@ GROUND_LLM_MAX_TOKENS = int(LLM_CONFIG.ground_max_tokens)
 GROUND_LLM_PARSE_RETRIES = int(LLM_CONFIG.ground_parse_retries)
 GROUND_LLM_ENABLED = bool(LLM_CONFIG.ground_llm_enabled)
 RAG_TIMEOUT_S = int(os.getenv("RAG_TIMEOUT_S", "60"))  # per-dimension RAG retrieval cap
-TOOL_TIMEOUT_S = int(os.getenv("TOOL_TIMEOUT_S", "30"))  # per-tool call budget in DataPipeline
 EXTERNAL_ANCHOR_TIMEOUT_S = int(os.getenv("EXTERNAL_ANCHOR_TIMEOUT_S", "30"))  # 外源锚点总预算，超时跳过（绝不阻塞 L1 派发）
 
 def _parse_dimension_timeouts(raw: str) -> dict[str, float]:
@@ -477,8 +476,3 @@ GIS_EXPLORE_TEMPERATURE = float(LLM_CONFIG.gis_explore_temperature)
 # and the current L1 snapshot are ready.  Disabled means unresolved/ambiguous,
 # never a deterministic label fallback.
 SOURCE_SEMANTIC_LLM_ENABLED = bool(LLM_CONFIG.source_semantic_llm_enabled)
-
-# L3 semantic repair is a quota-consuming planning step.  Local tests and
-# demos keep it disabled unless a typed test LLM is injected explicitly;
-# production enables it only after the provider budget is approved.
-L3_SEMANTIC_REPAIR_LLM_ENABLED = LLM_CONFIG.semantic_repair_enabled

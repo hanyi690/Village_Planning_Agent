@@ -5,7 +5,7 @@ Defines the contract between the place resolver and downstream consumers
 from candidate PlaceResolutionCandidate objects scored across eight evidence
 dimensions defined in EvidenceScore.
 
-See docs/design/02_EVIDENCE_AND_GROUNDING.md for the current place-grounding boundary.
+See docs/design/04_EVIDENCE.md and docs/design/05_PROJECTION_AND_GROUND.md for the current place-grounding boundary.
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from app.contracts.artifacts.contract_meta import ContractMeta
-from app.contracts.spatial.spatial_reference_contracts import SearchScopeRef
+from app.contracts.ground.spatial_reference_contracts import SearchScopeRef
 
 
 class PlaceResolutionCandidate(BaseModel):

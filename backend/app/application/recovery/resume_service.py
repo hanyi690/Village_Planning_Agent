@@ -41,7 +41,7 @@ _SPATIAL_REPLAY_PREREQUISITES = {
     "execute": ("target_projection", "grounding_result", "scenario_set", "approved_execution_input"),
     "validate": ("execution_result",),
     "reconcile": ("validation_certificate",),
-    "deliver": ("validation_certificate", "reconciliation_report"),
+    "deliver": ("validation_certificate", "final_manifest"),
 }
 _SPATIAL_REPLAY_ORDER = tuple(_SPATIAL_REPLAY_STAGES.values())
 

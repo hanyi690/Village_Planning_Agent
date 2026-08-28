@@ -30,8 +30,8 @@ async def query_session_evidence(
     geometry remains bundle-authoritative and is returned only as a feature
     reference inside ``EvidencePacket``.
     """
-    from app.evidence.retrieval.context_hydration import prepare_evidence_context
-    from app.evidence.retrieval.evidence_service import retrieve_evidence
+    from app.infrastructure.evidence_runtime.context_hydration import prepare_evidence_context
+    from app.modules.evidence.application import retrieve_evidence
 
     external_port = None
     owned_external_provider = False
@@ -63,7 +63,7 @@ async def query_session_evidence(
         spatial_spec = None
         spatial_parse_trace: dict[str, object] | None = None
         if request.request_type == "spatial_lookup" or request.entity_scope:
-            from app.evidence.retrieval.evidence_service import (
+            from app.modules.evidence.application import (
                 extract_spatial_query_spec,
             )
 
@@ -75,7 +75,7 @@ async def query_session_evidence(
         external_policy = None
         if request.include_external:
             from app.infrastructure.search.provider_registry import get_configured_external_provider
-            from app.evidence.retrieval.context_hydration import build_external_evidence_policy
+            from app.infrastructure.evidence_runtime.context_hydration import build_external_evidence_policy
 
             app_state = getattr(
                 getattr(transport_request, "app", None),

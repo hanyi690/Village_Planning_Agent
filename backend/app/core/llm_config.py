@@ -134,6 +134,7 @@ class LLMStagePolicy:
 
     timeout_s: float
     max_tokens: int
+    observe_max_tokens: int
     report_max_tokens: int
     max_concurrent: int
     parse_retries: int
@@ -388,6 +389,12 @@ class LLMRuntimeSettings(BaseSettings):
         default=32768,
         validation_alias=AliasChoices("L1_MAX_TOKENS", "l1_max_tokens"),
     )
+    l1_observe_max_tokens: int = Field(
+        default=6144,
+        validation_alias=AliasChoices(
+            "L1_OBSERVE_MAX_TOKENS", "l1_observe_max_tokens"
+        ),
+    )
     l1_report_max_tokens: int | None = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -452,18 +459,6 @@ class LLMRuntimeSettings(BaseSettings):
             "LLM_NODE_TRANSIENT_RETRIES", "node_transient_retries"
         ),
     )
-    classification_retries: int = Field(
-        default=0,
-        validation_alias=AliasChoices(
-            "L3_CLASSIFICATION_RETRIES", "classification_retries"
-        ),
-    )
-    semantic_repair_enabled: bool = Field(
-        default=False,
-        validation_alias=AliasChoices(
-            "L3_SEMANTIC_REPAIR_LLM_ENABLED", "semantic_repair_enabled"
-        ),
-    )
     provider_circuit_failure_threshold: int = Field(
         default=3,
         validation_alias=AliasChoices(
@@ -512,6 +507,7 @@ class LLMRuntimeSettings(BaseSettings):
         "l3_max_concurrent",
         "ground_max_concurrent",
         "l1_max_tokens",
+        "l1_observe_max_tokens",
         "l1_report_max_tokens",
         "l1_transient_retries",
         "l2_max_tokens",
@@ -522,7 +518,6 @@ class LLMRuntimeSettings(BaseSettings):
         "l3_transient_retries",
         "l3_incomplete_output_max_tokens",
         "node_transient_retries",
-        "classification_retries",
         "provider_circuit_failure_threshold",
         "flash_model_max_tokens",
         "gis_explore_max_tokens",
@@ -672,6 +667,10 @@ class LLMRuntimeSettings(BaseSettings):
             return LLMStagePolicy(
                 timeout_s=max(0.001, float(self.l1_timeout_s)),
                 max_tokens=max(1, int(self.l1_max_tokens)),
+                observe_max_tokens=max(
+                    1024,
+                    min(int(self.l1_observe_max_tokens), int(self.l1_max_tokens)),
+                ),
                 report_max_tokens=max(
                     1,
                     int(self.l1_report_max_tokens)
@@ -679,7 +678,7 @@ class LLMRuntimeSettings(BaseSettings):
                     else min(int(self.l1_max_tokens), 4096),
                 ),
                 max_concurrent=self.stage_concurrency("l1"),
-                parse_retries=0,
+                parse_retries=1,
                 transient_retries=max(0, int(self.l1_transient_retries)),
                 transient_retry_backoff_s=max(
                     0.0,

@@ -17,7 +17,7 @@ FastAPI route aggregation lives in [`backend/app/api/routes.py`](../../backend/a
 Current API routes fan into three application layers:
 
 - `backend/app/application/commands/` for create, resume, and human-decision writes
-- `backend/app/application/queries/` for state, artifacts, delivery, evidence, history, and layers
+- `backend/app/application/queries/` for current state, artifacts, delivery, evidence, checkpoint audit, and layers
 - `backend/app/application/projections/` for response shaping
 
 [`PlanningRuntimeService`](../../backend/app/infrastructure/runtime/planning_runtime_service.py) remains the runtime entry for session execution and resume.
@@ -25,8 +25,8 @@ Current API routes fan into three application layers:
 For target ownership rules and projection invariants, use:
 
 - [`../design/01_CONTRACTS_AND_INVARIANTS.md`](../design/01_CONTRACTS_AND_INVARIANTS.md)
-- [`../design/02_EVIDENCE_AND_GROUNDING.md`](../design/02_EVIDENCE_AND_GROUNDING.md)
-- [`../design/03_PLANNING_EXECUTION.md`](../design/03_PLANNING_EXECUTION.md)
+- [`../design/04_EVIDENCE.md`](../design/04_EVIDENCE.md)
+- [`../design/06_SELECT_EXECUTE_AND_CODE.md`](../design/06_SELECT_EXECUTE_AND_CODE.md)
 
 ## 3. SSE and persisted event ownership
 
@@ -49,7 +49,7 @@ The route layer projects those events outward; it is not the source of truth for
 
 Current business artifacts should stay out of free-form state and be persisted by ref. In the current worktree that already includes `scoped_grounding_problem`, `ScenarioSet`, `approved_execution_input`, `execution_plan`, and `validation_certificate`.
 
-The semantic owner and lifecycle rules for those artifacts are defined in the canonical design docs, especially [`../design/03_PLANNING_EXECUTION.md`](../design/03_PLANNING_EXECUTION.md) and [`../design/05_MIGRATION.md`](../design/05_MIGRATION.md).
+The semantic owner and lifecycle rules for those artifacts are defined in the canonical design docs, especially [`../design/06_SELECT_EXECUTE_AND_CODE.md`](../design/06_SELECT_EXECUTE_AND_CODE.md) and [`../design/05_MIGRATION.md`](../design/05_MIGRATION.md).
 
 ## 5. Resume and human-review operations
 
@@ -77,7 +77,7 @@ Useful current checks are:
 
 ```powershell
 rg -n "include_router" backend/app/api backend/app/main.py -g '*.py'
-python -m pytest backend/tests/contracts/test_documentation_convergence.py -q
+$env:PYTHONPATH = 'backend'`npython -m compileall -q backend/app`npython scripts/acceptance/l1_facade_probe.py --help
 ```
 
 When the API shape changes, regenerate and compare the schema; do not hand-edit `docs/contracts/openapi-v1.json`.

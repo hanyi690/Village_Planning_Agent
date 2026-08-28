@@ -28,7 +28,7 @@ from .schemas import (
 )
 
 from .network_index import NetworkIndex, build_network_from_workspace
-from app.domain.network.snapshot import NetworkEdgeRef, NetworkNodeRef, NetworkRef, NetworkSnapshot, build_network_snapshot
+from app.spatial.network.snapshot import NetworkEdgeRef, NetworkNodeRef, NetworkRef, NetworkSnapshot, build_network_snapshot
 
 
 def __getattr__(name: str) -> Any:

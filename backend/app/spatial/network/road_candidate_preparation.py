@@ -15,7 +15,7 @@ from typing import Any, Mapping, Sequence
 
 from pydantic import ValidationError
 
-from app.contracts.domain.road_planning import (
+from app.contracts.execute.road_planning import (
     ExistingRoadPlanningInput,
     NewCorridorPlanningInput,
     RoadArtifactEvidence,

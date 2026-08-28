@@ -38,7 +38,7 @@ _KEY_BY_TYPE = {
     "ParcelChangeSet": "parcel_changeset",
     "PlannedState": "planned_state",
     "ValidationReport": "validation_report",
-    "ReconciliationReport": "reconciliation_report",
+    "FinalManifest": "final_manifest",
     "DeliveryManifest": "delivery_manifest",
     "PlanningProgram": "planning_program",
     "IntentCompilationResult": "target_projection",

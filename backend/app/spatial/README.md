@@ -4,8 +4,10 @@
 
 ## 定位
 
-几何、空间查询、接地、分配、变更、网络（路网）、地形与空间校验。`spatial/` 消费
-`data/` 提供的 `SpatialWorkspace` / typed 输入，产出 typed 空间结果供 `domain/` 决策；
+几何、空间查询、接地、变更、网络（路网）、地形与空间校验。SELECT 的分配和选地实现归属
+`modules/select/`；`spatial/` 消费
+`data/` 提供的 `SpatialWorkspace` / typed 输入，产出 typed 空间结果供
+`modules/ground`、`modules/select` 和 `modules/execute` 消费；
 不读取 workflow state 的裸 payload。
 
 ## 目录职责
@@ -15,7 +17,6 @@
 | `model/` | 几何基础模型 | `workspace.SpatialWorkspace`（空间工作边界）、`geometry`（ParcelRelations/邻接计算）、`subdivision`（地块切分/setback）、`area_engine`、`crs_engine`、`coord_transform`、`geojson_utils`、`parcel_ops`、`relations`、`axis_builder` |
 | `grounding/` | 空间接地 | `grounding`/`grounding_service`（bbox/近邻查询）、`resolver`（空间引用解析）、`flash_mention_extractor`（地名实体提取）、`bundle_binder`、`coordinate_identity`（坐标/BSM 合并）、`topology`（拓扑证据） |
 | `query/` | 空间查询 | `bridge`（SpatialIndex/ConstraintIndex/OverlapResult）、`context.compute_context_blocks`（ContextBlock 生成）、`feature_query` |
-| `allocation/` | 分配求解 | `global_zone_parcel_allocator`、`global_site_allocator`、`facility_location`、`selection`、`allocation_problem`、`zone_allocator_adapter` |
 | `change/` | 地块变更 | `parcel_change` |
 | `delivery/` | 空间交付辅助 | `land_balance`（土地平衡）、`style`（分类着色） |
 | `validation/` | 空间冲突校验 | `detector.ConflictDetector`（metric/constraint/spatial 冲突）、`resolver.ConflictResolver`、`spatial_quality` |
@@ -34,7 +35,7 @@
 
 ## 边界规则
 
-- 空间计算只在这里（及 `data/` 的解析边界）完成；`domain/` 消费 typed 结果，不做几何。
+- 空间计算只在这里（及 `data/` 的解析边界）完成；业务模块只消费 typed 结果，不做几何。
 - 所有输入使用 workspace/typed model，不允许从 workflow state 读裸 GIS。
-- 交付图层最终由 `domain/delivery` + `infrastructure/export` 从 `DeliverySpatialSnapshot`
+- 交付图层最终由 `workflow/delivery` + `infrastructure/export` 从 `DeliverySpatialSnapshot`
   派生；本层不单独维护第二份 current/planned 来源。

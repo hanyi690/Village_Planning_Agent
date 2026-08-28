@@ -13,7 +13,7 @@ from app.application.projections.models import (
 from app.application.projections.session import ProjectionNotFoundError
 from app.application.queries.artifacts import artifact_queries
 from app.application.queries.workflow_state import load_workflow_state
-from app.domain.delivery.gate import summarize_planning_output
+from app.workflow.delivery.gate import summarize_planning_output
 
 
 def _layer_view(layer: dict[str, object]) -> MapLayerView:

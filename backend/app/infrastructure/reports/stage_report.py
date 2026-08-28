@@ -137,7 +137,7 @@ def _human_artifact_detail(key: str, payload: Any) -> Dict[str, Any]:
     elif key == "validation_report":
         for name in ("checks", "violations", "diagnostics", "overall_passed"):
             take(name, 16)
-    elif key == "reconciliation_report":
+    elif key == "final_manifest":
         for name in ("inconsistencies", "diagnostics", "overall_consistent"):
             take(name, 16)
     elif key == "delivery_manifest":

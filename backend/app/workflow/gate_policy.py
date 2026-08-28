@@ -36,6 +36,7 @@ GATE_ROUTE_POLICY: Dict[str, Dict[str, Tuple[str, ...]]] = {
     "select": {
         "PASS": ("forward", "execute"),
         "RETRY_GROUND": ("retry", "select", "ground"),
+        "END_DIAGNOSTIC": ("end_diagnostic",),
     },
     "validate": {
         "PASS": ("forward", "reconcile"),

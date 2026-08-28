@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict
 
 from app.infrastructure.artifacts.fingerprint import semantic_checksum
-from app.domain.common.gate_progress import canonical_input_checksum, canonical_output_checksum
+from app.core.common.gate_progress import canonical_input_checksum, canonical_output_checksum
 
 
 def _jsonable(value: Any) -> Any:
@@ -147,7 +147,7 @@ def _input_snapshot(state: Dict[str, Any], stage: str) -> Dict[str, Any]:
     }
     sources = list(state.get("metadata", {}).get("source_refs", []) or [])
     try:
-        from app.infrastructure.context.planning_context_factory import get_cached_context
+        from app.infrastructure.context_runtime.manager import get_cached_context
 
         context = get_cached_context(str(state.get("session_id", "")))
         if context is not None and context.data_snapshot is not None:

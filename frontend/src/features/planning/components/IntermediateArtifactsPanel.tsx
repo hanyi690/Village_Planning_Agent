@@ -22,8 +22,14 @@ interface ArtifactView {
 }
 
 const STAGE_GROUPS: { stage: string; keys: ArtifactKey[] }[] = [
-  { stage: '事实与闸门', keys: ['l1_source_index', 'l1_snapshot', 'l1_observations', 'l1_bindings', 'l1_gate'] },
-  { stage: '策略与意图', keys: ['l2_strategy', 'l2_gate', 'planning_program', 'l3_gate'] },
+  {
+    stage: '事实与闸门',
+    keys: ['l1_source_index', 'l1_snapshot', 'l1_observations', 'l1_bindings', 'l1_gate'],
+  },
+  {
+    stage: '策略与意图',
+    keys: ['l2_strategy', 'l2_gate', 'planning_program', 'l3_gate'],
+  },
   {
     stage: '目标与落地',
     keys: [
@@ -38,13 +44,7 @@ const STAGE_GROUPS: { stage: string; keys: ArtifactKey[] }[] = [
   },
   {
     stage: '执行',
-    keys: [
-      'execution_plan',
-      'execution_result',
-      'parcel_changeset',
-      'planned_state',
-      'planning_scenario',
-    ],
+    keys: ['execution_plan', 'execution_result', 'parcel_changeset', 'planned_state', 'planning_scenario'],
   },
   {
     stage: '校验与交付',
@@ -129,7 +129,7 @@ const ARTIFACT_FIELD_LABELS: Record<string, string> = {
   opportunities: '机会',
   planning_intents: '规划意图',
   intervention_count: '干预事项',
-  semantic_repair_applied: '语义修复',
+  llm_rewrites_applied: 'LLM 二次改写',
   target_projection_node: '目标投影节点',
   projection_count: '投影目标数',
   objective_count: '目标数',
@@ -151,7 +151,6 @@ function artifactFieldLabel(key: string): string {
 
 function readableScalar(key: string, value: string | number | boolean): string {
   if (typeof value === 'boolean') {
-    if (key === 'semantic_repair_applied') return value ? '已应用' : '未应用';
     return value ? '是' : '否';
   }
   if (typeof value === 'number' && key.endsWith('_count')) return `${value} 项`;
@@ -159,13 +158,41 @@ function readableScalar(key: string, value: string | number | boolean): string {
 }
 
 const SPATIAL_CHAIN = [
-  { stages: ['KG_PREBUILD', 'L1'], label: 'L1 事实底座', description: '现状观察、L1 fact、来源与实体绑定' },
-  { stages: ['L2', 'EXPLORE', 'CONFLICT'], label: 'L2 策略与证据', description: '策略方向、探索证据与冲突记录' },
-  { stages: ['L3', 'TARGET_PROJECTION'], label: 'L3 规划意图', description: '可读正文与结构化 claims 的双通道交付' },
-  { stages: ['GROUND', 'SELECT'], label: '空间落位', description: '从意图到真实候选要素和选址结果' },
-  { stages: ['EXECUTE'], label: '空间执行', description: '地块变更、道路与设施几何执行' },
-  { stages: ['VALIDATE', 'RECONCILE'], label: '空间校验', description: '关系、几何和前后状态一致性检查' },
-  { stages: ['DELIVER', 'OUTPUT', 'RENDER'], label: '成果交付', description: '交付快照、图层和人类可查看的渲染结果' },
+  {
+    stages: ['KG_PREBUILD', 'L1'],
+    label: 'L1 事实底座',
+    description: '现状观察、L1 fact、来源与实体绑定',
+  },
+  {
+    stages: ['L2', 'EXPLORE', 'CONFLICT'],
+    label: 'L2 策略与证据',
+    description: '策略方向、探索证据与冲突记录',
+  },
+  {
+    stages: ['L3', 'TARGET_PROJECTION'],
+    label: 'L3 规划意图',
+    description: '可读正文与结构化 claims 的双通道交付',
+  },
+  {
+    stages: ['GROUND', 'SELECT'],
+    label: '空间落位',
+    description: '从意图到真实候选要素和选址结果',
+  },
+  {
+    stages: ['EXECUTE'],
+    label: '空间执行',
+    description: '地块变更、道路与设施几何执行',
+  },
+  {
+    stages: ['VALIDATE', 'RECONCILE'],
+    label: '空间校验',
+    description: '关系、几何和前后状态一致性检查',
+  },
+  {
+    stages: ['DELIVER', 'OUTPUT', 'RENDER'],
+    label: '成果交付',
+    description: '交付快照、图层和人类可查看的渲染结果',
+  },
 ];
 
 function artifactLabel(key: string): string {
@@ -195,7 +222,8 @@ function readableArtifactFacts(detail: Record<string, unknown> | unknown[] | und
     if (value == null || value === '') continue;
     if (typeof value === 'object') {
       if (Array.isArray(value)) facts.push([labelMap[key] || artifactFieldLabel(key), `${value.length} 项`]);
-      else if (key.endsWith('_node') || key.endsWith('_result')) facts.push([labelMap[key] || artifactFieldLabel(key), '已登记']);
+      else if (key.endsWith('_node') || key.endsWith('_result'))
+        facts.push([labelMap[key] || artifactFieldLabel(key), '已登记']);
       continue;
     }
     if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
@@ -218,8 +246,9 @@ function structuredArtifactHighlights(detail: Record<string, unknown> | unknown[
         highlights.push(value.trim());
       } else if (value && typeof value === 'object') {
         const item = value as Record<string, unknown>;
-        const text = [item.statement, item.title, item.name, item.objective, item.description]
-          .find((candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0);
+        const text = [item.statement, item.title, item.name, item.objective, item.description].find(
+          (candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0,
+        );
         if (text) highlights.push(text.trim());
       }
       if (highlights.length >= 3) return highlights;
@@ -237,36 +266,54 @@ function compactSidebarDetail(detail: Record<string, unknown>): Record<string, u
   };
 }
 
-function summarizePayload(payload: unknown, artifactKey?: string): { summary: string; detail?: Record<string, unknown> | unknown[] } {
+function summarizePayload(
+  payload: unknown,
+  artifactKey?: string,
+): { summary: string; detail?: Record<string, unknown> | unknown[] } {
   if (payload == null) return { summary: '空 payload' };
 
   // GeoJSON FeatureCollection
-  if (
-    typeof payload === 'object' &&
-    (payload as { type?: string }).type === 'FeatureCollection'
-  ) {
+  if (typeof payload === 'object' && (payload as { type?: string }).type === 'FeatureCollection') {
     const fc = payload as { features?: unknown[] };
     const count = Array.isArray(fc.features) ? fc.features.length : 0;
-    const firstProps =
-      (fc.features?.[0] as { properties?: Record<string, unknown> } | undefined)?.properties;
+    const firstProps = (fc.features?.[0] as { properties?: Record<string, unknown> } | undefined)?.properties;
     const keys = firstProps ? Object.keys(firstProps).slice(0, 8).join(', ') : '';
-    return { summary: `FeatureCollection · ${count} 个要素${keys ? ` · 属性: ${keys}` : ''}`, detail: payload as Record<string, unknown> };
+    return {
+      summary: `FeatureCollection · ${count} 个要素${keys ? ` · 属性: ${keys}` : ''}`,
+      detail: payload as Record<string, unknown>,
+    };
   }
 
   // render_layers 等列表
   if (Array.isArray(payload)) {
     const names = payload
       .slice(0, 12)
-      .map((l) => (l as { layerName?: string; layerType?: string })?.layerName ?? (l as { layerType?: string })?.layerType ?? '')
+      .map(
+        (l) =>
+          (l as { layerName?: string; layerType?: string })?.layerName ??
+          (l as { layerType?: string })?.layerType ??
+          '',
+      )
       .filter(Boolean)
       .join('、');
-    return { summary: `${artifactKey ? artifactLabel(artifactKey) : '产物'}：包含 ${payload.length} 项${names ? ` · ${names}` : ''}`, detail: payload };
+    return {
+      summary: `${artifactKey ? artifactLabel(artifactKey) : '产物'}：包含 ${payload.length} 项${names ? ` · ${names}` : ''}`,
+      detail: payload,
+    };
   }
 
   if (typeof payload === 'object') {
     const obj = payload as Record<string, unknown>;
     const interesting: string[] = [];
-    const hiddenMetadata = new Set(['artifact_id', 'context_version', 'created_at', 'schema_version', 'session_id', 'checksum', 'descriptor_digest']);
+    const hiddenMetadata = new Set([
+      'artifact_id',
+      'context_version',
+      'created_at',
+      'schema_version',
+      'session_id',
+      'checksum',
+      'descriptor_digest',
+    ]);
     for (const [k, v] of Object.entries(obj)) {
       if (hiddenMetadata.has(k) || k === 'diagnostics' || k === 'payload') continue;
       if (k === 'report_body' && typeof v === 'string') {
@@ -274,18 +321,21 @@ function summarizePayload(payload: unknown, artifactKey?: string): { summary: st
         continue;
       }
       if (typeof v === 'string' && v.length > 0 && v.length < 120) interesting.push(`${artifactFieldLabel(k)}：${v}`);
-      else if (typeof v === 'number' || typeof v === 'boolean') interesting.push(`${artifactFieldLabel(k)}：${readableScalar(k, v)}`);
+      else if (typeof v === 'number' || typeof v === 'boolean')
+        interesting.push(`${artifactFieldLabel(k)}：${readableScalar(k, v)}`);
       else if (Array.isArray(v) && v.length < 80) interesting.push(`${artifactFieldLabel(k)}：${v.length} 项`);
-      else if (v && typeof v === 'object' && (k.endsWith('_node') || k.endsWith('_result'))) interesting.push(`${artifactFieldLabel(k)}：已登记`);
+      else if (v && typeof v === 'object' && (k.endsWith('_node') || k.endsWith('_result')))
+        interesting.push(`${artifactFieldLabel(k)}：已登记`);
       else if (v && typeof v === 'object' && Array.isArray((v as { items?: unknown[] }).items)) {
         interesting.push(`${artifactFieldLabel(k)}：${(v as { items: unknown[] }).items.length} 项`);
       }
       if (interesting.length >= 8) break;
     }
     return {
-      summary: interesting.length > 0
-        ? interesting.slice(0, 4).join(' · ')
-        : `${artifactKey ? artifactLabel(artifactKey) : '产物'}已记录，结构化内容可展开查看`,
+      summary:
+        interesting.length > 0
+          ? interesting.slice(0, 4).join(' · ')
+          : `${artifactKey ? artifactLabel(artifactKey) : '产物'}已记录，结构化内容可展开查看`,
       detail: compactSidebarDetail(obj),
     };
   }
@@ -302,7 +352,7 @@ function summarizeStep(step: PositioningTraceStep): string {
     claim_count: '规划判断',
     claims_with_evidence: '有证据判断',
     intervention_count: '干预事项',
-    semantic_repair_applied: '语义修复',
+    llm_rewrites_applied: 'LLM 二次改写',
     target_projection_node: '目标投影节点',
     candidate_count: '候选数',
     recommended_segment_count: '推荐段',
@@ -350,9 +400,7 @@ export function IntermediateArtifactsPanel({ sessionId, focusKey = null }: Inter
     const allKeys = STAGE_GROUPS.flatMap((g) => g.keys);
     const next: Record<string, ArtifactView> = {};
     const artifactIndex = await planningApi.listArtifacts(sessionId).catch(() => null);
-    const availableKeys = new Set(artifactIndex
-      ? artifactIndex.artifacts.map((item) => item.artifact_key)
-      : allKeys);
+    const availableKeys = new Set(artifactIndex ? artifactIndex.artifacts.map((item) => item.artifact_key) : allKeys);
     for (const key of allKeys) {
       if (!availableKeys.has(key)) {
         next[key] = { key, status: 'missing', summary: '尚未产出' };
@@ -360,29 +408,38 @@ export function IntermediateArtifactsPanel({ sessionId, focusKey = null }: Inter
     }
     await Promise.all([
       Promise.all(
-        allKeys.filter((key) => availableKeys.has(key)).map(async (key) => {
-          next[key] = { key, status: 'loading' };
-          try {
-            const artifact = await planningApi.getArtifact(sessionId, key);
-            const { summary, detail } = summarizePayload(artifact.payload, key);
-            next[key] = {
-              key,
-              status: 'ready',
-              digest: artifact.artifact_ref?.digest?.slice(0, 12),
-              summary,
-              detail,
-            };
-          } catch (error) {
-            const status = (error as { status?: number })?.status === 404 ? 'missing' : 'error';
-            next[key] = { key, status, summary: status === 'missing' ? '尚未产出' : '读取失败' };
-          }
-        }),
+        allKeys
+          .filter((key) => availableKeys.has(key))
+          .map(async (key) => {
+            next[key] = { key, status: 'loading' };
+            try {
+              const artifact = await planningApi.getArtifact(sessionId, key);
+              const { summary, detail } = summarizePayload(artifact.payload, key);
+              next[key] = {
+                key,
+                status: 'ready',
+                digest: artifact.artifact_ref?.digest?.slice(0, 12),
+                summary,
+                detail,
+              };
+            } catch (error) {
+              const status = (error as { status?: number })?.status === 404 ? 'missing' : 'error';
+              next[key] = {
+                key,
+                status,
+                summary: status === 'missing' ? '尚未产出' : '读取失败',
+              };
+            }
+          }),
       ),
-      planningApi.getPositioningTrace(sessionId).then((value) => {
-        if (!cancelledRef.current) setTrace(value);
-      }).catch(() => {
-        if (!cancelledRef.current) setTrace(null);
-      }),
+      planningApi
+        .getPositioningTrace(sessionId)
+        .then((value) => {
+          if (!cancelledRef.current) setTrace(value);
+        })
+        .catch(() => {
+          if (!cancelledRef.current) setTrace(null);
+        }),
     ]);
     if (!cancelledRef.current) setViews(next);
     setRefreshing(false);
@@ -404,10 +461,7 @@ export function IntermediateArtifactsPanel({ sessionId, focusKey = null }: Inter
     setExpandedKey(focusKey);
   }, [focusKey]);
 
-  const producedCount = useMemo(
-    () => Object.values(views).filter((v) => v.status === 'ready').length,
-    [views],
-  );
+  const producedCount = useMemo(() => Object.values(views).filter((v) => v.status === 'ready').length, [views]);
 
   const latestStepByStage = useMemo(() => {
     const result = new Map<string, PositioningTraceStep>();
@@ -430,7 +484,10 @@ export function IntermediateArtifactsPanel({ sessionId, focusKey = null }: Inter
     <div className="overflow-hidden rounded-2xl border border-[#dcebe4] bg-white shadow-[0_7px_24px_rgba(42,102,79,0.04)]">
       <div className="flex items-center justify-between border-b border-[#e3efe9] px-3 py-2.5">
         <div className="text-[13px] font-semibold text-[#2d7e61]">
-          过程与产物 <span className="text-[11px] font-normal text-[#8aa79c]">({producedCount}/{totalArtifactCount} 已产出)</span>
+          过程与产物{' '}
+          <span className="text-[11px] font-normal text-[#8aa79c]">
+            ({producedCount}/{totalArtifactCount} 已产出)
+          </span>
         </div>
         <button
           type="button"
@@ -450,54 +507,80 @@ export function IntermediateArtifactsPanel({ sessionId, focusKey = null }: Inter
             onToggle={(event) => setShowTrace(event.currentTarget.open)}
           >
             <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#dff2e9] text-[11px] font-semibold text-[#2d7e61]">链</span>
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#dff2e9] text-[11px] font-semibold text-[#2d7e61]">
+                链
+              </span>
               <span className="min-w-0 flex-1">
                 <span className="block text-[12px] font-semibold text-[#315f50]">空间链过程</span>
                 <span className="block truncate text-[10px] text-[#78968b]">
-                  {latestTraceStep ? `当前 ${latestTraceStep.stage} · ${latestTraceStep.step_name || '已记录'}` : '等待后端过程记录'}
+                  {latestTraceStep
+                    ? `当前 ${latestTraceStep.stage} · ${latestTraceStep.step_name || '已记录'}`
+                    : '等待后端过程记录'}
                 </span>
               </span>
-              <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] ${trace?.complete ? 'bg-[#dff2e9] text-[#2d7e61]' : 'bg-[#fff3df] text-[#9a7428]'}`}>
+              <span
+                className={`shrink-0 rounded-full px-2 py-1 text-[10px] ${trace?.complete ? 'bg-[#dff2e9] text-[#2d7e61]' : 'bg-[#fff3df] text-[#9a7428]'}`}
+              >
                 {trace ? `${trace.reports.length} 条记录` : '未读取'}
               </span>
             </summary>
             <div className="border-t border-[#e3eee8] px-3 py-3">
-              <div className="mb-2 text-[10px] leading-4 text-[#78968b]">只展示后端已落库的 StepReport；没有记录的阶段不会被前端补成成果。</div>
+              <div className="mb-2 text-[10px] leading-4 text-[#78968b]">
+                只展示后端已落库的 StepReport；没有记录的阶段不会被前端补成成果。
+              </div>
               <div className="space-y-1.5">
-              {SPATIAL_CHAIN.map((chainStep, index) => {
-                const reports = chainStep.stages
-                  .map((stage) => latestStepByStage.get(stage))
-                  .filter((step): step is PositioningTraceStep => Boolean(step));
-                const latest = reports[reports.length - 1];
-                const hasTrace = reports.length > 0;
-                const hasArtifact = chainStep.stages.some((stage) => (trace?.stage_coverage || {})[stage]);
-                return (
-                  <details key={chainStep.label} className="group rounded-lg border border-[#e3eee8] bg-white">
-                    <summary className="flex cursor-pointer list-none items-center gap-2 px-2.5 py-2">
-                      <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${hasTrace || hasArtifact ? 'bg-[#dff2e9] text-[#2d7e61]' : 'bg-[#eef3f0] text-[#9aada6]'}`}>{index + 1}</span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-[11px] font-semibold text-[#3c6255]">{chainStep.label}</span>
-                        <span className="block truncate text-[10px] text-[#8aa59a]">{hasTrace ? `${latest?.stage} · ${latest?.step_name || '已记录'}` : chainStep.description}</span>
-                      </span>
-                      <span className={`shrink-0 text-[10px] ${hasTrace ? 'text-[#2d8a68]' : 'text-[#9aada6]'}`}>{hasTrace ? '已记录' : '未产出'}</span>
-                    </summary>
-                    <div className="border-t border-[#edf4f0] px-2.5 py-2 text-[10px] leading-5 text-[#6d8c80]">
-                      {hasTrace ? (
-                        <>
-                          <div>{summarizeStep(latest)}</div>
-                          <div className="mt-1 text-[#8aa59a]">记录数：{reports.length} · 时间：{latest?.timestamp ? new Date(latest.timestamp).toLocaleString('zh-CN') : '—'}</div>
-                          <details className="mt-2 rounded-md bg-[#f0f6f3] px-2 py-1.5">
-                            <summary className="cursor-pointer text-[10px] text-[#6d8c80]">查看过程输入 / 输出 / 诊断</summary>
-                            <pre className="mt-1 max-h-64 overflow-auto font-mono text-[9px] leading-relaxed text-[#4a6a5f]">{JSON.stringify(latest, null, 2).slice(0, 6000)}</pre>
-                          </details>
-                        </>
-                      ) : (
-                        <div>后端尚未落库 {chainStep.stages.join(' / ')} 阶段的 StepReport；这里不会用 artifact 名称或示意图冒充过程成果。</div>
-                      )}
-                    </div>
-                  </details>
-                );
-              })}
+                {SPATIAL_CHAIN.map((chainStep, index) => {
+                  const reports = chainStep.stages
+                    .map((stage) => latestStepByStage.get(stage))
+                    .filter((step): step is PositioningTraceStep => Boolean(step));
+                  const latest = reports[reports.length - 1];
+                  const hasTrace = reports.length > 0;
+                  const hasArtifact = chainStep.stages.some((stage) => (trace?.stage_coverage || {})[stage]);
+                  return (
+                    <details key={chainStep.label} className="group rounded-lg border border-[#e3eee8] bg-white">
+                      <summary className="flex cursor-pointer list-none items-center gap-2 px-2.5 py-2">
+                        <span
+                          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${hasTrace || hasArtifact ? 'bg-[#dff2e9] text-[#2d7e61]' : 'bg-[#eef3f0] text-[#9aada6]'}`}
+                        >
+                          {index + 1}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[11px] font-semibold text-[#3c6255]">{chainStep.label}</span>
+                          <span className="block truncate text-[10px] text-[#8aa59a]">
+                            {hasTrace ? `${latest?.stage} · ${latest?.step_name || '已记录'}` : chainStep.description}
+                          </span>
+                        </span>
+                        <span className={`shrink-0 text-[10px] ${hasTrace ? 'text-[#2d8a68]' : 'text-[#9aada6]'}`}>
+                          {hasTrace ? '已记录' : '未产出'}
+                        </span>
+                      </summary>
+                      <div className="border-t border-[#edf4f0] px-2.5 py-2 text-[10px] leading-5 text-[#6d8c80]">
+                        {hasTrace ? (
+                          <>
+                            <div>{summarizeStep(latest)}</div>
+                            <div className="mt-1 text-[#8aa59a]">
+                              记录数：{reports.length} · 时间：
+                              {latest?.timestamp ? new Date(latest.timestamp).toLocaleString('zh-CN') : '—'}
+                            </div>
+                            <details className="mt-2 rounded-md bg-[#f0f6f3] px-2 py-1.5">
+                              <summary className="cursor-pointer text-[10px] text-[#6d8c80]">
+                                查看过程输入 / 输出 / 诊断
+                              </summary>
+                              <pre className="mt-1 max-h-64 overflow-auto font-mono text-[9px] leading-relaxed text-[#4a6a5f]">
+                                {JSON.stringify(latest, null, 2).slice(0, 6000)}
+                              </pre>
+                            </details>
+                          </>
+                        ) : (
+                          <div>
+                            后端尚未落库 {chainStep.stages.join(' / ')} 阶段的 StepReport；这里不会用 artifact
+                            名称或示意图冒充过程成果。
+                          </div>
+                        )}
+                      </div>
+                    </details>
+                  );
+                })}
               </div>
             </div>
           </details>
@@ -506,7 +589,9 @@ export function IntermediateArtifactsPanel({ sessionId, focusKey = null }: Inter
           <div className="grid grid-cols-3 gap-1.5">
             <div className="rounded-lg border border-[#e3eee8] bg-white px-2 py-2">
               <div className="text-[10px] text-[#8aa59a]">已落库阶段</div>
-              <div className="mt-0.5 text-[13px] font-semibold text-[#2d7e61]">{readyGroupCount}/{STAGE_GROUPS.length}</div>
+              <div className="mt-0.5 text-[13px] font-semibold text-[#2d7e61]">
+                {readyGroupCount}/{STAGE_GROUPS.length}
+              </div>
             </div>
             <div className="rounded-lg border border-[#e3eee8] bg-white px-2 py-2">
               <div className="text-[10px] text-[#8aa59a]">可查看产物</div>
@@ -514,7 +599,9 @@ export function IntermediateArtifactsPanel({ sessionId, focusKey = null }: Inter
             </div>
             <div className="rounded-lg border border-[#e3eee8] bg-white px-2 py-2">
               <div className="text-[10px] text-[#8aa59a]">空间交付</div>
-              <div className="mt-0.5 text-[13px] font-semibold text-[#9a7428]">{DELIVERY_ARTIFACT_KEYS.some((key) => views[key]?.status === 'ready') ? '已到达' : '未到达'}</div>
+              <div className="mt-0.5 text-[13px] font-semibold text-[#9a7428]">
+                {DELIVERY_ARTIFACT_KEYS.some((key) => views[key]?.status === 'ready') ? '已到达' : '未到达'}
+              </div>
             </div>
           </div>
         )}
@@ -523,85 +610,108 @@ export function IntermediateArtifactsPanel({ sessionId, focusKey = null }: Inter
             const groupReadyCount = group.keys.filter((key) => views[key]?.status === 'ready').length;
             const visibleKeys = showPendingArtifacts
               ? group.keys
-              : group.keys.filter((key) => views[key]?.status === 'ready' || views[key]?.status === 'loading' || views[key]?.status === 'error');
+              : group.keys.filter(
+                  (key) =>
+                    views[key]?.status === 'ready' ||
+                    views[key]?.status === 'loading' ||
+                    views[key]?.status === 'error',
+                );
             if (!showPendingArtifacts && groupReadyCount === 0 && visibleKeys.length === 0) return null;
             return (
-              <details key={group.stage} open={Boolean(focusKey && group.keys.some((key) => key === focusKey))} className="rounded-xl border border-[#dcebe4] bg-white">
-              <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl bg-[#f7fcf9] px-3 py-2">
-                <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${groupReadyCount > 0 ? 'bg-[#dff2e9] text-[#2d7e61]' : 'bg-[#eef3f0] text-[#9aada6]'}`}>
-                  {groupReadyCount}
-                </span>
-                <span className="min-w-0 flex-1 text-[11px] font-semibold text-[#2d7e61]">{group.stage}</span>
-                <span className="shrink-0 text-[10px] font-normal text-[#6c9685]">{groupReadyCount}/{group.keys.length} 已产出</span>
-              </summary>
-              <div className="space-y-1 border-t border-[#edf4f0] p-2">
-                {visibleKeys.map((key) => {
-                  const view = views[key];
-                  return (
-                    <div
-                      key={key}
-                      className="cursor-pointer rounded-lg border px-2.5 py-1.5 text-[12px]"
-                      style={{
-                        borderColor: view?.status === 'ready' ? '#cdeade' : '#e6ece9',
-                        background: view?.status === 'ready' ? '#f4fbf7' : '#fafcfa',
-                      }}
-                      onClick={() => setExpandedKey(expandedKey === key ? null : key)}
-                    >
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
-                          style={{
-                            background:
-                              view?.status === 'ready'
-                                ? '#40b388'
-                                : view?.status === 'loading'
-                                  ? '#c9a86a'
-                                  : '#b8c8c1',
-                          }}
-                        />
-                        <span className="min-w-0 truncate text-[11px] font-semibold text-[#2d5f4e]">{artifactLabel(key)}</span>
-                        <code className="shrink-0 font-mono text-[9px] text-[#9aada6]">{key}</code>
-                        {view?.digest && (
-                          <span className="ml-auto font-mono text-[10px] text-[#9aada6]">#{view.digest}</span>
+              <details
+                key={group.stage}
+                open={Boolean(focusKey && group.keys.some((key) => key === focusKey))}
+                className="rounded-xl border border-[#dcebe4] bg-white"
+              >
+                <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl bg-[#f7fcf9] px-3 py-2">
+                  <span
+                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${groupReadyCount > 0 ? 'bg-[#dff2e9] text-[#2d7e61]' : 'bg-[#eef3f0] text-[#9aada6]'}`}
+                  >
+                    {groupReadyCount}
+                  </span>
+                  <span className="min-w-0 flex-1 text-[11px] font-semibold text-[#2d7e61]">{group.stage}</span>
+                  <span className="shrink-0 text-[10px] font-normal text-[#6c9685]">
+                    {groupReadyCount}/{group.keys.length} 已产出
+                  </span>
+                </summary>
+                <div className="space-y-1 border-t border-[#edf4f0] p-2">
+                  {visibleKeys.map((key) => {
+                    const view = views[key];
+                    return (
+                      <div
+                        key={key}
+                        className="cursor-pointer rounded-lg border px-2.5 py-1.5 text-[12px]"
+                        style={{
+                          borderColor: view?.status === 'ready' ? '#cdeade' : '#e6ece9',
+                          background: view?.status === 'ready' ? '#f4fbf7' : '#fafcfa',
+                        }}
+                        onClick={() => setExpandedKey(expandedKey === key ? null : key)}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+                            style={{
+                              background:
+                                view?.status === 'ready'
+                                  ? '#40b388'
+                                  : view?.status === 'loading'
+                                    ? '#c9a86a'
+                                    : '#b8c8c1',
+                            }}
+                          />
+                          <span className="min-w-0 truncate text-[11px] font-semibold text-[#2d5f4e]">
+                            {artifactLabel(key)}
+                          </span>
+                          <code className="shrink-0 font-mono text-[9px] text-[#9aada6]">{key}</code>
+                          {view?.digest && (
+                            <span className="ml-auto font-mono text-[10px] text-[#9aada6]">#{view.digest}</span>
+                          )}
+                        </div>
+                        <div className="mt-0.5 pl-3 text-[11px] leading-snug text-[#6d8c80]">
+                          {view?.status === 'loading'
+                            ? '读取中…'
+                            : view?.status === 'missing'
+                              ? '尚未到达该阶段，后端暂未产出'
+                              : (view?.summary ?? '等待产出…')}
+                        </div>
+                        {expandedKey === key && view?.detail != null && (
+                          <div className="mt-2 space-y-2 border-t border-[#e6f0eb] pt-2">
+                            <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+                              {readableArtifactFacts(view.detail).map(([label, value]) => (
+                                <div key={`${label}-${value}`} className="rounded-md bg-white px-2 py-1.5">
+                                  <div className="text-[#9ab2a8]">{label}</div>
+                                  <div className="mt-0.5 break-words text-[#527467]">{value}</div>
+                                </div>
+                              ))}
+                            </div>
+                            {structuredArtifactHighlights(view.detail).length > 0 && (
+                              <div className="rounded-md border border-[#e2eee8] bg-white px-2.5 py-2">
+                                <div className="mb-1 text-[10px] font-semibold text-[#397b62]">结构化摘要</div>
+                                <ul className="list-disc space-y-0.5 pl-4 text-[10px] leading-4 text-[#55786b]">
+                                  {structuredArtifactHighlights(view.detail).map((item, index) => (
+                                    <li key={`${item}-${index}`} className="line-clamp-2">
+                                      {item}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            <details className="rounded-md bg-[#f0f6f3] px-2 py-1.5">
+                              <summary className="cursor-pointer text-[10px] text-[#6d8c80]">
+                                查看结构化 JSON（正文已折叠）
+                              </summary>
+                              <pre className="mt-1 max-h-56 overflow-auto font-mono text-[10px] leading-relaxed text-[#4a6a5f]">
+                                {JSON.stringify(view.detail, null, 2).slice(0, 4000)}
+                                {JSON.stringify(view.detail, null, 2).length > 4000 ? ' …（已截断）' : ''}
+                              </pre>
+                            </details>
+                          </div>
                         )}
                       </div>
-                      <div className="mt-0.5 pl-3 text-[11px] leading-snug text-[#6d8c80]">
-                        {view?.status === 'loading' ? '读取中…' : view?.status === 'missing' ? '尚未到达该阶段，后端暂未产出' : (view?.summary ?? '等待产出…')}
-                      </div>
-                      {expandedKey === key && view?.detail != null && (
-                        <div className="mt-2 space-y-2 border-t border-[#e6f0eb] pt-2">
-                          <div className="grid grid-cols-2 gap-1.5 text-[10px]">
-                            {readableArtifactFacts(view.detail).map(([label, value]) => (
-                              <div key={`${label}-${value}`} className="rounded-md bg-white px-2 py-1.5">
-                                <div className="text-[#9ab2a8]">{label}</div>
-                                <div className="mt-0.5 break-words text-[#527467]">{value}</div>
-                              </div>
-                            ))}
-                          </div>
-                          {structuredArtifactHighlights(view.detail).length > 0 && (
-                            <div className="rounded-md border border-[#e2eee8] bg-white px-2.5 py-2">
-                              <div className="mb-1 text-[10px] font-semibold text-[#397b62]">结构化摘要</div>
-                              <ul className="list-disc space-y-0.5 pl-4 text-[10px] leading-4 text-[#55786b]">
-                                {structuredArtifactHighlights(view.detail).map((item, index) => (
-                                  <li key={`${item}-${index}`} className="line-clamp-2">{item}</li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-                          <details className="rounded-md bg-[#f0f6f3] px-2 py-1.5">
-                            <summary className="cursor-pointer text-[10px] text-[#6d8c80]">查看结构化 JSON（正文已折叠）</summary>
-                            <pre className="mt-1 max-h-56 overflow-auto font-mono text-[10px] leading-relaxed text-[#4a6a5f]">
-                              {JSON.stringify(view.detail, null, 2).slice(0, 4000)}
-                              {JSON.stringify(view.detail, null, 2).length > 4000 ? ' …（已截断）' : ''}
-                            </pre>
-                          </details>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </details>
+                    );
+                  })}
+                </div>
+              </details>
             );
           })}
         {sessionId && pendingArtifactCount > 0 && (

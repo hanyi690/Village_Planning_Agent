@@ -1,7 +1,7 @@
 # ADR 007: L1/L2 证据检索与上下文隔离的早期统一方案
 
 > Status: SUPERSEDED
-> Authority: Historical decision record only. Current normative LLM/context boundary is ADR 008; current retrieval design is `docs/design/02_EVIDENCE_AND_GROUNDING.md`.
+> Authority: Historical decision record only. Current normative LLM/context boundary is ADR 008; current retrieval design is `docs/design/04_EVIDENCE.md`.
 
 ## 1. Historical role
 
@@ -11,8 +11,8 @@ This ADR captured an earlier convergence attempt for retrieval preflight, shared
 
 ADR 007 mixed target design, implementation guidance, and transitional compatibility details in one place. The active authority is now split more clearly:
 
-- retrieval and grounding design: [`../design/02_EVIDENCE_AND_GROUNDING.md`](../design/02_EVIDENCE_AND_GROUNDING.md)
-- planning/execution ownership: [`../design/03_PLANNING_EXECUTION.md`](../design/03_PLANNING_EXECUTION.md)
+- retrieval and grounding design: [`../design/04_EVIDENCE.md`](../design/04_EVIDENCE.md)
+- planning/execution ownership: [`../design/06_SELECT_EXECUTE_AND_CODE.md`](../design/06_SELECT_EXECUTE_AND_CODE.md)
 - migration status: [`../design/05_MIGRATION.md`](../design/05_MIGRATION.md)
 - observed runtime evidence: [`../architecture/CURRENT_RUNTIME.md`](../architecture/CURRENT_RUNTIME.md)
 - accepted LLM/context boundary: [`008-final-llm-context-evidence-boundary.md`](008-final-llm-context-evidence-boundary.md)

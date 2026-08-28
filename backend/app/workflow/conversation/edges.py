@@ -147,14 +147,17 @@ def after_analysis(
     """
     if state.get("is_revision", False):
         return _route_revision(state)
+    if state.get("provider_resume_dimensions") and not state.get("fatal_error"):
+        # A resumed set may contain same-layer dependencies.  Dispatch one
+        # ready wave and leave blocked dimensions in the checkpoint until the
+        # completed reports make them eligible.  The provider failure channel
+        # is intentionally still present here: it is the reason the scoped
+        # resume was scheduled, and provider_resume_dispatch clears it only
+        # after the exact dimensions have been selected.
+        return "provider_resume_dispatch"
     fatal = _terminal_failure_route(state)
     if fatal is not None:
         return fatal
-    if state.get("provider_resume_dimensions"):
-        # A resumed set may contain same-layer dependencies.  Dispatch one
-        # ready wave and leave blocked dimensions in the checkpoint until the
-        # completed reports make them eligible.
-        return "provider_resume_dispatch"
     phase = state.get("phase", "layer1")
     if phase == "post_l3":
         # L3 is not a terminal state.  The post-L3 chain owns target projection
@@ -312,37 +315,47 @@ def _route_explore(state: Dict[str, Any], layer_num: int) -> Union[str, List[Sen
         gate_payload = gate_decision.model_dump(mode="json")
         pending = list(gate_payload.get("pending_requests") or [])
         if pending:
-            rag_enabled = (state.get("config") or {}).get("rag_enabled")
-            if rag_enabled is False:
-                # RAG-off runs already have the authoritative local Bundle,
-                # KG and typed snapshot.  Do not bridge a synchronous graph
-                # edge into a second event loop for artifact/history lookup;
-                # those retrievers share async locks and cannot safely be
-                # called from this conditional edge.  The unchanged gate is
-                # deliberately handled below as a bounded HUMAN breakpoint.
-                logger.info(
-                    "[after_analysis] RAG disabled; skipping cross-loop gate retrieval for L%d",
-                    layer_num,
-                )
-                return "human_review"
-            from app.evidence.retrieval.evidence_service import (
-                _gate_evidence_digest,
+            from app.modules.evidence.application import (
+                gate_evidence_digest,
                 retrieve_evidence_for_gate_sync,
             )
 
             session_id = str(state.get("session_id") or state.get("run_id") or "")
-            previous_digest = _gate_evidence_digest(session_id)
-            retrieve_evidence_for_gate_sync(
+            previous_digest = gate_evidence_digest(session_id)
+            exploration_results = retrieve_evidence_for_gate_sync(
                 gate_payload,
                 session_id,
                 str((state.get("config") or {}).get("village_name") or ""),
             )
-            current_digest = _gate_evidence_digest(session_id)
+            current_digest = gate_evidence_digest(session_id)
             if previous_digest == current_digest:
                 logger.warning("[after_analysis] EXPLORE evidence unchanged for L%d -> HUMAN", layer_num)
                 return "human_review"
+            if not any(
+                bool(getattr(result.evidence_bundle, "facts", None))
+                for result in exploration_results
+            ):
+                logger.warning(
+                    "[after_analysis] EXPLORE evidence returned no source facts for L%d -> HUMAN",
+                    layer_num,
+                )
+                return "human_review"
+            if not any(
+                bool(getattr(result.coverage, "sufficient", False))
+                for result in exploration_results
+            ):
+                logger.info(
+                    "[after_analysis] EXPLORE returned partial source facts for L%d; "
+                    "re-dispatching the producer so its bounded LLM can classify them",
+                    layer_num,
+                )
     except Exception as exc:
         logger.warning("[after_analysis] gate evidence retrieval failed: %s", exc)
+        # A runtime/adapter failure is not evidence that the producer's
+        # business gap is retryable. Preserve the gate-owned pending requests
+        # and their recovery pointers for HUMAN instead of replaying an L2/L1
+        # provider call against unchanged input.
+        return "human_review"
 
     # L3 evidence gaps are business review findings, not a license to replay
     # all twelve expensive L3 workers.  The design contract requires an
@@ -356,7 +369,14 @@ def _route_explore(state: Dict[str, Any], layer_num: int) -> Union[str, List[Sen
     requested_dims = []
     for pending_item in pending:
         context = pending_item.get("context") or {} if isinstance(pending_item, dict) else getattr(pending_item, "context", {}) or {}
-        dimension = context.get("dimension") if isinstance(context, dict) else ""
+        dimension = ""
+        if isinstance(context, dict):
+            dimension = (
+                context.get("producer_dimension")
+                or context.get("retrieval_dimension")
+                or context.get("dimension")
+                or ""
+            )
         if dimension and dimension not in requested_dims:
             requested_dims.append(dimension)
     configured_dims = {d.key for d in dim_configs}
@@ -368,7 +388,7 @@ def _route_explore(state: Dict[str, Any], layer_num: int) -> Union[str, List[Sen
         explore_dims = [d.key for d in dim_configs]
     if explore_dims:
         logger.info("[after_analysis] Gate EXPLORE (attempt %d): re-dispatching %s", explore_count + 1, explore_dims)
-        worker = _worker_for_phase(state.get("phase", "layer1"))
+        worker = _worker_for_phase(f"layer{layer_num}")
         return [_send_worker(worker, _dispatch_state(state, dimension_key=d)) for d in explore_dims]
     return END
 
@@ -412,7 +432,7 @@ def _route_gate_rework(
     rework_dims = [d.key for d in dim_configs]
     if rework_dims:
         logger.info("[after_analysis] Gate rework: re-dispatching %s", rework_dims)
-        worker = _worker_for_phase(state.get("phase", "layer1"))
+        worker = _worker_for_phase(f"layer{layer_num}")
         return [_send_worker(worker, _dispatch_state(state, dimension_key=d)) for d in rework_dims]
     return END
 

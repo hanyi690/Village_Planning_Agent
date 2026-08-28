@@ -27,6 +27,6 @@
 - API contracts：`backend/app/api/v1/contracts.py`
 - artifact contracts/runtime：`backend/app/contracts/artifacts/`、`backend/app/infrastructure/artifacts/`
 - 阶段节点：`backend/app/workflow/stages/`
-- 领域决定：`backend/app/domain/`
+- 领域决定：`backend/app/`
 - 当前实现：`docs/architecture/CURRENT_RUNTIME.md`
 - 目标差距：`docs/design/05_MIGRATION.md`

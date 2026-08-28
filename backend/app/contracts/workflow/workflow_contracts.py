@@ -7,6 +7,7 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 from app.contracts.artifacts.contract_meta import ContractMeta
+from app.contracts.workflow.recovery_pointer import RecoveryPointer
 
 
 class StageId(str, Enum):
@@ -45,6 +46,7 @@ class PendingRequest(BaseModel):
     stage: str
     request_type: str
     context: dict = {}
+    recovery: RecoveryPointer | None = None
     created_at: str = ""
 
 

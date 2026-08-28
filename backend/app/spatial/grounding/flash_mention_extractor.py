@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.contracts.llm.decision_contracts import SourceSpanRef
-from app.contracts.spatial.spatial_reference_contracts import SpatialReferenceSpec
+from app.contracts.ground.spatial_reference_contracts import SpatialReferenceSpec
 from app.infrastructure.logging import get_logger
 from app.infrastructure.llm.factory import create_flash_llm
 

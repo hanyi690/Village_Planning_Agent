@@ -19,6 +19,7 @@ class DimensionSemanticConfig(BaseModel):
     l3_claim_families: List[str] = Field(default_factory=list)
     l3_grounding_requirements: List[str] = Field(default_factory=list)
     spatial_authority: str = ""
+    source_section_hints: List[str] = Field(default_factory=list)
 
 
 class DimensionEvidenceConfig(BaseModel):

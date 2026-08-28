@@ -9,8 +9,8 @@
 - 数据/图层类型：`backend/app/data/model/`；
 - 编码和字段规则：`backend/app/data/encodings/dicts/`；
 - 几何、查询或拓扑能力：`backend/app/spatial/`；
-- 证据索引或 KG 投影：`backend/app/evidence/` / `backend/app/infrastructure/kg/`；
-- 交付图层：`backend/app/spatial/delivery/` 和 `backend/app/domain/delivery/`。
+- 证据索引或 KG 投影：`backend/app/infrastructure/evidence_runtime/` / `backend/app/infrastructure/kg/`；
+- 交付图层：`backend/app/spatial/delivery/` 和 `backend/app/workflow/delivery/`。
 
 ## 2. 推荐步骤
 
@@ -22,7 +22,7 @@
    冲突返回显式诊断。
 4. 如果需要空间运算，在 `backend/app/spatial/` 增加 query/geometry port 或实现，输入
    使用 workspace/typed model，不读取 workflow state 的裸 payload。
-5. 如果需要证据检索，在 `backend/app/evidence/` 增加来源和 provenance；KG/RAG 结果只
+5. 如果需要证据检索，在 `backend/app/infrastructure/evidence_runtime/` 增加来源和 provenance；KG/RAG 结果只
    支持分析，不直接写 `PlanningProgram` 或 `ParcelChange`。
 6. 如果需要交付，在 `DeliverySpatialSnapshot` 的统一来源上增加 RenderLayer/export
    映射，并确认 HTML、PNG、GeoJSON、土地平衡和 manifest 共享 checksum。
@@ -31,8 +31,8 @@
 ## 3. 验证
 
 ```powershell
-python -m pytest backend/tests/contracts backend/tests/core -q
-python -m pytest backend/tests/e2e -q
+$env:PYTHONPATH = 'backend'`npython -m compileall -q backend/app
+python scripts/acceptance/l1_facade_probe.py --help
 ```
 
 新增图层若影响地图，必须读取实际交付产物；“能解析文件”不等于“已进入规划成果”。

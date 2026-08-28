@@ -22,7 +22,7 @@ import hashlib
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.contracts.workflow.parse_contracts import (
+from app.contracts.target_projection.parse_contracts import (
     AxisTarget,
     FacilityTarget,
     RoadTarget,

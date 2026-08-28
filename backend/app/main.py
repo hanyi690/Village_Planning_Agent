@@ -1,4 +1,4 @@
-﻿"""
+"""
 FastAPI Backend Application - 村庄规划智能体后端服务
 
 Architecture:

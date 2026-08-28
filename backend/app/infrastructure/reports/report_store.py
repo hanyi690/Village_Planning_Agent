@@ -296,7 +296,7 @@ class ReportStore:
         from app.infrastructure.tasks.task_supervisor import build_summary_task_key
 
         async def run():
-            from app.infrastructure.llm.dimension_runtime import generate_summary
+            from app.infrastructure.evidence_runtime.dimension_runtime import generate_summary
             source = await self._get_summary_source(session_id, dim_key, version, report_id)
             if source is None:
                 return

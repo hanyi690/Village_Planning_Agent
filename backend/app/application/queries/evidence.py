@@ -5,9 +5,6 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 
-_active_external_provider: Any | None = None
-
-
 async def hydrate_evidence_context(
     session_id: str,
     context: Any,
@@ -69,7 +66,7 @@ async def hydrate_source_semantic_context(
         else None
     )
     if snapshot is None:
-        from app.evidence.identity.source_semantic_runtime import (
+        from app.infrastructure.evidence_runtime.source_semantic_runtime import (
             classify_source_semantics,
         )
 
@@ -93,7 +90,7 @@ async def hydrate_source_semantic_context(
     )
     if existing_fingerprint == snapshot.fingerprint:
         return snapshot
-    from app.evidence.identity.source_semantic_runtime import (
+    from app.infrastructure.evidence_runtime.source_semantic_runtime import (
         install_source_semantic_snapshot,
     )
 
@@ -122,7 +119,7 @@ async def prepare_evidence_context(
     silently seeing a cold context while the HTTP path sees L1 and reports.
     Hydration failures remain queryable but are recorded as typed diagnostics.
     """
-    from app.infrastructure.context.planning_context_factory import (
+    from app.infrastructure.context_runtime.manager import (
         build_planning_context,
         get_cached_context,
     )
@@ -172,74 +169,39 @@ async def prepare_evidence_context(
 
 
 def get_configured_external_provider(categories: list[str] | None = None) -> Any | None:
-    """Return the explicitly configured provider, never an implicit network client.
+    """Delegate provider selection to the single infrastructure registry."""
+    from app.infrastructure.search.provider_registry import (
+        get_configured_external_provider as get_provider,
+    )
 
-    ``fake`` is the deterministic offline provider used by local demos and
-    simulated-LLM tests.  ``exa`` is opt-in and requires ``EXA_API_KEY``;
-    otherwise the typed unavailable adapter is returned.  The caller owns the
-    returned provider and must close it during application shutdown.
-    """
-    import os
-
-    mode = str(os.getenv("EVIDENCE_EXTERNAL_PROVIDER", "disabled") or "").strip().lower()
-    if mode == "fake":
-        from app.infrastructure.search import FakeExternalSearchAdapter
-
-        return FakeExternalSearchAdapter(
-            enabled_domains=["statistics", "economics", "planning"],
-            enabled_categories=[
-                str(item).strip()
-                for item in (categories or ["population", "industry", "transport", "water"])[:8]
-                if str(item).strip()
-            ],
-        )
-    if mode == "exa":
-        api_key = str(os.getenv("EXA_API_KEY", "") or "").strip()
-        if api_key:
-            from app.infrastructure.search import ExaHTTPExternalSearchAdapter
-
-            try:
-                timeout_s = float(os.getenv("EXA_TIMEOUT_S", "8"))
-            except (TypeError, ValueError):
-                timeout_s = 8.0
-            return ExaHTTPExternalSearchAdapter(
-                api_key,
-                endpoint=os.getenv("EXA_ENDPOINT", "https://api.exa.ai/search"),
-                timeout_s=timeout_s,
-            )
-    from app.infrastructure.search import UnavailableExternalSearchAdapter
-
-    return UnavailableExternalSearchAdapter()
+    return get_provider(categories)
 
 
 def configure_external_provider(app: Any) -> Any:
-    """Attach one provider to the FastAPI app lifecycle and return it."""
-    global _active_external_provider
-    provider = get_configured_external_provider()
-    app.state.evidence_external_provider = provider
-    _active_external_provider = provider
-    return provider
+    """Delegate lifecycle ownership to the infrastructure registry."""
+    from app.infrastructure.search.provider_registry import (
+        configure_external_provider as configure_provider,
+    )
+
+    return configure_provider(app)
 
 
 async def close_external_provider(app: Any) -> None:
-    """Close an app-scoped provider without assuming it owns resources."""
-    global _active_external_provider
-    provider = getattr(getattr(app, "state", None), "evidence_external_provider", None)
-    close = getattr(provider, "close", None)
-    if close is None:
-        _active_external_provider = None
-        return
-    try:
-        result = close()
-        if hasattr(result, "__await__"):
-            await result
-    finally:
-        _active_external_provider = None
+    """Delegate provider shutdown to the infrastructure registry."""
+    from app.infrastructure.search.provider_registry import (
+        close_external_provider as close_provider,
+    )
+
+    await close_provider(app)
 
 
 def get_active_external_provider() -> Any | None:
-    """Return the lifecycle-owned provider for workflow/application reuse."""
-    return _active_external_provider
+    """Return the lifecycle-owned provider from the infrastructure registry."""
+    from app.infrastructure.search.provider_registry import (
+        get_active_external_provider as get_provider,
+    )
+
+    return get_provider()
 
 
 def build_external_evidence_policy(
@@ -247,7 +209,7 @@ def build_external_evidence_policy(
     categories: list[str] | None = None,
 ) -> Any:
     """Build the narrow policy for one explicit external evidence request."""
-    from app.evidence.retrieval.external_search_policy import ExternalSearchPolicy
+    from app.infrastructure.evidence_runtime.external_search_policy import ExternalSearchPolicy
 
     return ExternalSearchPolicy(
         allowed_dimensions=[str(dimension_key or "")],

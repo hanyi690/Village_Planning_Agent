@@ -226,6 +226,19 @@ def _merge_layer_dims(current: dict[str, Any], update: dict[str, Any]) -> dict[s
     return merged
 
 
+def _merge_dimension_keys(current: list[str], update: list[str]) -> list[str]:
+    """Union scoped recovery dimensions; an explicit empty list clears it."""
+
+    if update == []:
+        return []
+    merged = list(current or [])
+    for value in list(update or []):
+        key = str(value or "").strip()
+        if key and key not in merged:
+            merged.append(key)
+    return merged
+
+
 def _merge_reports(current: list[dict[str, Any]], update: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Append worker report records (deduped by report_id) across branches."""
     merged = list(current or [])
@@ -320,6 +333,8 @@ class WorkflowState(TypedDict, total=False):
     provider_failures: Annotated[list[dict[str, Any]], _merge_failure_events]
     dimension_failures: Annotated[list[dict[str, Any]], _merge_failure_events]
     dimension_retry_counts: Annotated[dict[str, int], _merge_retry]
+    provider_resume_dimensions: Annotated[list[str], _merge_dimension_keys]
+    provider_resume_dimension: Annotated[str | None, _merge_control]
     runtime: Annotated[dict[str, Any], _merge_runtime]
     repair_directives: Annotated[dict[str, Any], _merge_control]
     repair_impact: Annotated[dict[str, Any], _merge_control]

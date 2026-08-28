@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.contracts.ports.spatial_query import SpatialQueryPort
-from app.contracts.spatial.spatial_reference_contracts import (
+from app.contracts.ground.spatial_reference_contracts import (
     CandidateSet, SpatialReferenceSpec,
 )
 

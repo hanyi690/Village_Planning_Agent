@@ -11,17 +11,6 @@ def get_configured_external_provider(categories: list[str] | None = None) -> Any
     import os
 
     mode = str(os.getenv('EVIDENCE_EXTERNAL_PROVIDER', 'disabled') or '').strip().lower()
-    if mode == 'fake':
-        from app.infrastructure.search import FakeExternalSearchAdapter
-
-        return FakeExternalSearchAdapter(
-            enabled_domains=['statistics', 'economics', 'planning'],
-            enabled_categories=[
-                str(item).strip()
-                for item in (categories or ['population', 'industry', 'transport', 'water'])[:8]
-                if str(item).strip()
-            ],
-        )
     if mode == 'exa' and str(os.getenv('EXA_API_KEY', '') or '').strip():
         from app.infrastructure.search import ExaHTTPExternalSearchAdapter
 

@@ -25,54 +25,18 @@ async def _persist_l1_identity_artifacts(
     aggregate_state: Dict[str, Any],
     patch: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Persist the canonical L1 observations and mention bindings.
+    """Delegate L1 location materialization to the GROUND module boundary."""
 
-    GROUND consumes these two immutable snapshots.  No report body, synthetic
-    settlement cluster, or pre-contract anchor is produced here.
-    """
-    session_id = str(aggregate_state.get("session_id") or "")
-    if not session_id:
-        return {}
-    from app.contracts.domain.l1_contracts import L1Snapshot
-    from app.evidence.identity.binding_store import BindingStore
-    from app.evidence.identity.observation_store import ObservationStore
-    from app.infrastructure.artifacts.runtime import load_artifact
-    from app.infrastructure.context.planning_context_factory import get_cached_context
-    from app.evidence.retrieval.evidence_graph import EvidenceGraph
+    from app.modules.ground.application import GroundApplication
 
-    context = get_cached_context(session_id)
-    snapshot = load_artifact(aggregate_state, "l1_snapshot", L1Snapshot)
-    if context is None or snapshot is None:
-        logger.warning("[layer_aggregate] L1 identity artifacts skipped: context or snapshot missing")
-        return {}
-    facts = list(getattr(snapshot, "location_mentions", []) or [])
-    context.location_mentions = facts
-    context.location_facts = facts
-    context.l1_fact_records = list(getattr(snapshot, "fact_records", []) or [])
-    context.evidence_graph = EvidenceGraph.build(context)
-
-    observation_store = ObservationStore()
-    observation_ref = observation_store.put_snapshot(
-        aggregate_state,
-        observation_store.from_location_facts(facts),
-        parent_digest=str(
-            ((patch.get("artifact_refs") or {}).get("l1_snapshot") or {}).get("digest") or ""
-        ),
-    )
-    bindings = BindingStore.from_context(context)
-    binding_ref = BindingStore().put_snapshot(
-        aggregate_state,
-        bindings,
-        observation_snapshot_ref=observation_ref.digest,
-        parent_digest=observation_ref.digest,
-    )
-    context.grounded_bindings = bindings
-    return {
+    merged = {
+        **aggregate_state,
         "artifact_refs": {
-            "l1_observations": observation_ref.model_dump(mode="json"),
-            "l1_bindings": binding_ref.model_dump(mode="json"),
-        }
+            **dict(aggregate_state.get("artifact_refs") or {}),
+            **dict(patch.get("artifact_refs") or {}),
+        },
     }
+    return await GroundApplication.materialize_l1_locations(merged)
 
 
 def _update_explore_retry(state: Dict[str, Any], patch: Dict[str, Any], layer: int, stage: str) -> None:
@@ -150,15 +114,17 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     if layer == 1:
-        from app.domain.assessment.aggregate import l1_aggregate
+        from app.modules.l1.application import run_l1
 
-        patch = await l1_aggregate(aggregate_state)
+        l1_result = await run_l1(aggregate_state)
+        patch = l1_result.to_state_patch()
         if aggregate_state is not state:
             patch = {**{k: aggregate_state[k] for k in ("context_version", "context_fingerprint", "context_ref", "bootstrap_context_done") if k in aggregate_state}, **patch}
         patch["layer_just_completed"] = None
         _update_explore_retry(state, patch, layer, "l1")
-        # L1 identity is materialized as the current observation/binding
-        # snapshots consumed by TARGET_PROJECTION and GROUND.
+        # L1 identity is materialized as a direct GROUND sidecar.  It is not
+        # routed through TARGET_PROJECTION; post-L3 projection may retain L1
+        # fact lineage, while GROUND owns spatial identity resolution.
         try:
             identity_patch = await _persist_l1_identity_artifacts(
                 state,
@@ -178,9 +144,10 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         return patch
 
     if layer == 2:
-        from app.domain.objectives.aggregate import l2_aggregate
+        from app.modules.l2.application import run_l2
 
-        patch = await l2_aggregate(aggregate_state)
+        l2_result = await run_l2(aggregate_state)
+        patch = l2_result.to_state_patch()
         if aggregate_state is not state:
             patch = {**{k: aggregate_state[k] for k in ("context_version", "context_fingerprint", "context_ref", "bootstrap_context_done") if k in aggregate_state}, **patch}
         patch["layer_just_completed"] = None
@@ -195,9 +162,10 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         return patch
 
     if layer == 3:
-        from app.domain.program.aggregate import l3_aggregate
+        from app.modules.l3.application import run_l3
 
-        patch = await l3_aggregate(aggregate_state)
+        l3_result = await run_l3(aggregate_state)
+        patch = l3_result.to_state_patch()
         if aggregate_state is not state:
             patch = {**{k: aggregate_state[k] for k in ("context_version", "context_fingerprint", "context_ref", "bootstrap_context_done") if k in aggregate_state}, **patch}
         patch["layer_just_completed"] = None

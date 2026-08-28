@@ -12,42 +12,23 @@ from typing import Any
 
 from app.contracts.artifacts.classification_ref import ClassificationRef
 from app.contracts.evidence.evidence_contracts import EvidenceSource
-from app.contracts.domain.l1_contracts import (
+from app.contracts.l1.l1_contracts import (
     EvidenceGap,
     LocationMention,
     LocationScopeMention,
     L1SpatialProvenance,
     L1Snapshot,
 )
-from app.contracts.workflow.parsing_contracts import CompilationProfile, CompilerTrace
-from app.contracts.workflow.parse_result_contracts import ParseDiagnostic
-from app.domain.assessment.l1_fact_projection import make_l1_fact
-from app.domain.assessment.observation_draft import observation_to_compiler_payload
+from app.contracts.target_projection.parsing_contracts import CompilationProfile, CompilerTrace
+from app.contracts.target_projection.parse_result_contracts import ParseDiagnostic
+from app.modules.l1.facts import make_l1_fact
+from app.modules.l1.observation_draft import observation_to_compiler_payload
 
 from ..diagnostics import collect_diagnostics
 from ..provenance import build_fragment_provenance
 
 _CHAPTER_RE = re.compile(r"^#{1,3}\s+(\S.+)$", re.MULTILINE)
 _BULLET_RE = re.compile(r"^\s*[-*]\s+(.+)$", re.MULTILINE)
-
-
-def _split_explicit_places(value: str) -> list[str]:
-    """Split a report location cell, preserving only explicit place tokens."""
-    value = re.sub(r"（.*?）|\(.*?\)", "", value or "")
-    value = value.replace("以及", "、").replace("和", "、").replace("及", "、")
-    parts = re.split(r"[、,，;；/]+", value)
-    result: list[str] = []
-    for part in parts:
-        part = re.sub(r"^\s*(?:经过|位于|沿线|覆盖|全村)\s*", "", part).strip()
-        part = re.sub(r"^\d+[、.．)]?\s*", "", part).strip()
-        if not part or part in {"全村", "/", "-", "—"}:
-            continue
-        # A route such as “肩丰-炉池” is a relation, not a single village.
-        if "-" in part or "—" in part:
-            result.extend(x.strip() for x in re.split(r"[-—]", part) if x.strip())
-        else:
-            result.append(part)
-    return list(dict.fromkeys(result))
 
 
 def _clean_model_text(text: str) -> str:
@@ -200,26 +181,6 @@ def _scope_role(value: Any, *, default: str = "unknown") -> str:
     return _SCOPE_ROLE_ALIASES.get(raw, raw or default)
 
 
-_DESCRIPTIVE_MARKERS = (
-    "至", "贯穿", "沿线", "两岸", "附近", "周边", "一带", "一段", "位于",
-    "汇入", "通往", "经过", "沿", "东北", "东南", "西北", "西南", "北部",
-    "南部", "东部", "西部", "中部", "村界", "全村", "境内",
-)
-
-
-def _is_place_like(token: str) -> bool:
-    """地点 token 判定（启发式，尽量保守）：短、无方位/描述/动词标记。
-
-    只有这类 token 才被编译为独立 location_fact；其余仅作 hint。
-    """
-    token = (token or "").strip()
-    if not token or len(token) > 6:
-        return False
-    if any(marker in token for marker in _DESCRIPTIVE_MARKERS):
-        return False
-    return True
-
-
 def _explicit_spatial_mentions(obs: dict[str, Any]) -> list[dict[str, Any]]:
     """Return only provider-declared spatial work items.
 
@@ -326,7 +287,6 @@ def _extract_location_mentions_from_observations(
     if not isinstance(payload, list):
         return []
     mentions: list[LocationMention] = []
-    seen: set[str] = set()
     for item in payload:
         try:
             obs = observation_to_compiler_payload(item)
@@ -339,12 +299,16 @@ def _extract_location_mentions_from_observations(
         description = str(obs.get("description") or "").strip()
         kind = str(obs.get("fact_type") or "").strip()
         explicit_mentions = _explicit_spatial_mentions(obs)
-        if str(obs.get("status") or "").strip() != "confirmed":
+        if str(obs.get("status") or "").strip() not in {
+            "confirmed",
+            "uncertain",
+            "conflict",
+            "source_exhausted",
+        }:
             continue
-        spatial_observation = kind in {"spatial_entity", "spatial_relation"} or bool(
-            location or relation or obs.get("source_feature_ids") or explicit_mentions
-        )
-        if not spatial_observation:
+        if not explicit_mentions:
+            # Location identity is LLM-declared through the typed field.  Do
+            # not mine arbitrary prose/cells with a regex fallback.
             continue
         source_quote = str(obs.get("source_quote") or "").strip()
         source_segment_ids = [
@@ -391,15 +355,10 @@ def _extract_location_mentions_from_observations(
                 mention_relation = str(mention.get("relation") or relation).strip()
                 raw_scope_mentions = list(mention.get("scope_mentions") or [])
                 if not raw_scope_mentions:
-                    raw_scope_mentions = [
-                        {
-                            "name": scope,
-                            "normalized_name": scope,
-                            "role": "unknown",
-                            "relation_to_target": mention_relation or "located_in",
-                        }
-                        for scope in _split_explicit_places(location)
-                    ]
+                    # Scope extraction is also provider-owned.  A location
+                    # cell without typed scope objects remains a semantic
+                    # hint; it is not tokenized into guessed places here.
+                    raw_scope_mentions = []
                 scope_mentions: list[LocationScopeMention] = []
                 for raw_scope in raw_scope_mentions:
                     if isinstance(raw_scope, str):
@@ -533,58 +492,9 @@ def _extract_location_mentions_from_observations(
             # Explicit work items are authoritative for the location index;
             # do not add a second generic target by mining the description.
             continue
-        # Only observations with an explicit spatial role/evidence can emit
-        # location facts. Non-spatial metric/demand names remain L1Fact rows.
-        parts_to_emit: list[tuple[str, str, str]] = []
-        if name and kind in {"spatial_entity", "spatial_relation"}:
-            parts_to_emit.append((name, role, location or relation or name))
-        # location 里只有"短地点 token"（如 社前村）才作为关联地点事实产出，
-        # 用于 facility@村 这类锚定；方位/描述串（如 西南至东北贯穿金田村）
-        # 一律不当地点，只作为主事实的 spatial_hint。
-        location_parts = _split_explicit_places(location) if location else []
-        for location_part in location_parts:
-            if not location_part or not _is_place_like(location_part):
-                continue
-            part_role = role
-            parts_to_emit.append((location_part, part_role, location_part))
-        for normalized, part_role, spatial_hint in parts_to_emit:
-            aliases = list(dict.fromkeys(x for x in (name, normalized) if x))
-            key = f"{normalized}|{part_role}|{dimension_key}|{report_id}"
-            if key in seen:
-                continue
-            seen.add(key)
-            mentions.append(LocationMention(
-                mention=name or normalized,
-                normalized_name=normalized,
-                role=part_role,
-                target_name=name or normalized,
-                aliases=aliases,
-                spatial_hint=spatial_hint,
-                scopes=[],
-                source_report_ref=report_id,
-                dimension_key=dimension_key,
-                source_span=source_span,
-                evidence_refs=evidence_refs,
-                source_feature_ids=[
-                    str(value).strip()
-                    for value in (obs.get("source_feature_ids") or [])
-                    if str(value).strip()
-                ],
-                provenance=L1SpatialProvenance(
-                    source_refs=[
-                        str(value).strip()
-                        for value in (obs.get("source_refs") or [])
-                        if str(value).strip()
-                    ],
-                    source_segment_ids=source_segment_ids,
-                    source_quote=source_quote,
-                ),
-                confidence=(
-                    float(obs.get("confidence"))
-                    if isinstance(obs.get("confidence"), (int, float))
-                    else (0.95 if normalized in location_parts else 0.8)
-                ),
-            ))
+        # Explicit work items are the only location index input.  The branch
+        # above has already compiled each typed mention, including uncertain
+        # and source-exhausted items, so there is no second prose-derived path.
     return mentions
 
 
@@ -701,6 +611,7 @@ def _compile_typed_observation_facts(
     *,
     dimension_key: str,
     report_id: str,
+    run_id: str = "",
 ) -> list[Any]:
     """Compile the L1 model's semantic observations into stable ``L1Fact`` records.
 
@@ -714,6 +625,9 @@ def _compile_typed_observation_facts(
     raw_observations = payload.get("observations") or []
     if not isinstance(raw_observations, list):
         return []
+    canonical_report_ref = str(
+        report_id or f"report:{run_id}:{dimension_key}"
+    ).strip()
     records: list[Any] = []
     for item in raw_observations:
         try:
@@ -765,7 +679,7 @@ def _compile_typed_observation_facts(
                 for value in (raw.get("source_segment_ids") or [])
                 if str(value).strip()
             ],
-            str(report_id or "").strip(),
+            canonical_report_ref,
         ]))
         source_span = str(raw.get("source_quote") or "").strip() or statement
         spatial = kind in {"spatial_entity", "spatial_relation"} or bool(
@@ -870,6 +784,9 @@ def compile_l1_observation(
     # and the only location-fact source.
     display = _clean_model_text(content or "")
     instr = instruction or ""
+    canonical_report_ref = str(
+        report_id or f"report:{run_id}:{dimension_key}"
+    ).strip()
 
     facts: list[str] = []
     constraints: list[str] = []
@@ -879,7 +796,7 @@ def compile_l1_observation(
     location_mentions = _extract_location_mentions_from_observations(
         instr,
         dimension_key=dimension_key,
-        report_id=report_id,
+        report_id=canonical_report_ref,
     )
     # Location facts cross the PARSE boundary only through the model's
     # structured observations JSON; a malformed L1 response yields zero facts
@@ -888,7 +805,8 @@ def compile_l1_observation(
     typed_observation_facts = _compile_typed_observation_facts(
         instr,
         dimension_key=dimension_key,
-        report_id=report_id,
+        report_id=canonical_report_ref,
+        run_id=run_id,
     )
     section_locators: list[str] = []
 
@@ -970,7 +888,7 @@ def compile_l1_observation(
 
     provenance = build_fragment_provenance(
         dimension_key,
-        report_id,
+        canonical_report_ref,
         run_id,
         section_locators,
         source_module="l1_observe",
@@ -986,8 +904,8 @@ def compile_l1_observation(
         evidence_gaps=evidence_gaps,
         classification_refs=classification_refs,
         sources=(
-            [EvidenceSource(source_type="report", reference=report_id)]
-            if report_id
+            [EvidenceSource(source_type="report", reference=canonical_report_ref)]
+            if canonical_report_ref
             else []
         ),
         dimension_provenance=[provenance],

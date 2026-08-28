@@ -29,25 +29,28 @@ def _to_typed(data: Any, cls: type) -> Any:
 
 async def reconcile_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Reconcile intervention -> selection -> execution -> planned outputs."""
-    from app.domain.validation.reconcile import reconcile_aggregate
-    from app.domain.validation.reconcile_gate import evaluate_reconcile_gate
-    from app.contracts.domain.l3_contracts import PlanningProgram
-    from app.contracts.spatial.spatial_reference_contracts import SpatialReferenceSpec
-    from app.contracts.spatial.grounding_contracts import GroundingResult
-    from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
-    from app.contracts.spatial.parcel_change_contracts import ParcelChangeSet
-    from app.contracts.spatial.planned_state_contracts import PlannedState
-    from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
-    from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, ExecutionResult
-    from app.contracts.artifacts.validation_certificate_contracts import ValidationCertificate
-    from app.contracts.artifacts.reconciliation_contracts import ReconciliationInconsistency, ReconciliationReport
+    from app.workflow.validation.reconcile import reconcile_aggregate
+    from app.workflow.validation.reconcile_gate import evaluate_reconcile_gate
+    from app.contracts.l3.l3_contracts import PlanningProgram
+    from app.contracts.ground.spatial_reference_contracts import SpatialReferenceSpec
+    from app.contracts.ground.grounding_contracts import GroundingResult
+    from app.contracts.ground.grounded_problem import GroundedPlanningProblem
+    from app.contracts.execute.parcel_change_contracts import ParcelChangeSet
+    from app.contracts.execute.planned_state_contracts import PlannedState
+    from app.contracts.target_projection.parse_result_contracts import IntentCompilationResult
+    from app.contracts.execute.execution_plan_contracts import ExecutionPlan, ExecutionResult
+    from app.contracts.validation.validation_certificate_contracts import ValidationCertificate
+    from app.contracts.delivery.reconciliation_contracts import (
+        FinalManifest,
+        ReconciliationInconsistency,
+    )
 
     retry_patch = _retry_patch(state, "reconcile")
     context = await _require_context(state)
     program = _load_ref_artifact(state, "planning_program", PlanningProgram)
     validation_certificate = None
     if program is None:
-        report = ReconciliationReport(inconsistencies=[ReconciliationInconsistency(
+        report = FinalManifest(inconsistencies=[ReconciliationInconsistency(
             intervention_id="__missing_program__",
             field="planning_program",
             expected="non-null PlanningProgram",
@@ -120,11 +123,11 @@ async def reconcile_node(state: Dict[str, Any]) -> Dict[str, Any]:
         input_artifact_refs=input_refs,
         previous_gate=state.get("reconcile_gate"),
     )
-    ref = persist_stage_artifact(state, "reconcile", "ReconciliationReport", report)
+    ref = persist_stage_artifact(state, "reconcile", "FinalManifest", report)
     return stage_completion_patch(
         state,
         "reconcile",
-        output_refs={"reconciliation_report": ref},
+        output_refs={"final_manifest": ref},
         gate=gate,
         context_patch=_adopt_context(state, context),
         retry_patch=retry_patch,

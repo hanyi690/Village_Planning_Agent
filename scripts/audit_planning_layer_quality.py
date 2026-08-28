@@ -22,7 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.domain.delivery.gate import summarize_planning_output
+from app.workflow.delivery.gate import summarize_planning_output
 from app.infrastructure.artifacts.repository import ContentAddressedArtifactRepository
 
 

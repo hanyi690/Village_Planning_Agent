@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 from typing import Any, Protocol
 
-from app.contracts.spatial.spatial_delivery_contracts import (
+from app.contracts.delivery.spatial_delivery_contracts import (
     DeliverySpatialSnapshot,
     FeatureBatch,
     SpatialLayerRef,

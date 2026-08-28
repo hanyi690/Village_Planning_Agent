@@ -2,13 +2,11 @@
 
 from .exa_adapter import (
     ExaHTTPExternalSearchAdapter,
-    FakeExternalSearchAdapter,
     UnavailableExternalSearchAdapter,
 )
 
 __all__ = [
     "ExaHTTPExternalSearchAdapter",
-    "FakeExternalSearchAdapter",
     "UnavailableExternalSearchAdapter",
 ]
 from .provider_registry import (

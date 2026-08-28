@@ -27,7 +27,7 @@ ARTIFACT_KEYS = (
     "l1_snapshot", "l2_strategy", "planning_program", "target_projection",
     "grounding_result", "scoped_grounding_problem", "demand_portfolio", "suitability_surface", "portfolio_decision",
     "execution_plan", "execution_result", "parcel_changeset",
-    "planned_state", "validation_report", "reconciliation_report", "delivery_manifest",
+    "planned_state", "validation_report", "final_manifest", "delivery_manifest",
     "layout_configs", "render_layers", "delivery_spatial_snapshot", "deferral_ledger",
     "export_result", "render_artifacts", "execution_diagnostics", "kg_layer1",
     "repair_directives", "repair_impact", "global_zone_allocation",

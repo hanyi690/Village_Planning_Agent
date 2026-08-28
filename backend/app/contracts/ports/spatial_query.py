@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from app.contracts.spatial.spatial_reference_contracts import (
+from app.contracts.ground.spatial_reference_contracts import (
     CandidateSet, SpatialReferenceSpec,
 )
 from app.contracts.spatial.query_ast import SpatialQuery

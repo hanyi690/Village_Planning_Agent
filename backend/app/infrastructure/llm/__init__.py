@@ -7,8 +7,11 @@ from .manager import (
     LLMManager,
     get_llm_manager,
 )
-from .planning_claims import PlanningClaimGenerator, get_planning_claim_generator
-from .context_manager import render_dependency_table, render_table, table_cell
+from app.infrastructure.context_runtime.table_renderer import (
+    render_dependency_table,
+    render_table,
+    table_cell,
+)
 
 __all__ = [
     "LLMCallRecord",
@@ -22,3 +25,14 @@ __all__ = [
     "table_cell",
     "render_dependency_table",
 ]
+
+
+def __getattr__(name: str):
+    if name in {"PlanningClaimGenerator", "get_planning_claim_generator"}:
+        from .planning_claims import PlanningClaimGenerator, get_planning_claim_generator
+
+        return {
+            "PlanningClaimGenerator": PlanningClaimGenerator,
+            "get_planning_claim_generator": get_planning_claim_generator,
+        }[name]
+    raise AttributeError(name)

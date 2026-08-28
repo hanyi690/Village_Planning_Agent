@@ -22,7 +22,7 @@ from shapely import make_valid
 from shapely.geometry import box, mapping
 from shapely.ops import unary_union
 
-from app.contracts.domain.road_planning import RoadArtifactEvidence
+from app.contracts.execute.road_planning import RoadArtifactEvidence
 
 from .road_land_cost import ROAD_LAND_WEIGHT_RULE_VERSION, road_land_weight
 

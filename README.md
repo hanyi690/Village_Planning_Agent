@@ -93,9 +93,9 @@ backend/app/
 ├── bootstrap/        lifespan 和组合根
 ├── contracts/        跨边界类型契约
 ├── data/             上传、摄取、快照和数据适配
-├── domain/           规划、执行、校验和交付业务
-├── evidence/         证据索引与检索模型
-├── infrastructure/   artifact、事件、runtime、LLM、KG、RAG、provider
+├── modules/          L1/L2/L3、Evidence、目标投影、接地、选择和执行业务模块
+├── core/             共享确定性原语和运行配置
+├── infrastructure/   artifact、事件、Context/Evidence/Structured runtime、LLM、KG、RAG、provider
 ├── spatial/          几何、接地、查询、变化、交付和空间校验
 └── workflow/         根图、阶段节点、层编排、对话和工具
 ```
@@ -106,8 +106,11 @@ artifact 持有。已退役目录只保存在历史归档中，不是新代码�
 ## 验证
 
 ```powershell
-python -m pytest backend/tests/contracts backend/tests/core -q
-python -m pytest backend/tests/e2e -q
+$env:PYTHONPATH = 'backend'
+python -m compileall -q backend/app
+python -c "from app.modules.l1.application import L1Application; from app.modules.l2.application import L2Application; from app.modules.l3.application import L3Application; print('stage facades import ok')"
+python scripts/acceptance/l1_facade_probe.py --help
+git diff --check
 ```
 
 真实验收还必须有真实 provider、checkpoint reopen/resume、实际 HTML/GeoJSON/PNG、

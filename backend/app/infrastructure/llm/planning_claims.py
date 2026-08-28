@@ -16,8 +16,8 @@ from typing import Any, Sequence
 from pydantic import ValidationError
 
 from app.core.llm_config import get_llm_settings
-from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
-from app.infrastructure.llm.structured import (
+from app.infrastructure.structured_runtime.facade import LLMCallSpec, run_structured
+from app.infrastructure.structured_runtime.parser import (
     provider_failure_code,
     structured_failure_code,
     structured_failure_kind,
@@ -70,13 +70,7 @@ class PlanningClaimGenerator:
         """Run one bounded provider call for one semantic projection only."""
 
         stage_policy = get_llm_settings().stage_policy("l3")
-        report_projection = response_model.__name__ == "L3IntentSummaryOutput"
-        configured_max_tokens = max(
-            256,
-            stage_policy.report_max_tokens
-            if report_projection
-            else stage_policy.max_tokens,
-        )
+        configured_max_tokens = max(256, stage_policy.max_tokens)
         incomplete_output_max_tokens = max(
             configured_max_tokens,
             stage_policy.incomplete_output_max_tokens,
@@ -105,14 +99,12 @@ class PlanningClaimGenerator:
                         "return the same narrow claims contract and no report text:\n"
                         + str(last_error)[:1200]
                     )
-                result = await get_llm_manager().run_structured(
+                result = await run_structured(
                     LLMCallSpec(
                         stage="L3",
-                        contract_key=(
-                            "l3.intent_summary" if report_projection else "l3.claims"
-                        ),
+                        contract_key="l3.claims",
                         response_model=response_model,
-                        call_type="report" if report_projection else "semantic",
+                        call_type="semantic",
                         # The caller owns the only semantic reask.  Do not let
                         # Instructor replay the same invalid structured request
                         # before the failure reaches the quality boundary.
@@ -136,7 +128,7 @@ class PlanningClaimGenerator:
                         },
                     ],
                     llm=self._get_llm(),
-                    context={"projection": "report" if report_projection else "claims"},
+                    context={"projection": "claims"},
                 )
                 if result is None:
                     error = ValueError(
@@ -169,9 +161,17 @@ class PlanningClaimGenerator:
         *,
         source_fact_ids: Sequence[str],
         spatial_source_fact_ids: Sequence[str],
+        allowed_evidence_refs: Sequence[str] = (),
         validation_feedback: list[str] | None = None,
     ) -> Any:
         """Generate only typed L3 rough claims; summary is a later call."""
+
+        # Evidence refs are closed by the L3 business boundary after the
+        # provider response is parsed.  Keep the catalog in this adapter's
+        # contract so the shared runtime and the L3 worker cannot drift into
+        # incompatible call shapes; it is intentionally not expanded into
+        # the provider JSON schema.
+        del allowed_evidence_refs
 
         response_model = _dynamic_claim_output_model(
             source_fact_ids,
@@ -239,28 +239,6 @@ class PlanningClaimGenerator:
                 diagnostics=["provider_claims_quarantined_validation_error"],
             )
 
-    async def generate_intent_summary(
-        self,
-        prompt: str,
-        *,
-        validation_feedback: list[str] | None = None,
-    ) -> Any:
-        """Synthesize only the human L3 intent summary from validated claims."""
-
-        from app.domain.program.claim_draft import L3IntentSummaryOutput
-
-        return await self._generate_projection(
-            L3IntentSummaryOutput,
-            prompt,
-            instruction=(
-                "Return only summary_body as a short human-readable intent summary. "
-                "Do not create or change claims, targets, locations, geometry, quantities "
-                "or source facts; do not return a claims array."
-            ),
-            validation_feedback=validation_feedback,
-        )
-
-
 _GENERATOR: PlanningClaimGenerator | None = None
 _GENERATOR_LOCK = threading.Lock()
 
@@ -277,7 +255,7 @@ def _dynamic_claim_output_model(
     schema caches from seeing a new contract name for every catalog digest.
     """
 
-    from app.domain.program.claim_draft import L3RoughClaimOutput
+    from app.modules.l3.claim_generation import L3RoughClaimOutput
 
     del source_fact_ids, spatial_source_fact_ids
     return L3RoughClaimOutput

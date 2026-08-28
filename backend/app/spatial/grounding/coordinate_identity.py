@@ -1,6 +1,6 @@
 """Coordinate identity — 同一坐标就是同一实体（ER 原则）。
 
-纯空间工具，几何数学只允许出现在 ``app.spatial``。domain/ground 编排器通过这里
+纯空间工具，几何数学只允许出现在 ``app.spatial``。modules/ground 编排器通过这里
 做实体按坐标合并/去重；坐标永远来自 bundle/KG，LLM 不参与。
 """
 from __future__ import annotations

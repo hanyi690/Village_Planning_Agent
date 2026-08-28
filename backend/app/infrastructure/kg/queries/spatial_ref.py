@@ -16,7 +16,7 @@ from rdflib import Literal, RDF, URIRef
 
 from app.infrastructure.logging import get_logger
 from ..ontology import PLN, PLN_NS, EntityTypes, GeoPredicates, Relations
-from app.contracts.spatial.spatial_reference_contracts import (
+from app.contracts.ground.spatial_reference_contracts import (
     CandidateSet, GeometryRef, SpatialReferenceSpec, RefObject,
 )
 

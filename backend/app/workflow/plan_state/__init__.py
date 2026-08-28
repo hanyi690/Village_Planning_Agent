@@ -1,1 +1,1 @@
-"""Workflow plan-state substrate migrated from app/agent/plan_state."""
+"""Workflow plan-state substrate for the canonical planning graph."""

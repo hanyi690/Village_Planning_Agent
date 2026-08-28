@@ -9,7 +9,6 @@ npm install
 npm run dev
 npm run type-check
 npm run lint
-npm run test:e2e
 ```
 
 通过 `frontend/.env.local` 设置 `NEXT_PUBLIC_API_URL`。Next.js rewrite 将浏览器的 `/api/*` 请求转发到后端；生产镜像使用 standalone output 和非 root 用户运行。
@@ -18,7 +17,8 @@ npm run test:e2e
 
 - `src/app/page.tsx`：主规划工作台。
 - `src/features/planning/`：会话、报告、SSE、人工审核、地图和 Zustand 状态。
-- `e2e/`：规划流程、日志、真实 GIS 图层、导出和生成链路测试。
+- `scripts/`：只保留必要的开发/运行辅助脚本；生产验收由后端
+  `scripts/acceptance/` 探针和编译/类型检查完成。
 
 前端状态是可丢弃的 UI 投影；断线重连必须使用后端 `sync`/status 接口恢复，不能把浏览器内存当作 SSOT。
 

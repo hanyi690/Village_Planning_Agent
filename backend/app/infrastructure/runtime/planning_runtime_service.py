@@ -188,6 +188,39 @@ def _materialize_workflow_state_preserving_artifacts(state: Dict[str, Any]) -> D
     return materialized
 
 
+def _active_subgraph_artifact_refs(snapshot: Any) -> Dict[str, Any]:
+    """Collect artifact refs from the current active subgraph projection.
+
+    The root graph intentionally keeps the cognitive and spatial segments as
+    checkpointed subgraphs.  While one segment is still running, LangGraph's
+    root snapshot can legitimately have an older ``artifact_refs`` channel;
+    the active child snapshot is nevertheless the current live projection.
+    This read-only helper exposes those refs to API/status consumers without
+    mutating the root checkpoint or selecting a historical branch.
+    """
+
+    merged: Dict[str, Any] = {}
+
+    def visit(current: Any) -> None:
+        if current is None:
+            return
+        values = getattr(current, "values", None)
+        if not isinstance(values, dict):
+            return
+        runtime = values.get("runtime")
+        candidates = [
+            values.get("artifact_refs"),
+            runtime.get("artifact_refs") if isinstance(runtime, dict) else None,
+        ]
+        for candidate in candidates:
+            merged.update(_merge_nonempty_artifact_refs(merged, candidate))
+        for task in getattr(current, "tasks", None) or ():
+            visit(getattr(task, "state", None))
+
+    visit(snapshot)
+    return merged
+
+
 class PlanningRuntimeService:
     """
     Unified Planning Runtime Service - LangGraph + Business Logic.
@@ -523,6 +556,28 @@ class PlanningRuntimeService:
             values = _materialize_workflow_state_preserving_artifacts(
                 dict(snapshot.values or {})
             )
+            # A running segment owns the newest immutable artifact refs until
+            # it returns to the parent graph.  Surface that live child
+            # projection to API/status readers so a completed L1/L2 aggregate
+            # is not rendered as "no output" during the segment checkpoint.
+            # This is read-only and never turns a child ref into a new input.
+            try:
+                subgraph_snapshot = await cls.aget_state(
+                    session_id,
+                    subgraphs=True,
+                )
+                child_refs = _active_subgraph_artifact_refs(subgraph_snapshot)
+                if child_refs:
+                    values["artifact_refs"] = _merge_nonempty_artifact_refs(
+                        values.get("artifact_refs"),
+                        child_refs,
+                    )
+            except Exception as exc:
+                logger.debug(
+                    "[PlanningRuntimeService] active subgraph refs unavailable for %s: %s",
+                    session_id,
+                    exc,
+                )
             # During the first interrupt checkpoint LangGraph can expose the
             # resume payload on the pending task before it merges the waiting
             # node's values.  Surface the same HUMAN fields to internal
@@ -780,7 +835,7 @@ class PlanningRuntimeService:
                     # preserve the missing-geometry evidence themselves.
                     if paused_stage in {"ground", "select"}:
                         from app.workflow.layers.context_bootstrap import bootstrap_context_node
-                        from app.infrastructure.context.planning_context_factory import get_cached_context
+                        from app.infrastructure.context_runtime.manager import get_cached_context
 
                         try:
                             await bootstrap_context_node(current)
@@ -808,7 +863,7 @@ class PlanningRuntimeService:
             # parallel wave stops spending requests.  An explicit HUMAN
             # resume is the operator's bounded permission to try the failed
             # dimension again; reset it only after the token is accepted.
-            from app.infrastructure.llm.dimension_runtime import reset_provider_failure
+                        from app.infrastructure.evidence_runtime.dimension_runtime import reset_provider_failure
             reset_provider_failure(session_id)
 
             initial_state = await cls.aget_state_values(session_id) or {}
@@ -1348,7 +1403,7 @@ class PlanningRuntimeService:
         #    on a fresh thread with no execution history."
         #    LangGraph 1.2.8 fixes DeltaChannel fresh-thread aupdate_state bug (PR #8290).
         if initial_state:
-            from app.infrastructure.llm.dimension_runtime import reset_provider_failure
+            from app.infrastructure.evidence_runtime.dimension_runtime import reset_provider_failure
             reset_provider_failure(session_id)
             clean_state = {
                 k: v

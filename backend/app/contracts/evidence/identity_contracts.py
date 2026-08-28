@@ -7,8 +7,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.contracts.artifacts.contract_meta import ContractMeta
-from app.contracts.domain.l1_contracts import LocationScopeMention
-from app.contracts.spatial.spatial_reference_contracts import SearchScopeRef
+from app.contracts.l1.l1_contracts import LocationScopeMention
+from app.contracts.ground.spatial_reference_contracts import SearchScopeRef
 
 GeometryGranularity = Literal[
     "exact_feature", "parcel_set", "settlement", "village_scope", "none"

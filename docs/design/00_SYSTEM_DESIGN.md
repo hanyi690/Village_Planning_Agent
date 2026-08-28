@@ -45,7 +45,7 @@ VALIDATE → L3/GROUND/SELECT/EXECUTE：按责任阶段修复
 
 ```text
 L1                  → L1Snapshot
-L2                  → L2DecisionSet
+L2                  → L2Strategy（包含各维度 L2DecisionSet）
 L3                  → PlanningProgram
 TARGET_PROJECTION   → AdmittedTargetSet / GroundingRequest
 GROUND              → GroundedPlanningProblem
@@ -58,5 +58,8 @@ DELIVER             → DeliveryManifest
 
 ## 4. 共同完成条件
 
-阶段只有在以下条件全部满足时才完成：目标边界落实、公开 facade 可调用、typed artifact 真实生成、artifact 可重载、失败和 gap 可表达、迭代可恢复、下游可以消费、契约和集成测试通过。
+阶段只有在以下条件全部满足时才完成：目标边界落实、公开 facade 可调用、typed artifact 真实生成、artifact 可重载、失败和 gap 可表达、迭代可恢复、下游可以消费、契约、编译和运行探针通过。
 
+## 5. 增量迁移目标
+
+实现必须沿本文件的业务主链逐阶段推进。每阶段都必须完成目标目录、facade、真实 artifact、可恢复迭代和下游适配，才能进入下一阶段。阶段映射和迁移出口记录在 `05_MIGRATION.md`，目标文件树记录在 `06_SELECT_EXECUTE_AND_CODE.md`。

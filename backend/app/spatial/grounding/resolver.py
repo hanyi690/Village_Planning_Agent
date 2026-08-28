@@ -23,7 +23,7 @@ import hashlib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import Any, Dict, List, Optional
 
-from app.contracts.spatial.spatial_reference_contracts import (
+from app.contracts.ground.spatial_reference_contracts import (
     CandidateSelectionProposal,
     SearchScopeRef,
     render_candidate_selection_contract,
@@ -106,7 +106,7 @@ def _authoritative_geometry_refs(
     validated separately and retained with its source lineage. Invalid
     records are discarded rather than repaired or merged.
     """
-    from app.contracts.spatial.spatial_reference_contracts import GeometryRef
+    from app.contracts.ground.spatial_reference_contracts import GeometryRef
 
     raw_values = list(values or [])
     refs: list[GeometryRef] = []
@@ -305,7 +305,7 @@ class SpatialResolver:
         bundle_snapshot_digest: str = "",
         diagnostics: Optional[Dict[str, Any]] = None,
     ):
-        from app.contracts.spatial.spatial_reference_contracts import SearchScopeRef
+        from app.contracts.ground.spatial_reference_contracts import SearchScopeRef
 
         normalized_bsms = list(dict.fromkeys(
             str(value).strip() for value in (scope_bsms or []) if str(value).strip()
@@ -364,7 +364,7 @@ class SpatialResolver:
         bundle_snapshot_digest: str = "",
         diagnostics: Optional[Dict[str, Any]] = None,
     ) -> "ResolvedSpatialRef":
-        from app.contracts.spatial.spatial_reference_contracts import ResolvedSpatialRef
+        from app.contracts.ground.spatial_reference_contracts import ResolvedSpatialRef
 
         scope = self._build_search_scope(
             scope_bsms=scope_bsms,
@@ -437,7 +437,7 @@ class SpatialResolver:
         keeps packet-driven GROUND and direct EvidenceGraph resolution on one
         fail-closed path.
         """
-        from app.contracts.spatial.spatial_reference_contracts import (
+        from app.contracts.ground.spatial_reference_contracts import (
             CandidateSet,
             ResolvedSpatialRef,
         )
@@ -1064,7 +1064,7 @@ class SpatialResolver:
         as separate exact-feature alternatives and marked ambiguous; callers
         must not silently union records from different source geometries.
         """
-        from app.contracts.spatial.spatial_reference_contracts import (
+        from app.contracts.ground.spatial_reference_contracts import (
             GeometryRef,
             ResolvedSpatialRef,
         )
@@ -1211,7 +1211,7 @@ class SpatialResolver:
         evidence_lineage: Dict[str, Any],
     ) -> Any:
         """Return current L1-bound parcel identities for an exact mention."""
-        from app.contracts.spatial.spatial_reference_contracts import CandidateSet
+        from app.contracts.ground.spatial_reference_contracts import CandidateSet
 
         mention = self._spec_mention(spec).strip().casefold()
         if not mention:
@@ -1283,7 +1283,7 @@ class SpatialResolver:
         to a village-wide or first-candidate fallback.
         """
 
-        from app.contracts.spatial.spatial_reference_contracts import CandidateSet
+        from app.contracts.ground.spatial_reference_contracts import CandidateSet
 
         refs = list(getattr(packet, "candidate_refs", None) or [])
         if not refs:
@@ -1523,7 +1523,7 @@ class SpatialResolver:
         *,
         path: str,
     ) -> "ResolvedSpatialRef":
-        from app.contracts.spatial.spatial_reference_contracts import (
+        from app.contracts.ground.spatial_reference_contracts import (
             ResolvedSpatialRef,
         )
 
@@ -1733,8 +1733,6 @@ class SpatialResolver:
         Only the point's Bundle-related parcels become scope seeds; the point
         is retained as provenance and is never promoted to a village geometry.
         """
-        return None
-
         refs = list(getattr(packet, "candidate_refs", None) or [])
         if not refs:
             return None
@@ -1789,7 +1787,7 @@ class SpatialResolver:
                 candidate_kind="空间证据簇",
             )
             if selected is None:
-                from app.contracts.spatial.spatial_reference_contracts import (
+                from app.contracts.ground.spatial_reference_contracts import (
                     ResolvedSpatialRef,
                 )
 
@@ -1874,7 +1872,7 @@ class SpatialResolver:
         if not final_bsms:
             return None
 
-        from app.contracts.spatial.spatial_reference_contracts import (
+        from app.contracts.ground.spatial_reference_contracts import (
             ResolvedSpatialRef,
         )
 
@@ -1945,8 +1943,8 @@ class SpatialResolver:
         """
         if packet is None or not getattr(packet, "candidate_refs", None):
             return None
-        from app.contracts.spatial.spatial_reference_contracts import CandidateSet
-        from app.evidence.retrieval.evidence_graph import (
+        from app.contracts.ground.spatial_reference_contracts import CandidateSet
+        from app.infrastructure.evidence_runtime.evidence_graph import (
             geometry_refs_from_evidence_packet,
         )
 
@@ -2014,7 +2012,7 @@ class SpatialResolver:
         not add coordinates or infer a geometry from a semantic mention.
         """
         from app.contracts.evidence.evidence_packet_contracts import EvidencePacket
-        from app.evidence.retrieval.evidence_graph import (
+        from app.infrastructure.evidence_runtime.evidence_graph import (
             _kg_relations,
             feature_ref_from_candidate,
         )
@@ -2145,7 +2143,7 @@ class SpatialResolver:
         lineage, especially when a child is only meaningful in the parent's
         topology context.
         """
-        from app.contracts.spatial.spatial_reference_contracts import (
+        from app.contracts.ground.spatial_reference_contracts import (
             ResolvedSpatialRef,
         )
 
@@ -2254,7 +2252,7 @@ class SpatialResolver:
         meaningful: the caller may continue with EvidenceGraph fallback, but
         it must never turn the anchor itself into an execution target.
         """
-        from app.contracts.spatial.spatial_reference_contracts import CandidateSet
+        from app.contracts.ground.spatial_reference_contracts import CandidateSet
 
         ports = getattr(self.context, "ports", None)
         port = getattr(ports, "spatial_query", None) if ports is not None else None
@@ -2419,7 +2417,7 @@ class SpatialResolver:
         bsms = self._filter_to_bundle(list(getattr(picked, "source_bsms", None) or []))
         if not bsms:
             return None
-        from app.contracts.spatial.spatial_reference_contracts import ResolvedSpatialRef
+        from app.contracts.ground.spatial_reference_contracts import ResolvedSpatialRef
 
         return ResolvedSpatialRef(
             final_bsms=bsms,
@@ -2821,7 +2819,7 @@ class SpatialResolver:
             return None
         bsms = self._filter_to_bundle(list(getattr(picked, "source_bsms", None) or []))
         from app.contracts.evidence.evidence_packet_contracts import EvidencePacket
-        from app.evidence.retrieval.evidence_graph import (
+        from app.infrastructure.evidence_runtime.evidence_graph import (
             feature_ref_from_candidate,
             geometry_refs_from_evidence_packet,
         )
@@ -2844,7 +2842,7 @@ class SpatialResolver:
         )
         if not bsms and not reference_geometries:
             return None
-        from app.contracts.spatial.spatial_reference_contracts import ResolvedSpatialRef
+        from app.contracts.ground.spatial_reference_contracts import ResolvedSpatialRef
 
         feature_bsm = str(getattr(picked, "feature_bsm", "") or "").strip()
         source_feature_id = str(

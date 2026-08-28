@@ -2,7 +2,7 @@
 
 确定性：只读 KG 预计算关系（touches/nearby/connected_via_road/sfWithin/
 sfIntersects/sfContains/serves/derived_from），不调 LLM、不造几何。
-空间职责留在 ``app.spatial``；evidence/index 与 domain/ground 通过这里消费拓扑。
+空间职责留在 ``app.spatial``；evidence/index 与 modules/ground 通过这里消费拓扑。
 """
 from __future__ import annotations
 

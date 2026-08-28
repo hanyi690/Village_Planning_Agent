@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.contracts.domain.l1_contracts import LocationScopeMention
+from app.contracts.l1.l1_contracts import LocationScopeMention
 
 
 class L1MentionContext(BaseModel):

@@ -6,8 +6,8 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from app.evidence.model.base import JsonObject, StrictContractModel
-from app.evidence.model.relation_evidence import RelationEvidence
+from app.contracts.base import JsonObject, StrictContractModel
+from app.contracts.evidence.relation_evidence import RelationEvidence
 from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
 
 

@@ -22,9 +22,9 @@ from app.workflow.layers.phase_machine import (
     get_layer_name,
     get_next_phase,
 )
-from app.domain.assessment.analysis_node import analyze_dimension
-from app.domain.objectives.worker import analyze_l2_dimension
-from app.domain.program.worker import analyze_l3_dimension
+from app.modules.l1.application import analyze_dimension
+from app.modules.l2.application import analyze_l2_dimension
+from app.modules.l3.reasoning import analyze_l3_dimension
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
@@ -55,6 +55,11 @@ def _dispatch_state(state: Dict[str, Any], **overrides: Any) -> Dict[str, Any]:
     """
     payload = dict(state)
     payload["layer_just_completed"] = None
+    # The aggregate resume list belongs to the parent checkpoint only.  A
+    # Send payload must carry one scalar target, otherwise the full list is
+    # written back by the worker input and reopens an already consumed wave.
+    payload["provider_resume_dimensions"] = []
+    payload["provider_resume_dimension"] = None
     payload.update(overrides)
     return payload
 
@@ -192,7 +197,7 @@ def provider_resume_dispatch_node(state: Dict[str, Any]) -> Command:
             state,
             dimension_key=dimension,
             is_revision=False,
-            provider_resume_dimensions=[],
+            provider_resume_dimension=dimension,
         )
         failure = failures.get(dimension)
         feedback = ""
@@ -204,7 +209,12 @@ def provider_resume_dispatch_node(state: Dict[str, Any]) -> Command:
             payload["quality_feedback"] = feedback
         sends.append(_send_worker(worker, payload))
     return Command(
-        update={"provider_resume_dimensions": blocked},
+        update={
+            "provider_resume_dimensions": blocked,
+            "provider_resume_dimension": None,
+            "provider_failures": [],
+            "dimension_failures": [],
+        },
         goto=sends,
     )
 

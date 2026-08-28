@@ -15,6 +15,8 @@ phases:
     depends_on: []
     semantic:
       focus: 行政区、自然村、道路、水系和对外联系的身份、别名、方向和关系；不把地点名本身变成规划项目。
+      source_section_hints:
+      - 区位分析
       l1_fact_types:
       - spatial_entity
       - spatial_relation
@@ -46,6 +48,8 @@ phases:
     depends_on: []
     semantic:
       focus: 人口、户数、产业、就业和服务需求；没有空间证据时只产指标或需求，不生成点位。
+      source_section_hints:
+      - 社会经济分析
       l1_fact_types:
       - scoped_metric
       - spatial_entity
@@ -74,6 +78,8 @@ phases:
     name: 村民意愿与诉求分析
     semantic:
       focus: 村民诉求、受益对象、紧迫性和位置线索；诉求不是现状资产，位置不明确则保留为需求或待核验。
+      source_section_hints:
+      - 村庄发展诉求
       l1_fact_types:
       - demand
       - spatial_entity
@@ -107,6 +113,9 @@ phases:
     name: 上位规划与政策导向分析
     semantic:
       focus: 法定指标、政策约束、期限和适用范围；不得把政策条文直接当作地块或几何。
+      source_section_hints:
+      - 上位规划
+      - 村庄现状
       l1_fact_types:
       - scoped_metric
       - constraint
@@ -137,6 +146,8 @@ phases:
     name: 自然环境分析
     semantic:
       focus: 地形、水系、灾害、生态敏感性和保护边界；保护/避让优先，不能把风险描述默认为建设候选。
+      source_section_hints:
+      - 自然环境分析
       l1_fact_types:
       - spatial_entity
       - constraint
@@ -178,6 +189,8 @@ phases:
     depends_on: []
     semantic:
       focus: 现状地类、面积、权属/适宜性和管控边界；现状地类不等于规划地类，整块与部分占用必须分开。
+      source_section_hints:
+      - 土地利用分析
       l1_fact_types:
       - spatial_entity
       - scoped_metric
@@ -205,6 +218,8 @@ phases:
     name: 道路交通分析
     semantic:
       focus: 现状道路、等级、宽度、通行问题、端点和网络关系；道路规划必须提供 typed endpoint/alignment 线索，不能复制现状线。
+      source_section_hints:
+      - 道路交通分析
       l1_fact_types:
       - spatial_entity
       - spatial_relation
@@ -240,6 +255,8 @@ phases:
     name: 公共服务设施分析
     semantic:
       focus: 设施类型、现状能力、服务半径、服务对象和缺口；coverage 需要明确 demand points，人口总数不能直接充当空间需求点。
+      source_section_hints:
+      - 公共服务设施分析
       l1_fact_types:
       - spatial_entity
       - demand
@@ -273,6 +290,8 @@ phases:
     name: 基础设施分析
     semantic:
       focus: 给排水、电力、通信和设施网络的现状、缺口、端点与服务关系；线性工程必须保持线性资产类型。
+      source_section_hints:
+      - 基础设施分析
       l1_fact_types:
       - spatial_entity
       - demand
@@ -309,6 +328,9 @@ phases:
     name: 生态绿地分析
     semantic:
       focus: 生态斑块、廊道、绿地和保护约束；functional overlay、protection 和 restoration 必须区分。
+      source_section_hints:
+      - 绿地与活动场地分析
+      - 自然环境分析
       l1_fact_types:
       - spatial_entity
       - spatial_relation
@@ -344,6 +366,8 @@ phases:
     name: 建筑分析
     semantic:
       focus: 建筑质量、风貌、界面和改造对象；建筑描述不能直接生成建设地块。
+      source_section_hints:
+      - 建筑现状分析
       l1_fact_types:
       - spatial_entity
       - spatial_relation
@@ -377,6 +401,8 @@ phases:
     name: 历史文化与乡愁保护分析
     semantic:
       focus: 文保单位、传统建筑、历史路径及保护级别；保护对象身份和范围要有来源，不因文化描述泛化成整村禁建。
+      source_section_hints:
+      - 历史文化资源分析
       l1_fact_types:
       - spatial_entity
       - spatial_relation

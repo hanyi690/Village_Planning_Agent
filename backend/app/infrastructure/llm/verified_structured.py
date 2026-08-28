@@ -19,9 +19,9 @@ from app.contracts.llm.decision_contracts import (
     schema_digest,
     stable_digest,
 )
-from app.domain.validation.repair_operations import pending_repair_decisions
+from app.workflow.validation.repair_operations import pending_repair_decisions
 from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
-from app.infrastructure.llm.structured import structured_failure_code
+from app.infrastructure.structured_runtime.parser import structured_failure_code
 
 
 ProposalT = TypeVar("ProposalT", bound=BaseModel)

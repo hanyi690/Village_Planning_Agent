@@ -446,7 +446,7 @@ _L1_OBSERVATION_FOCUS = {
 
 def _observations_output_guide(natural_villages: str = "", dimension_key: str = "") -> str:
     focus = _L1_OBSERVATION_FOCUS.get(dimension_key, "本维度报告正文明确出现的现状对象")
-    from app.domain.assessment.dimension_contracts import get_dimension_semantic_contract
+    from app.modules.l1.dimension_contracts import get_dimension_semantic_contract
 
     allowed = ", ".join(
         get_dimension_semantic_contract(dimension_key, 1).get("l1_fact_types", [])
@@ -514,7 +514,7 @@ def get_dimension_prompt(dimension_key: str, raw_data: str = "", village_name: s
     effective_village_name = village_name or "该村"
     prompt = prompt.replace("{village_name}", effective_village_name)
 
-    # Professional data section is now injected by DataPipeline upstream
+    # Evidence/context sections are supplied by the centralized runtimes.
 
     result = prompt.format(
         raw_data=raw_data,

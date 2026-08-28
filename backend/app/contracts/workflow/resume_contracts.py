@@ -135,7 +135,7 @@ ARTIFACT_STAGE_ORDER: tuple[tuple[str, str], ...] = (
     ("parcel_changeset", "EXECUTE"),
     ("planned_state", "EXECUTE"),
     ("validation_report", "VALIDATE"),
-    ("reconciliation_report", "RECONCILE"),
+    ("final_manifest", "RECONCILE"),
     ("delivery_manifest", "DELIVER"),
 )
 

@@ -4,7 +4,7 @@ Replaces the untyped ``ports: dict[str, Any]`` field on ``PlanningContext``
 so downstream modules consume typed Protocols instead of dict lookups.
 
 Only Protocols live here (interfaces); implementations are injected by the
-context factory in ``app.infrastructure.context.planning_context_factory``.
+context factory in ``app.infrastructure.context_runtime.manager``.
 """
 
 from __future__ import annotations

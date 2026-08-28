@@ -8,8 +8,8 @@
 | 内容 | 代码位置 |
 |---|---|
 | 数据快照、空间和表格模型 | `backend/app/data/model/` |
-| 空间 contract | `backend/app/contracts/spatial/`、`backend/app/spatial/model/` |
-| 规划/执行/交付 contract | `backend/app/contracts/domain/`、`backend/app/contracts/artifacts/` |
+| 空间 contract | `backend/app/contracts/ground/`、`backend/app/contracts/spatial/`、`backend/app/spatial/model/` |
+| 规划/执行/交付 contract | `backend/app/contracts/l2/`、`backend/app/contracts/l3/`、`backend/app/contracts/select/`、`backend/app/contracts/execute/`、`backend/app/contracts/artifacts/` |
 | GIS layer registry | `backend/app/data/model/gis_layer_registry.yaml`、`layer_registry.py` |
 | 编码和字段规则 | `backend/app/data/encodings/dicts/` |
 | 上传和文档字段 | `backend/app/data/ingestion/` |
@@ -23,4 +23,4 @@
 - `artifact_id`、`digest`、`parents`：用于结果身份和血缘，不是 GIS 属性。
 
 成果图层、土地平衡和交付字段由 `DeliverySpatialSnapshot` 统一派生；相关设计见
-[Planning and Execution](../design/03_PLANNING_EXECUTION.md)。
+[SELECT / EXECUTE](../design/06_SELECT_EXECUTE_AND_CODE.md)。

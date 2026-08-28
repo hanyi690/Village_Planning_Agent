@@ -28,7 +28,7 @@
 
 **导出 API**（`gazetteer/__init__.py`）：`Gazetteer` / `GazetteerEntry` / `build_gazetteer` / `load_gazetteer` / `save_gazetteer` / `confirm_with_llm` / `spatial_check` / `spatial_score`。
 
-**消费方**：`app.infrastructure.context.planning_context_factory.build_planning_context` 经 `load_gazetteer` 载入；`KGGazetteerAdapter`（`kg/adapters/`）包装为 `GazetteerPort` 注入 `PlanningPorts`。
+**消费方**：`app.infrastructure.context_runtime.manager.build_planning_context` 经 `load_gazetteer` 载入；`KGGazetteerAdapter`（`kg/adapters/`）包装为 `GazetteerPort` 注入 `PlanningPorts`。
 
 ---
 

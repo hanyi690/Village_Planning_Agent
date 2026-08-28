@@ -248,8 +248,8 @@ class RagService:
         task_desc = cfg.rag_query if hasattr(cfg, 'rag_query') else ""
         session_id = state.get("session_id", "")
 
-        from app.infrastructure.context.planning_context_factory import get_cached_context
-        from app.infrastructure.context.project_cognition import build_project_cognition
+        from app.infrastructure.context_runtime.manager import get_cached_context
+        from app.infrastructure.context_runtime.projection_builder import build_project_cognition
 
         planning_context = get_cached_context(str(session_id or ""))
         if planning_context is None:

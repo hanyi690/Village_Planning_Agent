@@ -50,7 +50,7 @@ def _pagination_metadata(
 
 async def _context_for_session(session_id: str, village_name: str = "") -> Any | None:
     try:
-        from app.evidence.retrieval.context_hydration import prepare_evidence_context
+        from app.infrastructure.evidence_runtime.context_hydration import prepare_evidence_context
 
         return await prepare_evidence_context(
             session_id,
@@ -114,7 +114,7 @@ async def _unified_evidence_for_query(
     context = await _context_for_session(session_id, village_name)
     if context is None:
         return None
-    from app.evidence.retrieval.evidence_service import (
+    from app.modules.evidence.application import (
         extract_spatial_query_spec,
         retrieve_evidence,
     )

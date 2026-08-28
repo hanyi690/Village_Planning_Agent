@@ -8,7 +8,7 @@
 ## Start here
 
 - [DOCUMENTATION_AUTHORITY.md](DOCUMENTATION_AUTHORITY.md)：文档冲突时的 canonical owner map。
-- [DOCUMENT_CLEANUP_MANIFEST.md](DOCUMENT_CLEANUP_MANIFEST.md)：后续归档/清理的精确路径清单；本轮不删除文档。
+- [DOCUMENT_CLEANUP_MANIFEST.md](DOCUMENT_CLEANUP_MANIFEST.md)：已执行的冗余/历史材料清理记录；不作为设计输入。
 - [00_SYSTEM_DESIGN.md](00_SYSTEM_DESIGN.md)：全链路业务流程、阶段关系、阶段反馈和共同运行规则。
 - [01_CONTRACTS_AND_INVARIANTS.md](01_CONTRACTS_AND_INVARIANTS.md)：L1 事实构建、事实类型、契约和结构化输出边界。
 - [02_PLANNING_COGNITION.md](02_PLANNING_COGNITION.md)：L2 规划问题、目标、需求、适宜性和策略。
@@ -22,7 +22,7 @@
 
 - 理解目标：`00` → `01` → `02` → `03` → `04` → `05` → `06`。
 - 核对现状：[CURRENT_RUNTIME.md](../architecture/CURRENT_RUNTIME.md) → [API_AND_STATE.md](../architecture/API_AND_STATE.md) → [OPERATIONS.md](../architecture/OPERATIONS.md)。
-- 判断差距：先读目标 owner，再只查 `05_MIGRATION.md`；不要从 historical plan、report 或 ADR 状态措辞推断完成度。
+- 判断差距：先读目标 owner，再只查 `05_MIGRATION.md`；不要从历史计划、报告或会话状态推断完成度。
 - 理解决策历史：[ADR](../adr/)；ADR 约束设计，但不替代 current-runtime evidence。
 
 不得在 `design/` 新建日期状态页、第二套总体蓝图或重复契约表。新内容必须修改其 canonical owner；历史与执行材料按 cleanup manifest 处理。

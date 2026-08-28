@@ -26,5 +26,5 @@ GHFLBM、VNE、规划分区到主空间分区和控制码的 crosswalk。它们�
 
 - loader/rule evaluator：`backend/app/data/encodings/dicts/`
 - catalog registry：`backend/app/data/catalog/`
-- 领域分类决定：`backend/app/contracts/domain/`、`backend/app/domain/program/`
-- 成果约束：[Planning and Execution](../design/03_PLANNING_EXECUTION.md)
+- 规划分类决定：`backend/app/contracts/l3/`、`backend/app/contracts/target_projection/`、`backend/app/modules/l3/`、`backend/app/modules/target_projection/`
+- 成果约束：[SELECT / EXECUTE](../design/06_SELECT_EXECUTE_AND_CODE.md)

@@ -5,8 +5,8 @@ validated where they are generated and are never reconstructed from prose.
 """
 from __future__ import annotations
 
-from app.contracts.domain.l1_contracts import L1Snapshot
-from app.contracts.workflow.parsing_contracts import CompilationProfile
+from app.contracts.l1.l1_contracts import L1Snapshot
+from app.contracts.target_projection.parsing_contracts import CompilationProfile
 
 from .diagnostics import collect_diagnostics
 from .provenance import build_fragment_provenance

@@ -26,6 +26,6 @@ conversation 节点 `bind_tools` 与 `workflow/tools/execute_node.py` 执行。�
 
 ## 边界规则
 
-- 工具内不重写 `domain/`/`spatial/` 已有算法（几何、冲突检测、分类等）。
+- 工具内不重写 `modules/`/`spatial/` 已有算法（业务决策、几何、冲突检测、分类等）。
 - 工具返回必须走 `make_result` + token 预算，不给 LLM 裸大数据。
 - 不反向 import 上层作为业务依赖。

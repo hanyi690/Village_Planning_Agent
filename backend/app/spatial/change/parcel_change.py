@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.contracts.spatial.parcel_change_contracts import (
+from app.contracts.execute.parcel_change_contracts import (
     FacilityChange,
     ParcelChange,
     ParcelChangeSet,

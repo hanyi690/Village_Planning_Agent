@@ -4,7 +4,7 @@ import hashlib
 import json
 from typing import Any, Dict
 
-from app.infrastructure.context.planning_context_factory import build_planning_context
+from app.infrastructure.context_runtime.manager import build_planning_context
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
@@ -70,7 +70,8 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
     """Attach L1 facts and build the GIS/KG EvidenceGraph once per snapshot."""
     try:
         from app.infrastructure.artifacts.runtime import load_artifact
-        from app.contracts.domain.l1_contracts import L1Snapshot
+        from app.contracts.l1.l1_contracts import L1Snapshot
+        from app.contracts.evidence.identity_contracts import EvidenceObservationSnapshot
 
         snapshot = load_artifact(state, "l1_snapshot", L1Snapshot)
         if snapshot is None:
@@ -85,6 +86,17 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
         context.l1_fact_records = fact_records
         context.location_mentions = facts
         context.location_facts = facts
+
+        observation_snapshot = load_artifact(
+            state,
+            "l1_observations",
+            EvidenceObservationSnapshot,
+        )
+        context.evidence_observations = (
+            list(observation_snapshot.observations)
+            if observation_snapshot is not None
+            else []
+        )
 
         try:
             from app.contracts.evidence.identity_contracts import GroundedEntityBindingSnapshot
@@ -103,7 +115,7 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
         except Exception as exc:
             logger.debug("[bootstrap] persisted L1 bindings unavailable: %s", exc)
 
-        from app.infrastructure.context.planning_context_factory import _load_session_semantic_memory
+        from app.infrastructure.context_runtime.manager import _load_session_semantic_memory
 
         session_id = str(state.get("session_id", "") or "")
         memory = _load_session_semantic_memory(session_id) if session_id else None
@@ -152,14 +164,14 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
         # in-process cache is empty.  The boolean is not proof that the
         # PlanningContext is available; rebuild the same authoritative
         # context instead of allowing downstream stages to receive None.
-        from app.infrastructure.context.planning_context_factory import get_cached_context
+        from app.infrastructure.context_runtime.manager import get_cached_context
         cached = get_cached_context(session_id)
         if cached is not None:
             cached_snapshot_digest = str(
                 getattr(getattr(cached, "data_snapshot", None), "digest", "") or ""
             )
             if expected_snapshot_digest and cached_snapshot_digest != expected_snapshot_digest:
-                from app.infrastructure.context.planning_context_factory import invalidate_planning_context
+                from app.infrastructure.context_runtime.manager import invalidate_planning_context
 
                 invalidate_planning_context(session_id)
                 cached = None
@@ -203,7 +215,7 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
     fingerprint = "sha256:" + content_hash[:16]
 
     try:
-        from app.contracts.domain.l1_contracts import L1Snapshot
+        from app.contracts.l1.l1_contracts import L1Snapshot
 
         l1_snapshot = None
         refs = state.get("artifact_refs") or {}

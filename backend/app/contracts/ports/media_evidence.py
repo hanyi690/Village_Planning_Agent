@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from app.evidence.model import (
+from app.infrastructure.evidence_runtime.model import (
     ImageArtifact,
     ImageEvidence,
     ImageIngestRequest,

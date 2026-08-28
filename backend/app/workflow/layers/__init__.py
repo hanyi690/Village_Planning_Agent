@@ -1,1 +1,1 @@
-"""Layer dispatch substrate migrated from app/agent/bootstrap."""
+"""Layer dispatch substrate for the canonical planning graph."""

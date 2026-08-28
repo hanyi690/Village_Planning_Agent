@@ -124,17 +124,17 @@ def _l3_revision_patch(program: Any, target_ids: list[str]) -> Dict[str, Any] | 
 
 async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Validate the immutable EXECUTE outputs and emit a typed gate + next_action."""
-    from app.domain.validation.validate import validate_aggregate
-    from app.domain.validation.validate_gate import evaluate_validate_gate
-    from app.contracts.workflow.parse_contracts import SpatialPlanningIntent
-    from app.contracts.spatial.planned_state_contracts import PlannedState
-    from app.contracts.spatial.parcel_change_contracts import ParcelChangeSet
-    from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
-    from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, ExecutionResult
-    from app.contracts.planning.scenario import PlanningScenario, ScenarioSet
-    from app.contracts.artifacts.validation_certificate_contracts import ValidationCertificate
-    from app.contracts.spatial.grounding_contracts import GroundingResult
-    from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
+    from app.workflow.validation.validate import validate_aggregate
+    from app.workflow.validation.validate_gate import evaluate_validate_gate
+    from app.contracts.target_projection.parse_contracts import SpatialPlanningIntent
+    from app.contracts.execute.planned_state_contracts import PlannedState
+    from app.contracts.execute.parcel_change_contracts import ParcelChangeSet
+    from app.contracts.target_projection.parse_result_contracts import IntentCompilationResult
+    from app.contracts.execute.execution_plan_contracts import ExecutionPlan, ExecutionResult
+    from app.contracts.select.scenario import PlanningScenario, ScenarioSet
+    from app.contracts.validation.validation_certificate_contracts import ValidationCertificate
+    from app.contracts.ground.grounding_contracts import GroundingResult
+    from app.contracts.ground.grounded_problem import GroundedPlanningProblem
 
     retry_patch = _retry_patch(state, "validate")
     context = await _require_context(state)
@@ -181,12 +181,12 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     )
     final_relation_validation = None
     if scenario is not None and planning_problem is not None:
-        from app.domain.relations.service import RelationEvaluationContext
-        from app.domain.relations.reference_features import (
+        from app.spatial.relations.service import RelationEvaluationContext
+        from app.spatial.relations.reference_features import (
             resolve_relation_reference_features,
         )
-        from app.domain.validation.relation_validation import validate_final_scenario
-        from app.domain.validation.validate_checks import check_relation_validation
+        from app.workflow.validation.relation_validation import validate_final_scenario
+        from app.workflow.validation.validate_checks import check_relation_validation
 
         reference_resolution = resolve_relation_reference_features(
             context,
@@ -231,7 +231,7 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         )
         relation_checks = check_relation_validation(final_relation_validation)
         report.checks.extend(relation_checks)
-        from app.contracts.artifacts.validation_report_contracts import ValidationIssue
+        from app.contracts.validation.validation_report_contracts import ValidationIssue
 
         for check in relation_checks:
             report.issues_by_stage.setdefault(check.responsible_stage, []).append(
@@ -266,9 +266,9 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         input_artifact_refs=input_refs,
         previous_gate=state.get("validate_gate"),
     )
-    from app.contracts.domain.l3_contracts import PlanningProgram
-    from app.domain.validation.repair_directives import compile_validation_report_directives
-    from app.domain.validation.repair_impact import analyze_repair_impact
+    from app.contracts.l3.l3_contracts import PlanningProgram
+    from app.workflow.validation.repair_directives import compile_validation_report_directives
+    from app.workflow.validation.repair_impact import analyze_repair_impact
 
     working_state = dict(state)
     working_state["artifact_refs"] = dict(state.get("artifact_refs") or {})

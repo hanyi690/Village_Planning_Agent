@@ -1,7 +1,7 @@
 # ADR 008: LLM 上下文与结构化调用边界
 
 > Status: ACCEPTED
-> Authority: 本 ADR 规定生产 LLM 调用的上下文与结构化输出边界；检索设计以 `docs/design/02_EVIDENCE_AND_GROUNDING.md` 为准，实施状态以 `docs/design/05_MIGRATION.md` 为准。
+> Authority: 本 ADR 规定生产 LLM 调用的上下文与结构化输出边界；检索设计以 `docs/design/04_EVIDENCE.md` 为准，实施状态以 `docs/design/05_MIGRATION.md` 为准。
 
 ## 1. 决策
 
@@ -17,7 +17,7 @@
 
 模块输出应表达一个稳定的业务边界，而不是复制内部中间态。内部 Pydantic/domain object 可以为后续确定性编译保留丰富字段，但这些字段不自动属于 provider response model。L1 的观察、事实和位置工作项当前仍是兼容实现；目标收敛为语义快照、证据缺口和可追溯引用。任何 LLM 输出都必须经过 envelope/schema 校验、逐项引用校验、逐项确定性归一化和 accepted/rejected accounting 后才能进入下一阶段。
 
-结构化输出保证的是受支持 provider 上的 wire/schema 约束，不证明字段值在领域上正确，也不证明一次调用的职责和失败原子合理。schema retry、item semantic repair 与 workflow retry 必须分别声明和审计；统一 manager 不得静默覆盖调用者的显式 retry policy。
+结构化输出保证的是受支持 provider 上的 wire/schema 约束，不证明字段值在领域上正确，也不证明一次调用的职责和失败原子合理。schema retry、item quarantine 与 workflow retry 必须分别声明和审计；统一 manager 不得静默覆盖调用者的显式 retry policy。L3 的权威 PlanningProgram 聚合不允许再由 LLM 二次改写；需要补正时回到具体维度的 claims 输入或显式 HUMAN 决策边界。
 
 ## 3. 当前状态
 
@@ -29,7 +29,7 @@
 
 ## 5. 相关权威文档
 
-- 检索、证据与 grounding：[`../design/02_EVIDENCE_AND_GROUNDING.md`](../design/02_EVIDENCE_AND_GROUNDING.md)
+- 检索、证据与 grounding：[`../design/04_EVIDENCE.md`](../design/04_EVIDENCE.md)
 - 契约与不变量：[`../design/01_CONTRACTS_AND_INVARIANTS.md`](../design/01_CONTRACTS_AND_INVARIANTS.md)
 - 运行时事实：[`../architecture/CURRENT_RUNTIME.md`](../architecture/CURRENT_RUNTIME.md)
 - 迁移台账：[`../design/05_MIGRATION.md`](../design/05_MIGRATION.md)

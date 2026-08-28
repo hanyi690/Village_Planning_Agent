@@ -37,7 +37,7 @@ Current behavior should distinguish channel-specific degradation rather than col
 
 | Failure | Current expected behavior |
 |---|---|
-| embedding or professional RAG unavailable | continue local text, report, KG, bundle, artifact, and history retrieval where available; expose the missing dense channel honestly |
+| embedding or professional RAG unavailable | continue local text, report, KG, bundle, and current-run artifact retrieval where available; expose the missing dense channel honestly |
 | external search unavailable | keep local/project evidence paths and surface the missing external coverage |
 | KG unavailable | keep bundle- and artifact-backed retrieval where possible; do not invent geometry or identity from names alone |
 | bundle or snapshot unavailable | stop executable grounding rather than deriving geometry from reports |
@@ -45,7 +45,7 @@ Current behavior should distinguish channel-specific degradation rather than col
 | worker failure | abort formal commit and preserve diagnostics |
 | validation failure | route back to the responsible stage or human review instead of mutating the validated result in place |
 
-Current dense-RAG ownership is in [`backend/app/infrastructure/rag/service.py`](../../backend/app/infrastructure/rag/service.py) and [`vector_store.py`](../../backend/app/infrastructure/rag/vector_store.py). Current retrieval fallbacks live under [`backend/app/evidence/retrieval/`](../../backend/app/evidence/retrieval/).
+Current dense-RAG ownership is in [`backend/app/infrastructure/rag/service.py`](../../backend/app/infrastructure/rag/service.py) and [`vector_store.py`](../../backend/app/infrastructure/rag/vector_store.py). Current retrieval execution lives under [`backend/app/infrastructure/evidence_runtime/`](../../backend/app/infrastructure/evidence_runtime/); `backend/app/modules/evidence/` owns only semantic requirements and the public facade.
 
 ## 4. LLM failure handling now worth monitoring
 
@@ -61,16 +61,18 @@ The current worktree keeps those as typed diagnostics and avoids storing raw pro
 
 ## 5. Verification commands used in practice
 
-Quick contract/core verification:
+Quick production import and compile verification:
 
 ```powershell
-python -m pytest backend/tests/contracts backend/tests/core -q
+$env:PYTHONPATH = 'backend'
+python -m compileall -q backend/app
+python -c "from app.modules.l1.application import L1Application; from app.modules.l2.application import L2Application; from app.modules.l3.application import L3Application; print('stage facades import ok')"
 ```
 
-Focused documentation convergence check:
+Focused runtime probe:
 
 ```powershell
-python -m pytest backend/tests/contracts/test_documentation_convergence.py -q
+python scripts/acceptance/l1_facade_probe.py --help
 ```
 
 Patch hygiene:
@@ -79,7 +81,7 @@ Patch hygiene:
 git diff --check
 ```
 
-Passing these checks proves only their own scope. Release-level target acceptance stays defined in [`../design/04_EVALUATION_AND_ACCEPTANCE.md`](../design/04_EVALUATION_AND_ACCEPTANCE.md).
+Passing these checks proves only their own scope. Release-level target acceptance and remaining gaps stay defined in [`../design/05_MIGRATION.md`](../design/05_MIGRATION.md).
 
 ## 6. Operational release reminder
 

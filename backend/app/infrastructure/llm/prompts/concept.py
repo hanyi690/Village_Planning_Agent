@@ -288,22 +288,6 @@ def get_dimension_prompt(dimension_key: str, analysis_report: str = "",
     return formatted
 
 
-def get_specialized_data(dimension_key: str, state: dict) -> dict:
-    """
-    获取专业数据（占位函数）
-    
-    用于 GenericPlanner 的 Hook 接口，可在子类中重写以注入专业脚本生成的数据。
-    
-    Args:
-        dimension_key: 维度键名
-        state: 当前状态字典
-        
-    Returns:
-        专业数据字典
-    """
-    return {}
-
-
 # ==========================================
 # 导出
 # ==========================================
@@ -314,5 +298,4 @@ __all__ = [
     "DEVELOPMENT_GOALS_PROMPT",
     "PLANNING_STRATEGIES_PROMPT",
     "get_dimension_prompt",
-    "get_specialized_data",
 ]

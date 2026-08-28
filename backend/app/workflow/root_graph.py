@@ -15,10 +15,10 @@ from app.workflow.layers.layer_router import (
     revision_dispatch_node,
 )
 from app.application.interrupts import collect_human_review_items
-from app.workflow.stages.target_projection import target_projection_node as _target_projection_stage
-from app.workflow.stages.ground import ground_node as _ground_stage
-from app.workflow.stages.select import select_node as _select_stage
-from app.workflow.stages.execute import execute_node as _execute_stage
+from app.modules.target_projection.application import run_target_projection_stage as _target_projection_stage
+from app.modules.ground.application import run_ground_stage as _ground_stage
+from app.modules.select.application import run_select_stage as _select_stage
+from app.modules.execute.application import run_execute_stage as _execute_stage
 from app.workflow.stages.validate import validate_node as _validate_stage
 from app.workflow.stages.reconcile import reconcile_node as _reconcile_stage
 from app.workflow.stages.deliver import deliver_node as _deliver_stage
@@ -55,6 +55,7 @@ from app.contracts.workflow.human_interrupt_contracts import (
 
 from app.infrastructure.logging import get_logger
 from app.workflow.failure_codes import TRANSIENT_LLM_FAILURE_CODES
+from app.workflow.recovery import schedule_dimension_retry
 logger = get_logger(__name__)
 
 END_DIAGNOSTIC = "end_diagnostic"
@@ -187,7 +188,7 @@ async def _audited_dimension_worker(worker, state: Dict[str, Any]) -> Dict[str, 
     try:
         patch = await asyncio.wait_for(worker(state), timeout=timeout)
     except asyncio.TimeoutError:
-        from app.infrastructure.llm.dimension_runtime import dimension_failure_attempt
+        from app.infrastructure.evidence_runtime.dimension_runtime import dimension_failure_attempt
 
         phase = str(state.get("phase") or "layer1")
         layer = phase.removeprefix("layer") or phase
@@ -197,8 +198,12 @@ async def _audited_dimension_worker(worker, state: Dict[str, Any]) -> Dict[str, 
             phase,
             timeout,
         )
+        retry_counts = dimension_failure_attempt(state, dimension)
         return {
-            "dimension_retry_counts": dimension_failure_attempt(state, dimension),
+            "dimension_retry_counts": retry_counts,
+            "provider_resume_dimensions": schedule_dimension_retry(
+                state, dimension, retry_counts
+            ),
             "provider_failures": [{
                 "stage": f"L{layer}",
                 "dimension": dimension,
@@ -207,7 +212,7 @@ async def _audited_dimension_worker(worker, state: Dict[str, Any]) -> Dict[str, 
             }],
         }
     except (OSError, ConnectionError) as exc:
-        from app.infrastructure.llm.dimension_runtime import (
+        from app.infrastructure.evidence_runtime.dimension_runtime import (
             dimension_failure_attempt,
             trip_provider_failure,
         )
@@ -222,8 +227,12 @@ async def _audited_dimension_worker(worker, state: Dict[str, Any]) -> Dict[str, 
             phase,
             type(exc).__name__,
         )
+        retry_counts = dimension_failure_attempt(state, dimension)
         return {
-            "dimension_retry_counts": dimension_failure_attempt(state, dimension),
+            "dimension_retry_counts": retry_counts,
+            "provider_resume_dimensions": schedule_dimension_retry(
+                state, dimension, retry_counts
+            ),
             "provider_failures": [{
                 "stage": f"L{layer}",
                 "dimension": dimension,
@@ -653,9 +662,9 @@ def _select_execution_artifacts_ready(state: Dict[str, Any]) -> bool:
     ):
         return False
     try:
-        from app.contracts.planning.approval import ApprovedExecutionInput
-        from app.contracts.planning.scenario import PlanningScenario, ScenarioSet
-        from app.contracts.workflow.execution_plan_contracts import ExecutionPlan
+        from app.contracts.select.approval import ApprovedExecutionInput
+        from app.contracts.select.scenario import PlanningScenario, ScenarioSet
+        from app.contracts.execute.execution_plan_contracts import ExecutionPlan
         from app.infrastructure.artifacts.runtime import load_artifact
 
         artifact_state = {**state, "artifact_refs": refs}
@@ -794,20 +803,18 @@ def _diagnostic_manifest_patch(
         return {}
     try:
         from app.infrastructure.artifacts.runtime import load_artifact
-        from app.domain.delivery.aggregate import (
+        from app.workflow.delivery.aggregate import (
             build_traceability_from_coverage,
             mark_manifest_diagnostic,
         )
-        from app.contracts.artifacts.deferral_contracts import DeferralLedger
-        from app.contracts.artifacts.delivery_manifest_contracts import DeliveryManifest
-        from app.contracts.workflow.execution_plan_contracts import ExecutionResult
-        from app.contracts.artifacts.reconciliation_contracts import ReconciliationReport
+        from app.contracts.delivery.deferral_contracts import DeferralLedger
+        from app.contracts.delivery.delivery_manifest_contracts import DeliveryManifest
+        from app.contracts.execute.execution_plan_contracts import ExecutionResult
+        from app.contracts.delivery.reconciliation_contracts import FinalManifest
 
         ledger = load_artifact(state, "deferral_ledger", DeferralLedger)
         outcome = load_artifact(state, "execution_result", ExecutionResult)
-        reconciliation = load_artifact(
-            state, "reconciliation_report", ReconciliationReport
-        )
+        reconciliation = load_artifact(state, "final_manifest", FinalManifest)
         existing = load_artifact(state, "delivery_manifest", DeliveryManifest)
         entries = list(getattr(ledger, "entries", None) or [])
         deferral_summary = {
@@ -1028,9 +1035,57 @@ async def prepare_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
                 "request_id": f"{paused_stage}-provider-failure",
                 "stage": paused_stage,
                 "request_type": "transient_llm_failure",
-                "context": dict(failure),
+                "context": {
+                    **failure,
+                    "producer_input": _producer_input_context(
+                        state,
+                        paused_stage,
+                        str(
+                            failure.get("dimension")
+                            or failure.get("dimension_key")
+                            or ""
+                        ),
+                    ),
+                },
             }]
             gate_patch["fatal_error"] = dict(failure)
+
+    if not items:
+        # Quality failures are already scoped to concrete L1 dimensions.  Keep
+        # that scope at the HUMAN boundary instead of collapsing it into a
+        # generic dependency-deadlock item.  The resume handler can then retry
+        # only the failed producer against the same source digest/index.
+        quality_failures = [
+            item for item in (state.get("dimension_failures") or [])
+            if isinstance(item, dict)
+            and str(item.get("code") or "") == "dimension_quality_failed"
+            and str(item.get("dimension") or item.get("dimension_key") or "").strip()
+        ]
+        if quality_failures:
+            paused_stage = str(state.get("phase") or "layer1")
+            items = [
+                {
+                    "request_id": f"{paused_stage}-quality-{str(item.get('dimension') or item.get('dimension_key')).strip()}",
+                    "stage": paused_stage,
+                    "request_type": "dimension_quality_review",
+                    "context": {
+                        "dimension_key": str(
+                            item.get("dimension") or item.get("dimension_key")
+                        ).strip(),
+                        "missing_dimensions": [
+                            str(item.get("dimension") or item.get("dimension_key")).strip()
+                        ],
+                        "message": str(item.get("message") or "").strip(),
+                        "feedback": str(item.get("feedback") or item.get("message") or "").strip(),
+                        "source_digest": str(item.get("source_digest") or "").strip(),
+                        "source_index_ref": str(item.get("source_index_ref") or "").strip(),
+                        "input_digest": str(item.get("input_digest") or "").strip(),
+                        "quarantine_paths": str(item.get("quarantine_paths") or "").strip(),
+                        "resolution": "retry_same_source_input_only",
+                    },
+                }
+                for item in quality_failures
+            ]
 
     if not items:
         # A layer can reach this branch when dependency scheduling has no
@@ -1184,6 +1239,37 @@ def _revision_feedback(items: List[Dict[str, Any]], supplied: str) -> str:
 _TRANSIENT_PROVIDER_CODES = TRANSIENT_LLM_FAILURE_CODES
 
 
+def _producer_input_context(
+    state: Dict[str, Any],
+    stage: str,
+    dimension_key: str,
+) -> Dict[str, Any]:
+    """Return bounded current input refs for one failed producer."""
+
+    stage_key = str(stage or "").strip().lower()
+    upstream_by_stage = {
+        "l1": ("context_ref", "l1_source_index"),
+        "layer1": ("context_ref", "l1_source_index"),
+        "l2": ("l1_snapshot",),
+        "layer2": ("l1_snapshot",),
+        "l3": ("l1_snapshot", "l2_strategy"),
+        "layer3": ("l1_snapshot", "l2_strategy"),
+    }
+    refs = state.get("artifact_refs") or {}
+    upstream_refs = {
+        key: refs[key]
+        for key in upstream_by_stage.get(stage_key, ())
+        if isinstance(refs, dict) and key in refs
+    }
+    return {
+        "session_id": str(state.get("session_id") or ""),
+        "run_id": str(state.get("run_id") or ""),
+        "dimension_key": str(dimension_key or ""),
+        "context_fingerprint": str(state.get("context_fingerprint") or ""),
+        "upstream_artifact_refs": upstream_refs,
+    }
+
+
 def _provider_failure_dimensions(
     state: Dict[str, Any],
     items: List[Dict[str, Any]],
@@ -1253,7 +1339,7 @@ def _provider_resume_patch(
             "next_stage": "",
             "status": "failed",
         }
-    from app.infrastructure.llm.dimension_runtime import reset_provider_failure
+    from app.infrastructure.evidence_runtime.dimension_runtime import reset_provider_failure
 
     reset_provider_failure(str(state.get("session_id") or ""))
     patch = {
@@ -1348,12 +1434,12 @@ def _quality_resume_patch(
 async def _apply_select_auto_deferral(state: Dict[str, Any]) -> Dict[str, Any]:
     """Record deferral and force a fresh scoped SELECT solve."""
     from app.infrastructure.artifacts.runtime import load_artifact
-    from app.contracts.planning.scenario import PlanningScenario, ScenarioSet
+    from app.contracts.select.scenario import PlanningScenario, ScenarioSet
     from app.contracts.artifacts.ref import ArtifactRef
-    from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
-    from app.contracts.spatial.grounding_contracts import GroundingResult
-    from app.domain.allocation.select_gate import _pending_target_ids
-    from app.domain.common.gate_progress import canonical_input_checksum, stable_artifact_refs
+    from app.contracts.ground.grounded_problem import GroundedPlanningProblem
+    from app.contracts.ground.grounding_contracts import GroundingResult
+    from app.modules.select.select_gate import _pending_target_ids
+    from app.core.common.gate_progress import canonical_input_checksum, stable_artifact_refs
 
     # A partial ScenarioSet has no executable plan.  Derive target scope only
     # from the typed SELECT gate's pending request and send it to scoped
@@ -1595,8 +1681,8 @@ async def _apply_select_auto_deferral(state: Dict[str, Any]) -> Dict[str, Any]:
             }
         }
 
-    from app.contracts.artifacts.deferral_contracts import DeferralLedger
-    from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
+    from app.contracts.delivery.deferral_contracts import DeferralLedger
+    from app.workflow.delivery.deferral_ledger import append_ledger, build_target_deferrals
 
     existing = load_artifact(state, "deferral_ledger", DeferralLedger)
     ledger = append_ledger(
@@ -1651,11 +1737,11 @@ async def _persist_human_select_approval(
     return an empty patch; EXECUTE then fails closed with a typed diagnostic.
     """
 
-    from app.contracts.planning.approval import ApprovedExecutionInput
-    from app.contracts.planning.scenario import PlanningScenario, ScenarioSet
-    from app.contracts.workflow.execution_plan_contracts import ExecutionPlan
-    from app.domain.allocation.approval_input import build_approved_execution_input
-    from app.domain.materialization.approved_plan_builder import bind_approved_execution_plan
+    from app.contracts.select.approval import ApprovedExecutionInput
+    from app.contracts.select.scenario import PlanningScenario, ScenarioSet
+    from app.contracts.execute.execution_plan_contracts import ExecutionPlan
+    from app.modules.select.approval_input import build_approved_execution_input
+    from app.modules.execute.approved_plan_builder import bind_approved_execution_plan
     from app.infrastructure.artifacts.runtime import load_artifact
 
     refs = {
@@ -1818,7 +1904,7 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         None,
     )
     if typed_record is not None or current_payload is not None:
-        from app.contracts.planning.p1_closure import (
+        from app.contracts.target_projection.p1_closure import (
             DecisionFingerprint,
             HumanDecisionRecord,
         )
@@ -1956,7 +2042,7 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
             result["provider_resume_dimensions"] = rework_dimensions
             # Carry the exact validator errors as corrective feedback so the
             # retried dimension is re-prompted with them instead of repeating
-            # the same bad output (semantic repair exhausted on the first run).
+            # the same invalid output after the first bounded L3 provider call.
             feedback_parts = []
             for item in items:
                 if not isinstance(item, dict) or str(item.get("request_type") or "") != "program_rework":
@@ -2426,9 +2512,9 @@ async def _apply_classification_revision(
     decisions: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Persist an explicit classification revision and restart spatial stages."""
-    from app.domain.program.classification import revise_program_with_decisions
+    from app.modules.l3.classification import revise_program_with_decisions
     from app.infrastructure.artifacts.runtime import load_artifact
-    from app.contracts.domain.l3_contracts import PlanningProgram
+    from app.contracts.l3.l3_contracts import PlanningProgram
 
     raw = decisions.get("classification_decisions")
     program = load_artifact(state, "planning_program", PlanningProgram)
@@ -2477,10 +2563,10 @@ async def _apply_structural_target_deferrals(
     stage: str,
 ) -> Dict[str, Any]:
     """Persist target deferrals and require a fresh scoped planning run."""
-    from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
+    from app.workflow.delivery.deferral_ledger import append_ledger, build_target_deferrals
     from app.infrastructure.artifacts.runtime import load_artifact
-    from app.contracts.artifacts.deferral_contracts import DeferralLedger
-    from app.contracts.workflow.execution_plan_contracts import (
+    from app.contracts.delivery.deferral_contracts import DeferralLedger
+    from app.contracts.execute.execution_plan_contracts import (
         ExecutionResult,
         ExecutionPlan,
     )
@@ -2523,7 +2609,7 @@ async def _apply_structural_target_deferrals(
 
     review_id = str(state.get("human_review_event_id") or "human-review")
     refs = state.get("artifact_refs") or {}
-    report_key = "validation_report" if stage == "validate" else "reconciliation_report"
+    report_key = "validation_report" if stage == "validate" else "final_manifest"
     source_refs = tuple(
         f"artifact:{key}:{(refs.get(key) or {}).get('descriptor_digest', key)}"
         for key in ("execution_result", report_key)
@@ -2598,10 +2684,10 @@ async def _record_target_deferrals(
     target_ids: list[str],
 ) -> Dict[str, Any]:
     """Persist an immutable ledger only for explicitly unresolved targets."""
-    from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
+    from app.workflow.delivery.deferral_ledger import append_ledger, build_target_deferrals
     from app.infrastructure.artifacts.runtime import load_artifact
-    from app.contracts.artifacts.deferral_contracts import DeferralLedger
-    from app.contracts.spatial.grounding_contracts import GroundingResult
+    from app.contracts.delivery.deferral_contracts import DeferralLedger
+    from app.contracts.ground.grounding_contracts import GroundingResult
 
     grounding = load_artifact(state, "grounding_result", GroundingResult)
     if grounding is None:
@@ -2705,12 +2791,12 @@ async def _record_select_target_deferrals(
     target_ids: list[str],
 ) -> Dict[str, Any]:
     """Record explicit SELECT-level deferrals in the immutable ledger."""
-    from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
+    from app.workflow.delivery.deferral_ledger import append_ledger, build_target_deferrals
     from app.infrastructure.artifacts.runtime import load_artifact
-    from app.contracts.artifacts.deferral_contracts import DeferralLedger
-    from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
-    from app.contracts.planning.solver import SolverSubproblemPlan
-    from app.domain.allocation.select_gate import _pending_target_ids
+    from app.contracts.delivery.deferral_contracts import DeferralLedger
+    from app.contracts.ground.grounded_problem import GroundedPlanningProblem
+    from app.contracts.select.solver import SolverSubproblemPlan
+    from app.modules.select.select_gate import _pending_target_ids
 
     try:
         gate = _root_gate_payload(state, "select")

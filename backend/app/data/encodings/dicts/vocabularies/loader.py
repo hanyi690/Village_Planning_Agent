@@ -11,7 +11,7 @@ _REGISTERED: dict = {}
 
 @lru_cache(maxsize=None)
 def load_vocabulary(name: str):
-    from app.contracts.domain.custom_zone_contracts import Vocabulary
+    from app.contracts.execute.custom_zone_contracts import Vocabulary
 
     p = _VOCAB_DIR / f"{name}.yaml"
     if not p.exists():

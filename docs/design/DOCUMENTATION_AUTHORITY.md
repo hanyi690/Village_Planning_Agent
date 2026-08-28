@@ -10,7 +10,7 @@ This file resolves documentation conflicts before any rewrite or cleanup work. W
 | Scope | Canonical owner | Role |
 |---|---|---|
 | Documentation governance | `design/DOCUMENTATION_AUTHORITY.md` | Defines which documents are authoritative, supporting, historical, or cleanup-only. |
-| Cleanup and retention decisions | `design/DOCUMENT_CLEANUP_MANIFEST.md` | Exact path inventory for `KEEP` / `UPDATE` / `ARCHIVE` / `DELETE-CANDIDATE`. |
+| Cleanup record | `design/DOCUMENT_CLEANUP_MANIFEST.md` | Exact record of removed legacy, historical, and generated material; it is not a runtime input. |
 | Overall target architecture and efficiency principles | `design/00_SYSTEM_DESIGN.md` | Target architecture, main chain, efficiency principles, and completion framing. |
 | L1 fact construction | `design/01_CONTRACTS_AND_INVARIANTS.md` | L1 facts, source lineage, fact types, and structured-output boundaries. |
 | L2 planning cognition | `design/02_PLANNING_COGNITION.md` | Problems, objectives, demand, suitability, strategy, and L2 output. |
@@ -31,8 +31,7 @@ This file resolves documentation conflicts before any rewrite or cleanup work. W
 | `docs/contracts/` | KEEP | Generated or contract-adjacent artifacts; field-level external contract, not narrative design authority. |
 | `docs/reference/` | KEEP | Stable lookup material such as terminology, bibliography, and domain field references. |
 | `docs/guides/` and `docs/frontend/` | KEEP | Task-oriented guides and developer onboarding, not normative design. |
-| `docs/reports-weekly/` | ARCHIVE after verification | Historical run evidence and weekly snapshots; useful provenance, not current design. |
-| `docs/superpowers/` | KEEP for active work, otherwise ARCHIVE | Planning prompts, execution reports, and temporary convergence artifacts. They support traceability but do not define the current architecture. |
+| Historical execution material | DELETED | Old plans, reports, snapshots, and session context were removed because they are not current design or runtime input. |
 | Top-level source/reference markdown in `docs/` | KEEP | Domain input or imported source material, not system-design authority. |
 
 ## Operating rules
@@ -40,7 +39,7 @@ This file resolves documentation conflicts before any rewrite or cleanup work. W
 1. `docs/design/00` through `docs/design/06` are the only target-design authority set; their primary reading order is the business flow.
 2. `docs/architecture/` documents only observed current behavior. Target claims do not belong there.
 3. `docs/design/05_MIGRATION.md` is the only migration/status ledger between target and current implementation.
-4. `docs/superpowers/`, `docs/reports-weekly/`, and future `docs/_archive/` entries are historical or process evidence only. Active navigation may link to them only as historical context.
+4. Historical plans, reports, archive directories, and generated audit snapshots are deleted; they are never workflow inputs.
 5. Pydantic contracts, generated OpenAPI, and repeatable tests remain the field-level authority. Design docs describe ownership, boundaries, and invariants instead of duplicating full schema tables.
 6. Retired design paths that no longer exist in the active tree stay out of active navigation; if they must be mentioned for cleanup work, the mention belongs in the cleanup manifest and task reports only.
 
@@ -48,11 +47,10 @@ This file resolves documentation conflicts before any rewrite or cleanup work. W
 
 - `KEEP`: the canonical design set, current architecture set, accepted ADRs, generated contracts, stable reference docs, and source-domain materials.
 - `UPDATE`: `docs/README.md`, `docs/design/README.md`, and `docs/architecture/README.md` because they must point to this authority map and stop implying that historical plans are part of the active design surface.
-- `ARCHIVE`: completed `docs/superpowers` plans/reports and `docs/reports-weekly` snapshots once later cleanup tasks create the archive index.
-- `DELETE-CANDIDATE`: low-value execution briefs and already-absent legacy design paths that survive only as historical names in plans, reports, or guardrail tests.
+- `DELETED`: legacy implementation paths, old test surfaces, historical execution material, and generated audit/runtime residue listed in `DOCUMENT_CLEANUP_MANIFEST.md`.
 
 ## Historical notes that matter now
 
 - The current repository no longer has a second active design tree under `docs/design/modules/`; surviving mentions are historical only.
 - Earlier status-ledger design pages were replaced by the current split between `architecture/CURRENT_RUNTIME.md` and `design/05_MIGRATION.md`.
-- Older superpowers plans remain useful as execution provenance, but they must not appear in navigation as if they were the current design.
+- Older plans and session material are not retained; current design and actual fresh-run evidence are the only sources for implementation decisions.

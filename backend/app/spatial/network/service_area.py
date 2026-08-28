@@ -7,8 +7,8 @@ from typing import Literal
 
 from shapely import wkt
 
-from app.contracts.planning.relation_parameters import ServiceParameters
-from app.domain.demand.facility_demand_model import DemandSnapshot, FacilityDemandPoint
+from app.contracts.ground.relation_parameters import ServiceParameters
+from app.modules.l2.facility_demand_model import DemandSnapshot, FacilityDemandPoint
 
 from .network_graph import NetworkGraphSnapshot
 
