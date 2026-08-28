@@ -649,6 +649,10 @@ async def run_l1_dimension_loop(
             dimension_key=dimension_key,
         )
     )
+    page_failures = any(
+        str(value).startswith("l1_observe_page_failed:")
+        for value in diagnostics
+    )
 
     if cursor.status == "complete" and report_body:
         output = _build_l1_output(
@@ -820,6 +824,7 @@ async def run_l1_dimension_loop(
 
                 code = structured_failure_code(exc) or type(exc).__name__
                 summary = structured_failure_summary(exc)
+                page_failures = True
                 diagnostics.append(
                     f"l1_observe_page_failed:{page_index}:{code}:{summary[:240]}"
                 )
@@ -919,7 +924,7 @@ async def run_l1_dimension_loop(
             if page_complete:
                 break
 
-    final_status = "complete"
+    final_status = "diagnostic" if page_failures else "complete"
     if not report_body:
         report_body = _deterministic_report_body(dimension_key, observations)
         diagnostics.append("l1_report_assembled_from_validated_observations")
