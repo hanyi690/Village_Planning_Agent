@@ -11,6 +11,7 @@ were indexed. The graph does not own geometry and does not copy report text.
 from __future__ import annotations
 
 import hashlib
+import math
 from collections import OrderedDict
 from copy import copy, deepcopy
 from typing import Any
@@ -214,11 +215,21 @@ def _typed_l1_feature_context(
             if _fold_query(name)
         }:
             continue
-        role = normalize_spatial_role(
-            getattr(fact, "role", "")
-            or getattr(fact, "observed_type", "")
-            or getattr(fact, "semantic_type", "")
-        )
+        attributes = getattr(fact, "attributes", None) or {}
+        if not isinstance(attributes, dict):
+            attributes = {}
+        role = "unknown"
+        for value in (
+            getattr(fact, "role", ""),
+            getattr(fact, "observed_type", ""),
+            getattr(fact, "semantic_type", ""),
+            getattr(fact, "instance_label", ""),
+            attributes.get("entity_type", ""),
+        ):
+            candidate_role = normalize_spatial_role(value)
+            if candidate_role not in {"unknown", "subject", "target", "entity"}:
+                role = candidate_role
+                break
         scope_names = [
             _scope_value(scope, "normalized_name") or _scope_value(scope, "name")
             for scope in _scope_mentions_for_fact(fact)
@@ -452,6 +463,95 @@ def _query_direction(query: str, spatial_spec: Any = None) -> str:
         if any(_fold_query(term) in folded for term in terms):
             return direction
     return ""
+
+
+def _line_orientation_hint(value: Any) -> str:
+    """Read a line-orientation qualifier without treating it as an area."""
+
+    folded = _fold_query(value)
+    if not folded:
+        return ""
+    if any(token in folded for token in ("东西向", "东西方向", "east-west", "eastwest", "e-w")):
+        return "east_west"
+    if any(token in folded for token in ("南北向", "南北方向", "north-south", "northsouth", "n-s")):
+        return "north_south"
+    if any(token in folded for token in ("东北西南向", "东北-西南", "northeast-southwest", "ne-sw")):
+        return "northeast_southwest"
+    if any(token in folded for token in ("西北东南向", "西北-东南", "northwest-southeast", "nw-se")):
+        return "northwest_southeast"
+    return ""
+
+
+def _bundle_line_geometry(context: Any, candidate: Any) -> Any:
+    workspace = getattr(context, "workspace", None)
+    lines = getattr(workspace, "lines", None) if workspace is not None else None
+    if not hasattr(lines, "get"):
+        return None
+    bsm = str(
+        getattr(candidate, "feature_bsm", "")
+        or getattr(candidate, "source_bsm", "")
+        or ""
+    ).strip()
+    if not bsm:
+        return None
+    try:
+        from shapely.geometry import shape
+    except Exception:
+        return None
+    for layer_name in ("roads_current", "current_road", "transport"):
+        for feature in list(lines.get(layer_name) or []):
+            if str(getattr(feature, "bsm", "") or "").strip() != bsm:
+                continue
+            raw_geometry = getattr(feature, "geometry", None)
+            try:
+                geometry = shape(raw_geometry) if isinstance(raw_geometry, dict) else raw_geometry
+            except Exception:
+                return None
+            if geometry is not None and not geometry.is_empty:
+                return geometry
+    return None
+
+
+def _line_orientation(geometry: Any) -> float | None:
+    """Return the absolute bearing from east in degrees for a source line."""
+
+    if geometry is None:
+        return None
+    parts = []
+    if getattr(geometry, "geom_type", "") == "LineString":
+        parts = [geometry]
+    elif getattr(geometry, "geom_type", "") == "MultiLineString":
+        parts = list(getattr(geometry, "geoms", ()) or ())
+    if not parts:
+        return None
+    line = max(parts, key=lambda value: float(getattr(value, "length", 0.0) or 0.0))
+    coordinates = list(getattr(line, "coords", ()) or ())
+    if len(coordinates) < 2:
+        return None
+    start = coordinates[0]
+    end = coordinates[-1]
+    dx = float(end[0]) - float(start[0])
+    dy = float(end[1]) - float(start[1])
+    if dx == 0.0 and dy == 0.0:
+        return None
+    mid_lat = (float(start[1]) + float(end[1])) / 2.0
+    adjusted_dx = dx * max(0.01, math.cos(math.radians(mid_lat)))
+    return abs(math.degrees(math.atan2(dy, adjusted_dx))) % 180.0
+
+
+def _orientation_matches(angle: float | None, orientation: str) -> bool:
+    if angle is None:
+        return False
+    tolerance = 15.0
+    if orientation == "east_west":
+        return angle <= tolerance or angle >= 180.0 - tolerance
+    if orientation == "north_south":
+        return abs(angle - 90.0) <= tolerance
+    if orientation == "northeast_southwest":
+        return abs(angle - 45.0) <= tolerance
+    if orientation == "northwest_southeast":
+        return abs(angle - 135.0) <= tolerance
+    return False
 
 
 def _scope_centroid(
@@ -1824,7 +1924,7 @@ class EvidenceGraph:
             mention,
         )
         effective_role = normalize_spatial_role(role or "unknown")
-        if effective_role == "unknown" and typed_role != "unknown":
+        if effective_role in {"unknown", "subject", "target", "entity"} and typed_role != "unknown":
             effective_role = typed_role
         typed_scope_trace: dict[str, Any] | None = None
         result = None
@@ -1915,6 +2015,73 @@ class EvidenceGraph:
                 role=effective_role,
                 hints=hints,
             )
+        if (
+            not getattr(result, "candidates", None)
+            and effective_role in {"road", "water"}
+            and callable(getattr(self._index, "query_role_candidates", None))
+        ):
+            role_result = self._index.query_role_candidates(
+                effective_role,
+                max_candidates=_MAX_RECALL_CANDIDATES,
+            )
+            if role_result.candidates:
+                role_trace = list(getattr(role_result, "query_trace", []) or [])
+                role_trace.insert(0, {
+                    "step": "name_missing_role_recall",
+                    "mention": mention,
+                    "role": effective_role,
+                    "reason": "current source has no matching semantic name",
+                })
+                result = role_result.model_copy(update={
+                    "mention": mention,
+                    "normalized_name": str(mention or "").strip(),
+                    "query_trace": role_trace,
+                    "unresolved_reason": (
+                        "named place is not present in current source; role domain requires selection"
+                    ),
+                })
+                line_orientation = _line_orientation_hint(hints)
+                if effective_role == "road" and line_orientation:
+                    measured = [
+                        (candidate, _line_orientation(
+                            _bundle_line_geometry(self.context, candidate)
+                        ))
+                        for candidate in role_result.candidates
+                    ]
+                    measured_values = [
+                        (candidate, angle)
+                        for candidate, angle in measured
+                        if angle is not None
+                    ]
+                    matching = [
+                        candidate
+                        for candidate, angle in measured_values
+                        if _orientation_matches(angle, line_orientation)
+                    ]
+                    orientation_trace = {
+                        "step": "line_orientation_filter",
+                        "orientation": line_orientation,
+                        "candidate_count_before": len(role_result.candidates),
+                        "geometry_count": len(measured_values),
+                        "candidate_count_after": len(matching),
+                        "tolerance_degrees": 15.0,
+                    }
+                    role_trace.append(orientation_trace)
+                    if matching:
+                        result = result.model_copy(update={
+                            "candidates": matching,
+                            "status": "ambiguous",
+                            "selected_entity_ref": None,
+                            "evidence_refs": [candidate.entity_ref for candidate in matching],
+                            "unresolved_reason": (
+                                "line orientation narrowed the source domain; named road identity remains unproven"
+                            ),
+                            "query_trace": role_trace,
+                        })
+                    else:
+                        result = result.model_copy(update={"query_trace": role_trace})
+                else:
+                    result = result.model_copy(update={"query_trace": role_trace})
         trace = list(getattr(result, "query_trace", []) or [])
         bundle_digest = str(
             getattr(getattr(self.context, "data_snapshot", None), "digest", "") or ""

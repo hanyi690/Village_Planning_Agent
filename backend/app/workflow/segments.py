@@ -255,7 +255,7 @@ def _remap_command(command: Command, internal_nodes: frozenset[str]) -> Command:
 
 
 def _build_intent_loop(checkpointer) -> StateGraph:
-    from app.workflow import root_graph as rg
+    from app.workflow import graph as rg
     from app.workflow.conversation import after_conversation, conversation_node
 
     builder = StateGraph(rg.WorkflowState)
@@ -294,7 +294,7 @@ def _build_intent_loop(checkpointer) -> StateGraph:
 
 
 def _build_cognitive(checkpointer) -> StateGraph:
-    from app.workflow import root_graph as rg
+    from app.workflow import graph as rg
     from app.workflow.layers.layer_router import _worker_for_phase
     from app.workflow.plan_state.completion_node import layer_completion_check
     from app.workflow.layers.layer_aggregate_node import layer_aggregate_node
@@ -426,7 +426,7 @@ def _build_cognitive(checkpointer) -> StateGraph:
 
 
 def _build_spatial_chain(checkpointer) -> StateGraph:
-    from app.workflow import root_graph as rg
+    from app.workflow import graph as rg
 
     builder = StateGraph(rg.WorkflowState)
 
@@ -474,7 +474,7 @@ def _build_spatial_chain(checkpointer) -> StateGraph:
 
 
 def _build_hitl(checkpointer) -> StateGraph:
-    from app.workflow import root_graph as rg
+    from app.workflow import graph as rg
 
     builder = StateGraph(rg.WorkflowState)
     builder.add_node("human_review_prepare", rg.adapt_node(rg.prepare_human_review))

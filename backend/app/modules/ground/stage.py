@@ -812,7 +812,10 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     ground_iterations: list[dict[str, Any]] = []
     if grounding_specs:
         from app.core.llm_config import get_llm_settings
-        from app.modules.ground.reasoning import reason_ground_candidates
+        from app.modules.ground.reasoning import (
+            prioritize_ground_targets,
+            reason_ground_candidates,
+        )
 
         max_rounds = max(
             1,
@@ -848,9 +851,34 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 evidence_packets,
                 round_packets,
             )
+            priority_advice = await prioritize_ground_targets(
+                active_specs,
+                round_packets,
+                budget=ground_llm_budget,
+                round_index=round_index + 1,
+            )
+            priority_order = {
+                target_id: index
+                for index, target_id in enumerate(
+                    priority_advice.get("ordered_target_ids", [])
+                )
+            }
+            original_order = {
+                id(spec): index for index, spec in enumerate(grounding_specs)
+            }
+            ordered_specs = sorted(
+                grounding_specs,
+                key=lambda spec: (
+                    priority_order.get(
+                        str(getattr(spec, "target_id", "") or "").strip(),
+                        len(priority_order) + 1,
+                    ),
+                    original_order.get(id(spec), len(grounding_specs)),
+                ),
+            )
             packet_diagnostics.extend(round_diagnostics)
             result = ground_aggregate(
-                grounding_specs,
+                ordered_specs,
                 context,
                 intent_graph=intent_graph,
                 target_metadata=target_metadata,
@@ -898,6 +926,17 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     for packet in round_packets.values()
                 ),
                 "llm_decision_count": len(ground_reasoning),
+                "llm_priority_count": len(priority_advice.get("decisions", {})),
+                "llm_priority": {
+                    target_id: {
+                        "priority": str(decision.get("priority", "low") or "low"),
+                        "reason": str(decision.get("reason", "") or ""),
+                        "input_digest": str(decision.get("input_digest", "") or ""),
+                    }
+                    for target_id, decision in sorted(
+                        priority_advice.get("decisions", {}).items()
+                    )
+                },
                 "llm_decisions": {
                     target_id: {
                         "status": str(decision.get("status", "") or ""),
@@ -951,6 +990,8 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     "packet_target_count": int(item.get("packet_target_count", 0) or 0),
                     "packet_candidate_count": int(item.get("packet_candidate_count", 0) or 0),
                     "llm_decision_count": int(item.get("llm_decision_count", 0) or 0),
+                    "llm_priority_count": int(item.get("llm_priority_count", 0) or 0),
+                    "llm_priority": dict(item.get("llm_priority", {}) or {}),
                     "llm_decisions": dict(item.get("llm_decisions", {}) or {}),
                     "target_statuses": dict(item.get("target_statuses", {}) or {}),
                     "became_resolvable_target_ids": list(

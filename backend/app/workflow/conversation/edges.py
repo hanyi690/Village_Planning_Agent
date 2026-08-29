@@ -266,9 +266,26 @@ _TRANSIENT_LLM_CODES = TRANSIENT_LLM_FAILURE_CODES
 
 def _terminal_failure_route(state: Dict[str, Any]) -> Optional[str]:
     """Provider 瞬态失败进入 HUMAN 断点，其余终止失败停止派发。"""
+    provider_failures = state.get("provider_failures") or []
+    quality_failures = [
+        item for item in (state.get("dimension_failures") or [])
+        if isinstance(item, dict)
+        and str(item.get("code") or "") == "dimension_quality_failed"
+    ]
+    # A quality report can contain quarantined fields while still providing a
+    # usable partial artifact.  It is a diagnostic/retry signal, not a
+    # terminal workflow failure.  Do not suppress a genuine fatal/provider
+    # failure that happens to coexist with it.
+    if (
+        quality_failures
+        and not state.get("fatal_error")
+        and not provider_failures
+        and len(quality_failures) == len(state.get("dimension_failures") or [])
+    ):
+        return None
     fatal_error = state.get("fatal_error")
     if not isinstance(fatal_error, dict):
-        failures = state.get("provider_failures") or []
+        failures = provider_failures
         if failures and isinstance(failures[0], dict):
             fatal_error = failures[0]
     if not fatal_error:

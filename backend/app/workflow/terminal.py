@@ -6,7 +6,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.workflow.dispatch import DispatchDiagnostic
+from app.workflow.routing.dispatch import DispatchDiagnostic
 
 
 class TerminalStatus(StrEnum):

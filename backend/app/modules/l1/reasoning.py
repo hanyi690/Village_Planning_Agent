@@ -258,10 +258,20 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # 6. 组装 Prompt
     if dim_layer == 1 and l1_input_context is not None:
-        prompt = json.dumps(
-            {"l1_input_context": l1_input_context.model_dump(mode="json")},
-            ensure_ascii=False,
-            sort_keys=True,
+        from app.infrastructure.context_runtime import build_bounded_table
+
+        _, input_context_table = build_bounded_table(
+            ("field", "value"),
+            [
+                {"field": key, "value": value}
+                for key, value in l1_input_context.model_dump(mode="python").items()
+            ],
+            max_rows=32,
+            max_chars=5000,
+        )
+        prompt = (
+            f"【L1DimensionInput context table; dimension_key={dim_key}】\n"
+            + input_context_table
         )
     else:
         prompt = _build_prompt(
@@ -330,39 +340,10 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             from app.modules.l1.context import run_l1_dimension_loop
 
             resume_payload: dict[str, Any] = {}
-            targeted_quality_retry = bool(
-                str(state.get("provider_resume_dimension") or "").strip() == dim_key
-            )
-            if not is_revision and session_id and not targeted_quality_retry:
-                try:
-                    from app.infrastructure.reports.step_report import get_session_step_reports
-
-                    prior_steps = await get_session_step_reports(
-                        session_id,
-                        stage="L1",
-                        dimension_key=dim_key,
-                    )
-                    for prior in reversed(prior_steps):
-                        outputs = prior.get("outputs") or {}
-                        cursor = outputs.get("l1_pass_cursor") or outputs.get("cursor")
-                        if not isinstance(cursor, dict):
-                            continue
-                        if source_index is not None and str(
-                            cursor.get("source_digest") or ""
-                        ) != str(source_index.source_digest or ""):
-                            continue
-                        if outputs.get("l1_pass_payload"):
-                            resume_payload = dict(outputs["l1_pass_payload"])
-                        else:
-                            resume_payload = {
-                                "report_body": outputs.get("report_body", ""),
-                                "observations": outputs.get("observations", []),
-                                "diagnostics": outputs.get("l1_diagnostics", []),
-                                "cursor": cursor,
-                            }
-                        break
-                except Exception as exc:  # resume is best-effort and observable
-                    _log_bounded_runtime_warning(dim_key, "L1_PASS_RESUME_LOAD_FAILED", exc)
+            # A new invocation starts from the current frozen source/context.
+            # Resumption is allowed only through the explicit checkpoint payload
+            # already present in this state; prior step/history rows are audit
+            # records and must never become semantic LLM input.
 
             async def _write_l1_cursor(payload: dict[str, Any]) -> None:
                 await save_step_report(
@@ -577,6 +558,12 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     if quality_report.get("ok", True):
         result["completed_dimensions"] = {phase_key: [dim_key]}
     else:
+        # Quality failure is a degraded producer result, not an absent
+        # producer result.  The report and quarantine diagnostics are already
+        # durable, so downstream layers may continue with an explicit gap.
+        # Keep the failure for audit/retry, but do not make the whole layer
+        # wait forever for a dimension whose bounded retry has been consumed.
+        result["completed_dimensions"] = {phase_key: [dim_key]}
         result["dimension_retry_counts"] = dimension_failure_attempt(state, dim_key)
         quarantine_feedback = "；".join(
             str(item).strip()

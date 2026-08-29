@@ -34,7 +34,6 @@ def _spatial_hydration_key(
     state: Dict[str, Any],
     context: Any,
     facts: list[Any],
-    memory: Any,
 ) -> str:
     snapshot = getattr(context, "data_snapshot", None)
     payload = {
@@ -43,7 +42,6 @@ def _spatial_hydration_key(
         "snapshot_digest": getattr(snapshot, "digest", ""),
         "l1_snapshot_ref": _jsonable((state.get("artifact_refs") or {}).get("l1_snapshot")),
         "facts": _jsonable(facts),
-        "memory": _jsonable(memory),
     }
     canonical = json.dumps(
         payload,
@@ -115,15 +113,10 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
         except Exception as exc:
             logger.debug("[bootstrap] persisted L1 bindings unavailable: %s", exc)
 
-        from app.infrastructure.context_runtime.manager import _load_session_semantic_memory
-
-        session_id = str(state.get("session_id", "") or "")
-        memory = _load_session_semantic_memory(session_id) if session_id else None
         hydration_key = _spatial_hydration_key(
             state,
             context,
             [*facts, *fact_records],
-            memory,
         )
         if (
             getattr(context, "evidence_graph", None) is not None

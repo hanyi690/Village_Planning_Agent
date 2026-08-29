@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 
 from app.contracts.l1.l1_contracts import L1SourceIndex, L1SourceSegment
+from app.infrastructure.context_runtime.table_renderer import build_bounded_table
 
 
 _L1_FACT_SOURCE_KEYS = frozenset({"village_data", "upload"})
@@ -142,27 +143,28 @@ def render_l1_source_index(
 
     if index is None:
         return "source_index=unavailable"
-    lines = [
-        f"source_digest={index.source_digest}",
-        "segment_id | source_ref | lines | section_path | text",
+    rows = [
+        {
+            "segment_id": segment.segment_id,
+            "source_ref": segment.source_ref,
+            "lines": f"{segment.start_line}-{segment.end_line}",
+            "section_path": segment.section_path,
+            "text": segment.text[:1800],
+        }
+        for segment in index.source_segments
     ]
-    for segment in index.source_segments[:max_rows]:
-        lines.append(
-            " | ".join(
-                [
-                    segment.segment_id,
-                    segment.source_ref,
-                    f"{segment.start_line}-{segment.end_line}",
-                    "/".join(segment.section_path),
-                    segment.text.replace("\n", " ")[:1800],
-                ]
-            )
+    _, table = build_bounded_table(
+        ("segment_id", "source_ref", "lines", "section_path", "text"),
+        rows,
+        max_rows=max_rows,
+        max_chars=max(6200, max_rows * 1800),
+    )
+    truncation = ""
+    if len(rows) > max_rows:
+        truncation = (
+            f"\nsource_index_truncated=true; total_segments={len(rows)}"
         )
-    if len(index.source_segments) > max_rows:
-        lines.append(
-            f"source_index_truncated=true; total_segments={len(index.source_segments)}"
-        )
-    return "\n".join(lines)
+    return f"source_digest={index.source_digest}\n{table}{truncation}"
 
 
 __all__ = ["build_l1_source_index", "render_l1_source_index"]

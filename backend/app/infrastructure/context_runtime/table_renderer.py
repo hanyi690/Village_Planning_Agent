@@ -55,16 +55,3 @@ def build_bounded_table(
     return bounded_rows, render_table(columns, bounded_rows)
 
 __all__ = ["build_bounded_table", "render_table", "table_cell"]
-
-
-def render_dependency_table(rows: Iterable[Mapping[str, Any]]) -> str:
-    """Render the dependency projection used by L1/L2/L3 consumers."""
-
-    return render_table(
-        ("dimension_key", "layer", "version", "report_id",
-         "instruction_status", "summary", "instruction"),
-        rows,
-    )
-
-
-__all__.append("render_dependency_table")

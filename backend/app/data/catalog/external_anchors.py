@@ -451,7 +451,7 @@ class ExternalAnchorPipeline:
         return feats
 
     def _from_amap(self, bbox, natural_village_names: List[str] = None) -> List[ExternalFeature]:
-        """AMap POI → ExternalFeature (GCJ02)."""
+        """AMap POI → ExternalFeature with provider coordinates normalized to WGS84."""
         from app.data.ingestion.providers.amap.provider import AmapProvider
         from app.core.settings import AMAP_API_KEY, AMAP_EXTERNAL_ANCHOR_ENABLED
 
@@ -483,11 +483,14 @@ class ExternalAnchorPipeline:
                 feats.append(ExternalFeature(
                     name=name, name_norm=normalize_name(name),
                     lon=p.get("lon", 0), lat=p.get("lat", 0),
-                    coord_system="gcj02",
+                    coord_system="wgs84",
                     category=cat, source="amap_poi", raw=p,
                     provenance={
                         "address": p.get("address", ""),
                         "typecode": tc,
+                        "coordinate_contract": "provider parsed GCJ-02 once to WGS84",
+                        "lon_gcj02": p.get("lon_gcj02"),
+                        "lat_gcj02": p.get("lat_gcj02"),
                     },
                 ))
 
@@ -504,10 +507,15 @@ class ExternalAnchorPipeline:
                 feats.append(ExternalFeature(
                     name=name, name_norm=norm,
                     lon=p.get("lon", 0), lat=p.get("lat", 0),
-                    coord_system="gcj02",
+                    coord_system="wgs84",
                     category=FeatureCategory.VILLAGE_COMMITTEE,
                     source="amap_poi", raw=p,
-                    provenance={"address": p.get("address", "")},
+                    provenance={
+                        "address": p.get("address", ""),
+                        "coordinate_contract": "provider parsed GCJ-02 once to WGS84",
+                        "lon_gcj02": p.get("lon_gcj02"),
+                        "lat_gcj02": p.get("lat_gcj02"),
+                    },
                 ))
 
         # C. 道路交叉口名 (typecode 190000)
@@ -521,9 +529,14 @@ class ExternalAnchorPipeline:
                     feats.append(ExternalFeature(
                         name=name, name_norm=normalize_name(name),
                         lon=p.get("lon", 0), lat=p.get("lat", 0),
-                        coord_system="gcj02",
+                        coord_system="wgs84",
                         category=FeatureCategory.ROAD_NAMED,
                         source="amap_poi", raw=p,
+                        provenance={
+                            "coordinate_contract": "provider parsed GCJ-02 once to WGS84",
+                            "lon_gcj02": p.get("lon_gcj02"),
+                            "lat_gcj02": p.get("lat_gcj02"),
+                        },
                     ))
         except Exception:
             pass
@@ -539,9 +552,14 @@ class ExternalAnchorPipeline:
                     feats.append(ExternalFeature(
                         name=name, name_norm=normalize_name(name),
                         lon=p.get("lon", 0), lat=p.get("lat", 0),
-                        coord_system="gcj02",
+                        coord_system="wgs84",
                         category=FeatureCategory.WATER_NAMED,
                         source="amap_poi", raw=p,
+                        provenance={
+                            "coordinate_contract": "provider parsed GCJ-02 once to WGS84",
+                            "lon_gcj02": p.get("lon_gcj02"),
+                            "lat_gcj02": p.get("lat_gcj02"),
+                        },
                     ))
         except Exception:
             pass
@@ -566,10 +584,16 @@ class ExternalAnchorPipeline:
                     feats.append(ExternalFeature(
                         name=name, name_norm=normalize_name(name),
                         lon=p.get("lon", 0), lat=p.get("lat", 0),
-                        coord_system="gcj02",
+                        coord_system="wgs84",
                         category=FeatureCategory.NATURAL_VILLAGE,
                         source="amap_poi", raw=p,
-                        provenance={"keyword": kw, "address": p.get("address", "")},
+                        provenance={
+                            "keyword": kw,
+                            "address": p.get("address", ""),
+                            "coordinate_contract": "provider parsed GCJ-02 once to WGS84",
+                            "lon_gcj02": p.get("lon_gcj02"),
+                            "lat_gcj02": p.get("lat_gcj02"),
+                        },
                     ))
 
         return feats

@@ -1,6 +1,6 @@
 """Declarative gate-route policy for the post-L3 stage chain.
 
-A1: 路由策略表化 —— 把 root_graph.py 里散落的 7 个 route_after_* 的
+A1: 路由策略表化 —— 把 graph.py 里散落的 7 个 route_after_* 的
 if-else 分支收敛成一张 ``(source_stage, gate_route) -> (action, *args)``
 策略表。路由函数只做“查表 + 特例”，不再各自维护分支语义。
 
@@ -69,7 +69,7 @@ DEFAULT_GATE_ROUTE_POLICY: Dict[str, Tuple[str, ...]] = {
 }
 
 #: 参与 gate 路由的 post-L3 阶段。``execute`` 是显式豁免（A4）：EXECUTE
-#: 阶段不产出 gate artifact，路由只看 fatal_error，见 root_graph 注释。
+#: 阶段不产出 gate artifact，路由只看 fatal_error，见 graph 注释。
 GATE_ROUTED_STAGES: Tuple[str, ...] = (
     "target_projection",
     "ground",

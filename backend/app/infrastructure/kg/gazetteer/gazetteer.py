@@ -5,21 +5,18 @@ KG 子模块：地名解析是 KG 语义能力，agent 层（Binder/EXPLORE/渲�
 数据源（全部系统内）：
   1. KG ResidentialCluster（SPARQL：聚类名/质心/sfWithin 地块集）
   2. bundle 村名注记（point-in-boundary 过滤村外行政村）
-  3. SemanticMemoryStore 注解（L1 语义回流产物：村名→BSM）
 
 匹配：精确 → difflib fuzzy(ratio>=0.6) → Flash 判定 + 双确认
   （LLM 判定 ∧ 空间校验：村名特征 vs 聚类地块 dlbm 构成）
 
-持久化：data/gazetteer/{village}.json（主文件）
-         + 轮次增量写入 memory 轮次文件（round/diff/supersede 机制一致）
+当前上下文只消费当前 KG、bundle 和显式阶段 artifact；不自动恢复历史 gazetteer
+或 semantic-memory 轮次文件。
 """
 
 from __future__ import annotations
 
 import difflib
-import json
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.infrastructure.logging import get_logger
@@ -38,7 +35,7 @@ class GazetteerEntry:
     entity_uri: str = ""            # KG ResidentialCluster URI
     bsms: List[str] = field(default_factory=list)
     centroid: Optional[List[float]] = None   # [lon, lat]
-    source: str = "kg_cluster"      # kg_cluster | bundle_annotation | l1_enrichment | llm_confirmed
+    source: str = "kg_cluster"      # kg_cluster | bundle_annotation | gis_name_binding
     confidence: float = 0.0
     description: str = ""
 
@@ -263,113 +260,18 @@ def _external_anchors_from_bundle(bundle: Any) -> List[GazetteerEntry]:
     return entries
 
 
-def _annotation_entries_from_memory(memory: Any, bundle: Any) -> List[GazetteerEntry]:
-    """SemanticMemoryStore 注解（L1 回流产物：村名→BSM）→ 条目候选。"""
-    from app.spatial.model.geometry import _compute_centroid
-
-    entries: List[GazetteerEntry] = []
-    parcels_by_bsm = {}
-    if bundle is not None:
-        for f in (bundle.polygons.get("landuse_current") or []):
-            bsm = str(f.bsm or "")
-            geom = f.geometry
-            if bsm and geom:
-                c = _compute_centroid({
-                    "type": "FeatureCollection",
-                    "features": [{"type": "Feature", "properties": {}, "geometry": geom}],
-                })
-                if c:
-                    parcels_by_bsm[bsm] = c
-    for uri, ann in (memory.entity_annotations or {}).items():
-        desc = ann.description or ""
-        if "村" in desc or "自然村" in desc or ann.entity_type == "LocationAnchor":
-            name = desc.split("（")[0].strip()
-            if not name:
-                continue
-            bsms = [
-                str(ref)
-                for ref in (ann.intent_refs or [])
-                if str(ref).isdigit()
-            ]
-            centroid = None
-            points = [parcels_by_bsm[b] for b in bsms if b in parcels_by_bsm]
-            if points:
-                centroid = [
-                    sum(point[0] for point in points) / len(points),
-                    sum(point[1] for point in points) / len(points),
-                ]
-            entries.append(GazetteerEntry(
-                name=name[:20],
-                entity_uri=uri,
-                bsms=bsms,
-                centroid=centroid,
-                source="l1_enrichment",
-                confidence=float(ann.confidence or 0.5),
-                description=desc,
-            ))
-    return entries
-
-
-def _persisted_entries(village_name: str) -> List[GazetteerEntry]:
-    """Load previously persisted spatial evidence for the same village.
-
-    The gazetteer README defines ``data/gazetteer/{village}.json`` as a
-    primary source, but the builder historically only queried the live KG and
-    memory.  Reusing entries is safe only when they carry actual BSMs or a
-    persisted centroid; instruction-only names with no spatial evidence must
-    never become grounding candidates.
-    """
-
-    if not str(village_name or "").strip():
-        return []
-    try:
-        from app.core.settings import DATA_DIR
-
-        path = Path(DATA_DIR) / "gazetteer" / f"{village_name}.json"
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, TypeError, ValueError):
-        return []
-    entries: List[GazetteerEntry] = []
-    for raw in payload.get("entries", []) if isinstance(payload, dict) else []:
-        if not isinstance(raw, dict):
-            continue
-        bsms = [str(item).strip() for item in raw.get("bsms", []) if str(item).strip()]
-        centroid = raw.get("centroid")
-        if not bsms and not (
-            isinstance(centroid, list)
-            and len(centroid) == 2
-            and all(isinstance(value, (int, float)) for value in centroid)
-        ):
-            continue
-        entries.append(GazetteerEntry(
-            name=str(raw.get("name") or "").strip(),
-            aliases=[str(item).strip() for item in raw.get("aliases", []) if str(item).strip()],
-            entity_uri=str(raw.get("entity_uri") or ""),
-            bsms=bsms,
-            centroid=list(centroid) if isinstance(centroid, list) else None,
-            source="persisted_gazetteer",
-            confidence=float(raw.get("confidence") or 0.0),
-            description=str(raw.get("description") or ""),
-        ))
-    return [entry for entry in entries if entry.name]
-
-
 def build_gazetteer(
     kg: Any,
     bundle: Any,
-    memory: Any = None,
-    village_name: str = "",
 ) -> Gazetteer:
-    """Build the village gazetteer from KG clusters + L1 enrichment memory.
+    """Build the current-context gazetteer from KG clusters and bundle data.
 
     Non-fatal: KG query failures degrade to an empty gazetteer.
+
+    Historical files are intentionally not read here. Current L1 bindings are
+    attached by context bootstrap from explicit artifact references.
     """
     gazetteer = Gazetteer()
-    try:
-        for e in _persisted_entries(village_name):
-            gazetteer.upsert(e)
-    except Exception as e:
-        logger.warning("[Gazetteer] persisted entries load failed: %s", e)
     try:
         for e in _cluster_entries_from_kg(kg, bundle):
             gazetteer.upsert(e)
@@ -383,30 +285,6 @@ def build_gazetteer(
             gazetteer.upsert(e)
     except Exception as e:
         logger.warning("[Gazetteer] external anchors build failed: %s", e)
-    if memory is not None:
-        try:
-            for e in _annotation_entries_from_memory(memory, bundle):
-                # 同 entity_uri 聚类已有 bsms/centroid → 继承（修复 l1_enrichment
-                # 注解条目 bsms 恒空导致同名/同 URI 条目覆盖聚类地块集的问题）
-                twin = next(
-                    (x for x in gazetteer.entries
-                     if x.entity_uri and x.entity_uri == e.entity_uri and x.bsms),
-                    None,
-                )
-                if twin is not None and not e.bsms:
-                    e = GazetteerEntry(
-                        name=e.name,
-                        aliases=e.aliases,
-                        entity_uri=e.entity_uri,
-                        bsms=list(twin.bsms),
-                        centroid=twin.centroid or e.centroid,
-                        source=e.source,
-                        confidence=e.confidence,
-                        description=e.description,
-                    )
-                gazetteer.upsert(e)
-        except Exception as e:
-            logger.warning("[Gazetteer] memory build failed: %s", e)
     logger.info("[Gazetteer] built: %d entries", len(gazetteer.entries))
     return gazetteer
 

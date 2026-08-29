@@ -33,6 +33,7 @@ class SourceSemanticCandidate(BaseModel):
     optional_kg_concept_ref: str = ""
     compatible_layers: list[str] = Field(default_factory=list)
     compatible_geometry_kinds: list[str] = Field(default_factory=list)
+    supporting_attributes: dict[str, str] = Field(default_factory=dict)
 
 
 class SourceFeatureSemanticProposal(BaseModel):

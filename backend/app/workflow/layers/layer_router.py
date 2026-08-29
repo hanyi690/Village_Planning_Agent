@@ -24,7 +24,7 @@ from app.workflow.layers.phase_machine import (
 )
 from app.modules.l1.application import analyze_dimension
 from app.modules.l2.application import analyze_l2_dimension
-from app.modules.l3.reasoning import analyze_l3_dimension
+from app.modules.l3.application import analyze_l3_dimension
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)

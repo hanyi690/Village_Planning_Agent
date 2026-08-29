@@ -303,7 +303,7 @@ class LLMRuntimeSettings(BaseSettings):
         ),
     )
     ground_llm_enabled: bool = Field(
-        default=False,
+        default=True,
         validation_alias=AliasChoices("GROUND_LLM_ENABLED", "ground_llm_enabled"),
     )
     disable_ground_llm: bool = Field(
@@ -327,7 +327,7 @@ class LLMRuntimeSettings(BaseSettings):
         ),
     )
     ground_max_calls: int = Field(
-        default=16,
+        default=128,
         validation_alias=AliasChoices("GROUND_MAX_LLM_CALLS", "ground_max_calls"),
     )
     ground_max_recovery_rounds: int = Field(
@@ -708,6 +708,7 @@ class LLMRuntimeSettings(BaseSettings):
             return LLMStagePolicy(
                 timeout_s=max(0.001, self.request_timeout_seconds()),
                 max_tokens=max_tokens,
+                observe_max_tokens=max_tokens,
                 report_max_tokens=report_max_tokens,
                 max_concurrent=self.stage_concurrency("l2"),
                 parse_retries=1,
@@ -738,6 +739,7 @@ class LLMRuntimeSettings(BaseSettings):
             return LLMStagePolicy(
                 timeout_s=max(0.001, self.request_timeout_seconds()),
                 max_tokens=max_tokens,
+                observe_max_tokens=max_tokens,
                 report_max_tokens=report_max_tokens,
                 max_concurrent=self.stage_concurrency("l3"),
                 parse_retries=max(0, int(self.l3_provider_parse_retries)),

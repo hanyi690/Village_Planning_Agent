@@ -24,17 +24,29 @@ from app.contracts.evidence.source_semantic_contracts import (
 from app.infrastructure.evidence_runtime.source_semantic_store import SourceSemanticStore
 from app.workflow.validation.l1_fact_catalog import is_canonical_l1_fact_id
 from app.infrastructure.structured_runtime.facade import LLMCallSpec, run_structured
+from app.infrastructure.context_runtime import build_bounded_table
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 
 PROMPT_VERSION = "source-semantic-v1"
-MAX_BATCH_SIZE = 32
+MAX_BATCH_SIZE = 16
 
-_ENTITY_TYPES = {
-    "facility", "设施", "service", "服务点", "road", "道路", "axis", "轴线",
-    "water", "水体", "village", "自然村", "settlement", "landmark", "地标",
-    "area", "区域", "place", "地点",
+_ENTITY_TYPE_ALIASES = {
+    "parking": "facility",
+    "parking_facility": "facility",
+    "transit_stop": "facility",
+    "transit_facility": "facility",
+    "public_space": "facility",
+    "water_power_station": "facility",
+    "ancestral_hall": "facility",
+    "road_segment": "road",
+    "primary_road": "road",
+    "internal_road": "road",
+    "east_west_road": "road",
+    "water_body": "water",
+    "river": "water",
+    "stream": "water",
 }
 _LAYER_BY_TYPE = {
     "facility": ("annotations_current", "facilities_current"),
@@ -45,6 +57,7 @@ _LAYER_BY_TYPE = {
     "道路": ("roads_current", "current_road"),
     "axis": ("roads_current", "current_road"),
     "轴线": ("roads_current", "current_road"),
+    "water": ("water_bodies", "water_current", "water"),
 }
 _GEOMETRY_BY_TYPE = {
     "facility": ("Point", "MultiPoint"),
@@ -55,6 +68,7 @@ _GEOMETRY_BY_TYPE = {
     "道路": ("LineString", "MultiLineString"),
     "axis": ("LineString", "MultiLineString"),
     "轴线": ("LineString", "MultiLineString"),
+    "water": ("Polygon", "MultiPolygon", "LineString", "MultiLineString"),
 }
 
 
@@ -85,7 +99,11 @@ def _fact_phrase(fact: L1Fact) -> str:
 
 
 def _fact_type(fact: L1Fact) -> str:
-    return _text(fact.semantic_type).casefold()
+    attrs = dict(fact.attributes or {})
+    raw_type = _text(fact.semantic_type).casefold()
+    if raw_type in {"", "unknown", "entity", "subject"}:
+        raw_type = _text(attrs.get("entity_type") or attrs.get("role")).casefold()
+    return _ENTITY_TYPE_ALIASES.get(raw_type, raw_type)
 
 
 def _candidate_from_l1(fact: L1Fact) -> SourceSemanticCandidate | None:
@@ -93,7 +111,11 @@ def _candidate_from_l1(fact: L1Fact) -> SourceSemanticCandidate | None:
         return None
     semantic_type = _fact_type(fact)
     phrase = _fact_phrase(fact)
-    if not phrase or semantic_type not in _ENTITY_TYPES:
+    # The type is only used to add optional source constraints.  A new village
+    # may introduce a type not known by this runtime, and that must still be a
+    # valid closed-set candidate with empty constraints.  Facts without any
+    # semantic type remain excluded because they are not a spatial concept.
+    if not phrase or not semantic_type or semantic_type in {"unknown", "entity", "subject"}:
         return None
     return SourceSemanticCandidate(
         candidate_ref=f"l1:{fact.fact_id}:entity",
@@ -105,13 +127,81 @@ def _candidate_from_l1(fact: L1Fact) -> SourceSemanticCandidate | None:
     )
 
 
+def _mention_value(mention: Any, field: str) -> str:
+    if isinstance(mention, Mapping):
+        return _text(mention.get(field))
+    return _text(getattr(mention, field, ""))
+
+
+def _candidate_from_mention(
+    mention: Any,
+    l1_facts: Sequence[L1Fact],
+) -> SourceSemanticCandidate | None:
+    phrase = _mention_value(mention, "normalized_name") or _mention_value(mention, "mention")
+    if not phrase:
+        return None
+    if isinstance(mention, Mapping):
+        raw_attrs = mention.get("attributes") or {}
+    else:
+        raw_attrs = getattr(mention, "attributes", None) or {}
+    if not isinstance(raw_attrs, dict):
+        raw_attrs = {}
+    semantic_type = ""
+    for raw_type in (
+        _mention_value(mention, "role"),
+        _mention_value(mention, "instance_label"),
+        _text(raw_attrs.get("entity_type")),
+    ):
+        normalized_type = _ENTITY_TYPE_ALIASES.get(raw_type.casefold(), raw_type.casefold())
+        if normalized_type in {"facility", "road", "water", "landmark"}:
+            semantic_type = normalized_type
+            break
+    phrase_key = _fold(phrase)
+    supporting_refs: list[str] = []
+    for fact in l1_facts:
+        if not is_canonical_l1_fact_id(fact.fact_id):
+            continue
+        fact_attrs = dict(fact.attributes or {})
+        fact_values = (
+            _fact_phrase(fact),
+            _text(fact_attrs.get("name")),
+            _text(fact_attrs.get("target_name")),
+            _text(fact.subject_scope),
+            _text(fact.source_span),
+        )
+        if any(
+            phrase_key == _fold(value) or phrase_key in _fold(value)
+            for value in fact_values
+            if value
+        ):
+            supporting_refs.append(fact.fact_id)
+    supporting_refs = list(dict.fromkeys(supporting_refs))
+    if not supporting_refs:
+        return None
+    compatible_layers = list(_LAYER_BY_TYPE.get(semantic_type, ()))
+    compatible_geometry_kinds = list(_GEOMETRY_BY_TYPE.get(semantic_type, ()))
+    return SourceSemanticCandidate(
+        candidate_ref=(
+            f"l1:mention:{supporting_refs[0]}:{semantic_type}:"
+            f"{_digest(phrase)[:12]}"
+        ),
+        display_phrase=phrase,
+        origin="l1_fact",
+        supporting_fact_refs=supporting_refs,
+        compatible_layers=compatible_layers,
+        compatible_geometry_kinds=compatible_geometry_kinds,
+    )
+
+
 def materialize_candidate_vocabulary(
     l1_facts: Iterable[L1Fact],
     kg_candidates: Iterable[SourceSemanticCandidate | Mapping[str, Any]] = (),
+    l1_mentions: Iterable[Any] = (),
 ) -> list[SourceSemanticCandidate]:
     """Build a snapshot-local closed set; no global semantic table is read."""
+    facts = list(l1_facts)
     candidates: dict[str, SourceSemanticCandidate] = {}
-    for fact in l1_facts:
+    for fact in facts:
         candidate = _candidate_from_l1(fact)
         if candidate is not None:
             candidates[candidate.candidate_ref] = candidate
@@ -122,6 +212,30 @@ def materialize_candidate_vocabulary(
             else SourceSemanticCandidate.model_validate(raw)
         )
         candidates[candidate.candidate_ref] = candidate
+
+    for mention in l1_mentions:
+        candidate = _candidate_from_mention(mention, facts)
+        if candidate is None:
+            continue
+        matching = next(
+            (
+                item
+                for item in candidates.values()
+                if _fold(item.display_phrase) == _fold(candidate.display_phrase)
+                and item.compatible_layers == candidate.compatible_layers
+                and item.compatible_geometry_kinds == candidate.compatible_geometry_kinds
+            ),
+            None,
+        )
+        if matching is None:
+            candidates[candidate.candidate_ref] = candidate
+        else:
+            candidates[matching.candidate_ref] = matching.model_copy(update={
+                "supporting_fact_refs": list(dict.fromkeys([
+                    *matching.supporting_fact_refs,
+                    *candidate.supporting_fact_refs,
+                ])),
+            })
 
     # A KG concept that exactly supports one L1 candidate enriches that
     # candidate with canonical provenance.  It must not create a second
@@ -153,7 +267,58 @@ def materialize_candidate_vocabulary(
             ])),
             "optional_kg_concept_ref": candidate.optional_kg_concept_ref,
         })
-    return sorted(merged.values(), key=lambda item: item.candidate_ref)
+    coalesced: dict[tuple[str, tuple[str, ...], tuple[str, ...]], SourceSemanticCandidate] = {}
+    phrase_keys: dict[str, SourceSemanticCandidate] = {}
+    for candidate in merged.values():
+        phrase_key = _fold(candidate.display_phrase)
+        exact_key = (
+            phrase_key,
+            tuple(candidate.compatible_layers),
+            tuple(candidate.compatible_geometry_kinds),
+        )
+        existing = coalesced.get(exact_key)
+        if existing is None and phrase_key:
+            existing = phrase_keys.get(phrase_key)
+            if existing is not None and existing.compatible_layers and candidate.compatible_layers:
+                existing = None
+        if existing is None:
+            coalesced[exact_key] = candidate
+            if phrase_key and phrase_key not in phrase_keys:
+                phrase_keys[phrase_key] = candidate
+            continue
+        preferred = existing
+        if not preferred.compatible_layers and candidate.compatible_layers:
+            preferred = candidate.model_copy(update={
+                "supporting_fact_refs": list(dict.fromkeys([
+                    *existing.supporting_fact_refs,
+                    *candidate.supporting_fact_refs,
+                ])),
+            })
+            for key, value in list(coalesced.items()):
+                if value is existing:
+                    coalesced.pop(key)
+            coalesced[exact_key] = preferred
+            phrase_keys[phrase_key] = preferred
+            continue
+        coalesced[exact_key] = preferred.model_copy(update={
+            "supporting_fact_refs": list(dict.fromkeys([
+                *preferred.supporting_fact_refs,
+                *candidate.supporting_fact_refs,
+            ])),
+        })
+    deduplicated: dict[str, SourceSemanticCandidate] = {}
+    for candidate in coalesced.values():
+        existing = deduplicated.get(candidate.candidate_ref)
+        if existing is None:
+            deduplicated[candidate.candidate_ref] = candidate
+            continue
+        deduplicated[candidate.candidate_ref] = existing.model_copy(update={
+            "supporting_fact_refs": list(dict.fromkeys([
+                *existing.supporting_fact_refs,
+                *candidate.supporting_fact_refs,
+            ])),
+        })
+    return sorted(deduplicated.values(), key=lambda item: item.candidate_ref)
 
 
 def _candidate_allowed(
@@ -165,6 +330,26 @@ def _candidate_allowed(
     if candidate.compatible_geometry_kinds and item.geometry_kind not in candidate.compatible_geometry_kinds:
         return False
     return True
+
+
+def _has_semantic_input(item: SourceFeatureDescriptor) -> bool:
+    """Return whether a source row contains anything interpretable.
+
+    Geometry and source identity are deliberately absent from
+    ``minimal_properties``. This check therefore works for arbitrary KG/GIS
+    field names without maintaining a field whitelist or a text pattern.
+    """
+
+    if _fold(item.raw_label):
+        return True
+    for value in item.minimal_properties.values():
+        text = _fold(value)
+        if not text:
+            continue
+        numeric_text = text.replace(".", "", 1).replace("-", "", 1)
+        if not numeric_text.isnumeric():
+            return True
+    return False
 
 
 def _candidate_fact_refs(candidate: SourceSemanticCandidate) -> set[str]:
@@ -230,12 +415,63 @@ def _exact_decisions(
     return decisions, unresolved
 
 
-def _proposal_payload(batch: Sequence[SourceFeatureDescriptor], candidates: Sequence[SourceSemanticCandidate]) -> dict[str, Any]:
-    return {
-        "source_items": [item.model_dump(mode="json") for item in sorted(batch, key=lambda value: value.source_feature_id)],
-        "l1_candidates": [candidate.model_dump(mode="json") for candidate in candidates],
-        "instruction": "每个 source_feature_id 必须出现一次；只能选择 candidate_ref 或明确 abstain；不得创建任何新 ID、语义、坐标或几何。",
-    }
+def _proposal_context(batch: Sequence[SourceFeatureDescriptor], candidates: Sequence[SourceSemanticCandidate]) -> str:
+    """Render the classifier input through the central Context Runtime.
+
+    The structured response remains a typed contract, while all source data
+    shown to the model is a bounded, deterministic table.  JSON is retained
+    for fingerprints and persistence only; it is not used as prompt context.
+    """
+
+    source_rows = [
+        {
+            "source_feature_id": item.source_feature_id,
+            "layer": item.layer_key,
+            "geometry": item.geometry_kind,
+            "raw_label": item.raw_label,
+            "attributes": "; ".join(
+                f"{key}={value}" for key, value in sorted(item.minimal_properties.items())
+            ),
+        }
+        for item in sorted(batch, key=lambda value: value.source_feature_id)
+    ]
+    candidate_rows = [
+        {
+            "candidate_ref": candidate.candidate_ref,
+            "phrase": candidate.display_phrase,
+            "origin": candidate.origin,
+            "layers": ", ".join(candidate.compatible_layers),
+            "geometry": ", ".join(candidate.compatible_geometry_kinds),
+            "fact_refs": ", ".join(candidate.supporting_fact_refs),
+            "attributes": "; ".join(
+                f"{key}={value}" for key, value in sorted(candidate.supporting_attributes.items())
+            ),
+        }
+        for candidate in candidates
+    ]
+    _, source_table = build_bounded_table(
+        ("source_feature_id", "layer", "geometry", "raw_label", "attributes"),
+        source_rows,
+        max_rows=max(1, len(source_rows)),
+        max_chars=12000,
+    )
+    _, candidate_table = build_bounded_table(
+        ("candidate_ref", "phrase", "origin", "layers", "geometry", "fact_refs", "attributes"),
+        candidate_rows,
+        max_rows=max(1, len(candidate_rows)),
+        max_chars=18000,
+    )
+    return (
+        "以下是本批次的结构化上下文表。\n\n"
+        "### 当前源要素\n"
+        f"{source_table}\n\n"
+        "### L1/KG 闭集候选\n"
+        f"{candidate_table}\n\n"
+        "### 约束\n"
+        "每个 source_feature_id 必须出现一次；只能选择 candidate_ref 或明确 abstain；"
+        "不得创建任何新 ID、语义、坐标或几何。candidate_ref 非空时必须返回候选表中的 fact_refs；"
+        "无法由当前证据证明时必须 abstain。"
+    )
 
 
 def _proposal_digest(proposals: Sequence[SourceFeatureSemanticProposal]) -> str:
@@ -325,12 +561,17 @@ class SourceSemanticClassifier:
         source_snapshot_digest: str,
         source_items: Sequence[SourceFeatureDescriptor | Mapping[str, Any]],
         l1_facts: Sequence[L1Fact],
+        l1_mentions: Sequence[Any] = (),
         kg_candidates: Iterable[SourceSemanticCandidate | Mapping[str, Any]] = (),
         store: SourceSemanticStore | None = None,
     ) -> SourceSemanticClassificationSnapshot:
         items = sorted([_as_descriptor(item) for item in source_items], key=lambda value: value.source_feature_id)
         facts = sorted(list(l1_facts), key=lambda value: value.fact_id)
-        candidates = materialize_candidate_vocabulary(facts, kg_candidates)
+        candidates = materialize_candidate_vocabulary(
+            facts,
+            kg_candidates,
+            l1_mentions=l1_mentions,
+        )
         fingerprint, input_digest, l1_fingerprint, vocabulary_fingerprint = _source_fingerprint(
             source_snapshot_ref=source_snapshot_ref,
             source_snapshot_digest=source_snapshot_digest,
@@ -356,6 +597,15 @@ class SourceSemanticClassifier:
         # or a silent omission.
         classifiable: list[SourceFeatureDescriptor] = []
         for item in unresolved:
+            if not _has_semantic_input(item):
+                decisions[item.source_feature_id] = SourceFeatureSemanticDecision(
+                    source_feature_id=item.source_feature_id,
+                    raw_label=item.raw_label,
+                    status="unresolved",
+                    authority="inferred_current",
+                    reason="no semantic source attributes after metadata projection",
+                )
+                continue
             if any(_candidate_allowed(candidate, item) for candidate in candidates):
                 classifiable.append(item)
                 continue
@@ -395,7 +645,7 @@ class SourceSemanticClassifier:
                         "坐标、几何或任何未提供的候选。"
                     ),
                 },
-                {"role": "user", "content": json.dumps(_proposal_payload(batch, candidates), ensure_ascii=False, sort_keys=True)},
+                {"role": "user", "content": _proposal_context(batch, candidates)},
             ]
             passes: list[SourceFeatureSemanticProposalBatch] = []
             for pass_number in range(2):

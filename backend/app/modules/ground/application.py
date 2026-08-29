@@ -1684,6 +1684,7 @@ class GroundApplication:
         from app.infrastructure.evidence_runtime.identity.binding_store import BindingStore
         from app.infrastructure.evidence_runtime.identity.observation_store import ObservationStore
         from app.modules.ground.reference_resolution import resolve_l1_location_mentions
+        from app.modules.ground.reasoning import reason_l1_location_candidates
         from app.spatial.grounding.call_budget import get_ground_llm_budget
 
         session_id = str(state.get("session_id") or "").strip()
@@ -1764,10 +1765,26 @@ class GroundApplication:
                 context,
                 scope_key=f"l1-location:{context.l1_snapshot_ref}",
             )
+            batch_decisions = await reason_l1_location_candidates(
+                context,
+                [item[0] for item in active_pairs],
+                [item[1] for item in active_pairs],
+                {
+                    str(getattr(observation, "observation_id", "") or ""): evidence_packets.get(
+                        str(getattr(observation, "observation_id", "") or "")
+                    )
+                    for _mention, observation in active_pairs
+                    if str(getattr(observation, "observation_id", "") or "")
+                    in evidence_packets
+                },
+                budget=ground_llm_budget,
+                round_index=round_index,
+            )
             bindings = resolve_l1_location_mentions(
                 context,
                 ground_llm_budget=ground_llm_budget,
                 evidence_packets=evidence_packets,
+                candidate_selection_decisions=batch_decisions,
                 max_rounds=1,
             )
             context.grounded_bindings = bindings

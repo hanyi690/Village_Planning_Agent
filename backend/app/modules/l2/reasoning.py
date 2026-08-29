@@ -256,7 +256,7 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             system_content += (
                 "\n\n【上一轮 L2 闭集校验反馈】\n"
                 "只修正下列确定性校验问题；不得新增对象、改变语义或生成新的"
-                "source_fact_refs。所有引用必须从上面的 allowed_l1_facts JSON 行逐字复制；"
+                "source_fact_refs。所有引用必须从上面的 allowed_l1_facts 表格行逐字复制；"
                 "无法引用时使用空数组并将对象标为 proposed、省略或写入 evidence_gaps。\n"
                 + validation_feedback[:2000]
             )
@@ -716,37 +716,60 @@ def _load_l1_fact_section(
         audit["location_fact_count"] = len(scoped_locations)
         if not facts and not scoped_locations:
             return "", audit
+        from app.infrastructure.context_runtime import build_bounded_table
+
         lines = []
         if facts:
+            _, fact_table = build_bounded_table(
+                ("fact_id", "statement", "fact_kind", "dimension_key"),
+                [
+                    {
+                        "fact_id": candidate.candidate_id,
+                        "statement": candidate.label,
+                        "fact_kind": candidate.metadata.get("fact_kind", candidate.kind),
+                        "dimension_key": candidate.metadata.get("dimension_key", ""),
+                    }
+                    for candidate in catalog_records
+                    if candidate.label
+                ],
+                max_rows=48,
+                max_chars=12000,
+            )
             lines.append(
                 f"【L1 对 {dimension_key} 的上游事实（由依赖树选定；可引用但不是规划决定）】"
             )
-            lines.extend([
-                "| fact_id | statement | fact_kind | dimension_key |",
-                "|---|---|---|---|",
-            ])
-            for candidate in catalog_records:
-                if candidate.label:
-                    values = (
-                        candidate.candidate_id,
-                        candidate.label,
-                        candidate.metadata.get("fact_kind", candidate.kind),
-                        candidate.metadata.get("dimension_key", ""),
-                    )
-                    lines.append("| " + " | ".join(
-                        str(value or "").replace("|", "\\|").replace("\n", "<br>")
-                        for value in values
-                    ) + " |")
+            lines.append(fact_table)
         if scoped_locations:
+            _, location_table = build_bounded_table(
+                (
+                    "mention",
+                    "normalized_name",
+                    "role",
+                    "dimension_key",
+                    "spatial_hint",
+                    "related_mentions",
+                    "evidence_refs",
+                ),
+                [
+                    {
+                        "mention": item.get("mention", ""),
+                        "normalized_name": item.get("normalized_name", ""),
+                        "role": item.get("role", ""),
+                        "dimension_key": item.get("dimension_key", ""),
+                        "spatial_hint": str(item.get("spatial_hint", "") or "")[:240],
+                        "related_mentions": item.get("related_mentions", []),
+                        "evidence_refs": item.get("evidence_refs", []),
+                    }
+                    for item in scoped_locations
+                ],
+                max_rows=24,
+                max_chars=9000,
+            )
             lines.append(
                 f"【L1 对 {dimension_key} 的上游地点事实（来自 L1Snapshot artifact；"
                 "可用于理解，不是选址决定）】"
             )
-            for fact in scoped_locations:
-                lines.append(
-                    f"- {fact.get('normalized_name') or fact.get('mention')}: "
-                    f"{fact.get('spatial_hint', '')[:240]}"
-                )
+            lines.append(location_table)
         return "\n".join(lines), audit
     except Exception as exc:  # fail closed for the current snapshot boundary
         audit["load_error"] = f"{type(exc).__name__}: {exc}"
@@ -767,6 +790,8 @@ def _l2_fact_reference_rules(audit: Dict[str, Any]) -> str:
             "fact_kind": str(candidate.metadata.get("fact_kind") or candidate.kind),
             "dimension_key": str(candidate.metadata.get("dimension_key") or ""),
             "spatial": bool(candidate.metadata.get("spatial", False)),
+            "status": str(candidate.metadata.get("status") or "observed"),
+            "uncertainty": str(candidate.metadata.get("uncertainty") or ""),
         }
         for candidate in catalog.candidates
         if candidate.candidate_id in selectable_ids
@@ -783,7 +808,15 @@ def _l2_fact_reference_rules(audit: Dict[str, Any]) -> str:
         from app.infrastructure.context_runtime import build_bounded_table
         lines.append("机器可复制的闭集（唯一允许复制的身份与语义映射）：")
         _, fact_table = build_bounded_table(
-            ("fact_id", "statement", "fact_kind", "dimension_key", "spatial"),
+            (
+                "fact_id",
+                "statement",
+                "fact_kind",
+                "dimension_key",
+                "spatial",
+                "status",
+                "uncertainty",
+            ),
             selectable_facts,
             max_rows=48,
             max_chars=12000,
@@ -793,6 +826,9 @@ def _l2_fact_reference_rules(audit: Dict[str, Any]) -> str:
             "spatial=true 的行是空间事实；除此之外不得从本提示词的其他内容推导引用。"
         )
         lines.extend([
+            "status=pending 表示来源已保留但尚未确认，status=conflicted 表示来源冲突；"
+            "二者可以作为推理线索，但不得据此标记 observed，也不得把不确定内容写成确定事实；"
+            "需要时将其转成 evidence_gaps 或 proposed，并在结论中保留 uncertainty。",
             "PlanningObjective/TargetMetric 标记 observed 时至少引用一个允许值；",
             "StrategyRule 和 SpatialStructureIntent 只有在能引用允许值时才输出。",
             "TargetMetric.metric_id 是当前输出对象的本地 ID，不是 L1 fact_id；TargetMetric.value 只能是"

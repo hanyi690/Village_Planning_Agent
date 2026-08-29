@@ -104,9 +104,12 @@ class L1Application:
             allowed_levels = (
                 {expected_level}
                 if expected_level is not None
-                else {"observed", "inferred"}
-                if fact.fact_kind == "gis_observation"
-                else {"observed"}
+                else {
+                    "observed",
+                    "inferred",
+                    "pending",
+                    "conflicted",
+                }
             )
             if fact.inference_level not in allowed_levels:
                 raise RuntimeError(

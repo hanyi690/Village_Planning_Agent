@@ -73,6 +73,7 @@ def _source_versions(session_id: str, supplied: Mapping[str, str] | None = None)
     from app.infrastructure.evidence_runtime.retrievers.local_text_retriever import RETRIEVER_VERSION as local_text_version
     from app.infrastructure.evidence_runtime.retrievers.rag_retriever import RETRIEVER_VERSION as rag_version
     from app.infrastructure.evidence_runtime.retrievers.report_retriever import RETRIEVER_VERSION as report_version
+    from app.infrastructure.evidence_runtime.retrievers.cached_map_retriever import RETRIEVER_VERSION as cached_map_version
 
     versions: dict[str, str] = {
         "report": report_version,
@@ -83,6 +84,7 @@ def _source_versions(session_id: str, supplied: Mapping[str, str] | None = None)
         "l1": l1_version,
         "local_text": local_text_version,
         "rag": rag_version,
+        "external_map_cache": cached_map_version,
     }
     if supplied:
         versions.update({str(key): str(value) for key, value in supplied.items()})
@@ -205,6 +207,9 @@ def _context_evidence_digest(session_id: str) -> str:
             or []
         ),
         "l1_fact_records": _typed_dump(getattr(context, "l1_fact_records", []) or []),
+        "external_observation_digest": str(
+            getattr(getattr(context, "external_observation_snapshot", None), "digest", "") or ""
+        ),
     }
     raw = json.dumps(
         payload,
@@ -475,6 +480,9 @@ async def retrieve_evidence(
     from app.infrastructure.evidence_runtime.retrievers.kg_retriever import retrieve_from_kg
     from app.infrastructure.evidence_runtime.retrievers.local_text_retriever import retrieve_from_local_text
     from app.infrastructure.evidence_runtime.retrievers.report_retriever import retrieve_from_reports
+    from app.infrastructure.evidence_runtime.retrievers.cached_map_retriever import (
+        retrieve_from_cached_map,
+    )
 
     all_facts: List[EvidenceFact] = []
     all_sources: List[EvidenceSource] = []
@@ -685,6 +693,18 @@ async def retrieve_evidence(
             )
             all_facts.extend(l1_facts)
             all_sources.extend(l1_sources)
+            map_facts, map_sources, map_trace = retrieve_from_cached_map(
+                cached_context,
+                query=request.query,
+                entity_scope=request.entity_scope,
+                limit=request.candidate_limit * 2,
+            )
+            all_facts.extend(map_facts)
+            all_sources.extend(map_sources)
+            retrieval_status.append({
+                "step": "external_map_cache",
+                **map_trace,
+            })
     except Exception as exc:
         retrieval_status.append({
             "step": "context_hydration",

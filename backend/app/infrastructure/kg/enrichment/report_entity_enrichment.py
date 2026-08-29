@@ -284,8 +284,6 @@ async def extract_bindings(
         build_gazetteer(
             kg,
             bundle,
-            memory=None,
-            village_name=str(getattr(bundle, "village_name", "") or ""),
         )
 
     stats = {

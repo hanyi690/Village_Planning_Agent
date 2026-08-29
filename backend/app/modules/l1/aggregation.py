@@ -341,27 +341,9 @@ async def l1_aggregate(
     snapshot = merge_l1_snapshots(partial_snapshots, run_id=run_id)
     snapshot.context_version = context_version
 
-    # Preserve the dimension that actually consumed each KG fact.  The
-    # The flattened ``facts`` list is a display projection, while L2 reads
-    # this scoped map to avoid feeding unrelated evidence into a dimension.
-    try:
-        from app.infrastructure.reports.step_report import get_session_step_reports
-
-        for step in await get_session_step_reports(session_id):
-            if step.get("stage") != "L1" or not step.get("dimension_key"):
-                continue
-            consumed = (step.get("outputs") or {}).get("kg_evidence_consumed") or {}
-            statements = consumed.get("fact_statements") or []
-            if not statements:
-                continue
-            dim = step["dimension_key"]
-            scoped = [f"[{dim}] KG事实: {statement}" for statement in statements]
-            snapshot.facts_by_dimension[dim] = _dedup(
-                [*(snapshot.facts_by_dimension.get(dim) or []), *scoped]
-            )
-            snapshot.facts = _dedup([*snapshot.facts, *scoped])
-    except Exception as exc:
-        logger.warning("[l1_aggregate] dimension-scoped KG fact merge failed: %s", exc)
+    # Step reports are audit/display records, not semantic inputs. Dimension
+    # scope is preserved by the typed partial snapshots above; current KG/GIS
+    # evidence is promoted through the unified Evidence Runtime below.
     # Promote the canonical session-KG evidence into the L1Snapshot.  The
     # dimension compiler may legitimately produce no markdown facts when a
     # remote model returns prose without headings; that must not erase the

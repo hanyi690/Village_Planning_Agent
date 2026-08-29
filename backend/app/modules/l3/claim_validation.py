@@ -83,9 +83,6 @@ def evaluate_l3_gate(
         if (
             decision.scope in {FailureScope.CLAIM, FailureScope.RELATION}
             and not decision.dependency_scope
-            and not (
-                admission_without_spatial_output
-            )
         ):
             # The claim was quarantined before admission, so an unrelated
             # admitted intervention remains eligible for projection.

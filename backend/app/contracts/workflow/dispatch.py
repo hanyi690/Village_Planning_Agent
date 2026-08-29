@@ -1,12 +1,12 @@
 """Dispatch contracts (blueprint M0/M5 boundary).
 
-The canonical policy implementation lives in ``app.workflow.dispatch``; this
+The canonical policy implementation lives in ``app.workflow.routing.dispatch``; this
 module is the stable contract import path for application and workflow code.
 """
 
 from __future__ import annotations
 
-from app.workflow.dispatch import (
+from app.workflow.routing.dispatch import (
     DispatchAction,
     DispatchCommand,
     DispatchDecision,

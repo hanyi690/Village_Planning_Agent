@@ -62,6 +62,9 @@ class PlanningContext:
             identity (may be None while context hydration is incomplete).
         external_search_port: Lifecycle-owned optional text evidence provider;
             it is never a geometry, BSM, or KG authority.
+        external_observation_snapshot: Read-only normalized map observations
+            loaded from local provider caches; these support names and
+            location binding but never replace workspace geometry.
         ports: Typed ``PlanningPorts`` bundle of injected dependency-inversion
         port implementations (semantic_query, spatial_query, gazetteer,
             nomenclature_registry, context_provider). May be empty.
@@ -97,6 +100,7 @@ class PlanningContext:
     evidence_graph: Any = None
     evidence_graph_key: str = ""
     external_search_port: Any = None
+    external_observation_snapshot: Any = None
     grounding_unresolved: List[Dict[str, Any]] = field(default_factory=list)
     grounded_bindings: List[Any] = field(default_factory=list)
     ports: PlanningPorts = field(default_factory=PlanningPorts)
@@ -199,6 +203,18 @@ class PlanningContext:
             "has_gazetteer": self.gazetteer is not None,
             "has_constraint_index": self.constraint_index is not None,
             "has_evidence_graph": self.evidence_graph is not None,
+            "has_external_observations": self.external_observation_snapshot is not None,
+            "external_observation_digest": str(
+                getattr(self.external_observation_snapshot, "digest", "") or ""
+            ),
+            "external_observation_count": len(
+                getattr(self.external_observation_snapshot, "observations", []) or []
+            ),
+            "external_observation_providers": sorted({
+                str(getattr(item, "provider", "") or "")
+                for item in (getattr(self.external_observation_snapshot, "observations", []) or [])
+                if str(getattr(item, "provider", "") or "")
+            }),
             "evidence_graph_key": self.evidence_graph_key,
             "report_count": len(self.reports),
             "reports_loaded": self.reports_loaded,
@@ -229,6 +245,7 @@ class PlanningContext:
             "gazetteer": self.gazetteer is not None,
             "constraint_index": self.constraint_index is not None,
             "reports": bool(self.reports),
+            "external_observations": self.external_observation_snapshot is not None,
         }
 
 

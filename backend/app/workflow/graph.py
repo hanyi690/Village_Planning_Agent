@@ -25,7 +25,7 @@ from app.workflow.stages.deliver import deliver_node as _deliver_stage
 from app.workflow.stage_audit import audited_stage
 from app.workflow.runtime_adapter import adapt_node, materialize_workflow_state
 from app.workflow.routing import authorize_route_result
-from app.workflow.gate_policy import (
+from app.workflow.gates import (
     DEFAULT_GATE_ROUTE_POLICY,
     GATE_ROUTE_POLICY,
 )

@@ -23,6 +23,7 @@ from app.workflow.validation.l1_fact_catalog import (
     is_canonical_l1_fact_id,
 )
 from app.infrastructure.logging import get_logger
+from app.contracts.ground.spatial_reference_contracts import normalize_spatial_role
 
 logger = get_logger(__name__)
 
@@ -90,6 +91,19 @@ def _role_compatible(entry: PlaceEvidenceEntry, role: str) -> bool:
 
 def _is_scope_role(value: Any) -> bool:
     return str(value or "").strip().casefold() in _SCOPE_ROLES
+
+
+def _source_feature_identity(feature: Any, source_layer: str = "") -> str:
+    raw = getattr(feature, "_raw", None)
+    properties = getattr(feature, "properties", None)
+    for source in (raw, properties):
+        if isinstance(source, dict) and str(source.get("source_feature_id") or "").strip():
+            return str(source["source_feature_id"]).strip()
+    source_id = str(getattr(feature, "source_feature_id", "") or "").strip()
+    if source_id:
+        return source_id
+    bsm = str(getattr(feature, "bsm", "") or "").strip()
+    return f"bundle:{source_layer}:{bsm}" if source_layer and bsm else ""
 
 
 def _scope_mentions_for_fact(fact: Any) -> list[Any]:
@@ -354,11 +368,7 @@ class PlaceEvidenceIndex:
                         continue
                     geometry_ref = f"bundle://feature/{bsm}"
                     raw = getattr(feature, "_raw", {}) or {}
-                    source_feature_id = str(
-                        raw.get("source_feature_id")
-                        if isinstance(raw, dict)
-                        else ""
-                    ).strip()
+                    source_feature_id = _source_feature_identity(feature, role)
                     semantic_label, semantic_aliases, semantic_fact_refs = (
                         self._source_semantic_overlay(source_feature_id, raw_label)
                     )
@@ -571,7 +581,7 @@ class PlaceEvidenceIndex:
             name = _scope_value(scope, "normalized_name") or _scope_value(scope, "name")
             if not name:
                 continue
-            role = _scope_value(scope, "role", "unknown").casefold()
+            role = normalize_spatial_role(_scope_value(scope, "role", "unknown"))
             if role in {"", "unknown", "target"}:
                 role = "scope"
             aliases = [
@@ -674,12 +684,12 @@ class PlaceEvidenceIndex:
         name = norm or mention
         if not name:
             return
-        role = str(
+        role = normalize_spatial_role(str(
             getattr(fact, "role", "")
             or attributes.get("role", "")
             or getattr(fact, "semantic_type", "")
             or "unknown"
-        ).strip()
+        ).strip())
         if role not in {
             "facility",
             "landmark",
@@ -996,9 +1006,7 @@ class PlaceEvidenceIndex:
                 continue
             name = entry.canonical_name or ""
             raw = getattr(pt, "_raw", {}) or {}
-            source_feature_id = str(
-                raw.get("source_feature_id") if isinstance(raw, dict) else ""
-            ).strip()
+            source_feature_id = _source_feature_identity(pt, "facility")
             decision = self.source_semantic_decisions.get(source_feature_id)
             decision_status = (
                 getattr(decision, "status", "")
@@ -1269,9 +1277,7 @@ class PlaceEvidenceIndex:
             geom = getattr(p, "geometry", None) or {}  # getattr intentional: heterogeneous feature objects
             feature_bsm = str(getattr(p, "bsm", "") or "").strip() or None
             raw = getattr(p, "_raw", {}) or {}
-            source_feature_id = str(
-                raw.get("source_feature_id") if isinstance(raw, dict) else ""
-            ).strip()
+            source_feature_id = _source_feature_identity(p, "facility")
             semantic_label, semantic_aliases, semantic_fact_refs = (
                 self._source_semantic_overlay(source_feature_id, text)
             )
@@ -2241,6 +2247,92 @@ class PlaceEvidenceIndex:
             key=lambda item: (-ranked[item][0], -ranked[item][1], item[1], item[0]),
         )
         return ordered[: max(1, int(max_probes or 1))]
+
+    def query_role_candidates(
+        self,
+        role: str,
+        *,
+        max_candidates: int = 64,
+    ) -> PlaceResolutionResult:
+        """Return a bounded source-backed candidate domain for one role.
+
+        This is the deliberate no-name path for L1 facts such as a named
+        road or river whose current GIS layer has no matching label.  It
+        returns only entries already carrying source geometry/identity and
+        never promotes one member of the domain to an exact match.
+        """
+
+        normalized_role = str(role or "unknown").strip().casefold()
+        eligible = [
+            entry
+            for entry in self.entries
+            if _role_compatible(entry, normalized_role)
+            and (
+                str(getattr(entry, "feature_bsm", "") or "").strip()
+                or str(getattr(entry, "source_bsm", "") or "").strip()
+                or str(getattr(entry, "geometry_ref", "") or "").strip()
+            )
+        ]
+        names = list(dict.fromkeys(
+            str(getattr(entry, "canonical_name", "") or "").strip()
+            for entry in eligible
+            if str(getattr(entry, "canonical_name", "") or "").strip()
+        ))
+        all_candidates: list[PlaceResolutionCandidate] = []
+        seen: set[tuple[str, str, str]] = set()
+        for name in names:
+            result = self.resolve_mention(name, role=normalized_role)
+            for candidate in result.candidates:
+                key = (
+                    str(getattr(candidate, "entity_ref", "") or ""),
+                    str(getattr(candidate, "feature_bsm", "") or ""),
+                    str(getattr(candidate, "geometry_ref", "") or ""),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                all_candidates.append(candidate)
+        all_candidates.sort(
+            key=lambda item: (
+                str(getattr(item, "source_layer", "") or ""),
+                str(getattr(item, "source_bsm", "") or getattr(item, "feature_bsm", "") or ""),
+                str(getattr(item, "entity_ref", "") or ""),
+            )
+        )
+        requested_limit = max(1, int(max_candidates or 1))
+        bounded = all_candidates[:requested_limit]
+        trace = [{
+            "step": "role_candidate_recall",
+            "role": normalized_role,
+            "candidate_total": len(all_candidates),
+            "candidate_returned": len(bounded),
+            "candidate_limit": requested_limit,
+            "candidates_truncated": len(all_candidates) > len(bounded),
+            "selection_required": len(all_candidates) != 1,
+        }]
+        if not bounded:
+            status = "unresolved"
+            selected = None
+            reason = "no source-backed candidate for role"
+        elif len(all_candidates) == 1:
+            status = "resolved"
+            selected = bounded[0].entity_ref
+            reason = None
+        else:
+            status = "ambiguous"
+            selected = None
+            reason = "role candidate domain requires spatial or semantic selection"
+        return PlaceResolutionResult(
+            mention=normalized_role,
+            normalized_name=normalized_role,
+            status=status,
+            selected_entity_ref=selected,
+            candidates=bounded,
+            evidence_refs=[candidate.entity_ref for candidate in bounded],
+            query_trace=trace,
+            unresolved_reason=reason,
+            context_version=".".join(str(v) for v in self.version),
+        )
 
     def query_facility_bsms(
         self,

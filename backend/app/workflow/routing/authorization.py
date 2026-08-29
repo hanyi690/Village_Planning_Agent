@@ -7,7 +7,7 @@ from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.workflow.dispatch import (
+from app.workflow.routing.dispatch import (
     DispatchAction,
     DispatchDiagnostic,
     DispatchPolicy,

@@ -50,3 +50,11 @@ remain text/evidence requests even when a caller supplies a business scope.
 Snapshot-scoped source-semantic classification, its bounded classifier, and
 the semantic snapshot store also belong to this runtime. TARGET_PROJECTION
 consumes their typed result through the current source-semantic path.
+
+The source-semantic classifier consumes the same Context Runtime table wire
+format as the other LLM boundaries. GIS ``properties``/raw fields and KG RDF
+predicate/value pairs are projected into the common attribute column after
+source identity, geometry, and layer metadata are removed. Field names are
+not a village-specific whitelist: arbitrary business attributes are retained
+for model reasoning, while rows with no interpretable semantic value remain
+explicitly unresolved and do not consume provider calls.

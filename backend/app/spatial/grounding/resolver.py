@@ -230,6 +230,7 @@ class SpatialResolver:
         context: Any,
         *,
         ground_llm_budget: Optional[Dict[str, Any]] = None,
+        candidate_selection_decisions: Optional[Dict[str, Any]] = None,
         budget_scope: str = "ground",
     ):
         if not (
@@ -246,6 +247,9 @@ class SpatialResolver:
                 scope_key=f"{budget_scope}:{getattr(context, 'session_id', '')}",
             )
         self._ground_llm_budget = ground_llm_budget
+        self._candidate_selection_decisions = dict(
+            candidate_selection_decisions or {}
+        )
 
     @property
     def workspace(self):
@@ -1385,27 +1389,52 @@ class SpatialResolver:
             selection = "single_packet_candidate"
             meta["selection_contract_status"] = "selected"
         else:
-            picked = self._llm_pick_candidate(
-                str(getattr(packet, "request", "") or self._spec_mention(spec)),
-                self._evidence_packet_selection_hints(spec, packet),
-                unique_refs,
+            precomputed = self._candidate_selection_decisions.get(input_digest)
+            precomputed_status = str(
+                getattr(precomputed, "status", "")
+                if precomputed is not None and not isinstance(precomputed, dict)
+                else (precomputed or {}).get("status", "")
             )
-            if picked is None:
-                from app.core.llm_config import get_llm_settings
+            precomputed_id = str(
+                getattr(precomputed, "selected_candidate_id", "")
+                if precomputed is not None and not isinstance(precomputed, dict)
+                else (precomputed or {}).get("selected_candidate_id", "")
+            ).strip()
+            if precomputed_status == "selected" and precomputed_id in candidate_ids:
+                picked = next(
+                    ref for ref, candidate_id in zip(unique_refs, candidate_ids)
+                    if candidate_id == precomputed_id
+                )
+                selected_refs = [picked]
+                selection = "closed_set_llm_batch_selected"
+                meta["selection_source"] = "batch"
+            else:
+                picked = self._llm_pick_candidate(
+                    str(getattr(packet, "request", "") or self._spec_mention(spec)),
+                    self._evidence_packet_selection_hints(spec, packet),
+                    unique_refs,
+                ) if precomputed is None else None
+                if picked is not None:
+                    selected_refs = [picked]
+                    selection = "closed_set_llm_selected"
+                else:
+                    from app.core.llm_config import get_llm_settings
 
-                llm_disabled = get_llm_settings().ground_llm_is_disabled()
-                meta.update({
-                    "packet_selection_status": "selection_unresolved",
-                    "selection_contract_status": "ambiguous",
-                    "packet_selection_reason": (
-                        "ground_llm_disabled"
-                        if llm_disabled
-                        else "closed_set_llm_failed_or_rejected"
-                    ),
-                })
-                return CandidateSet(), "selection_unresolved", meta
-            selected_refs = [picked]
-            selection = "closed_set_llm_selected"
+                    llm_disabled = get_llm_settings().ground_llm_is_disabled()
+                    meta.update({
+                        "packet_selection_status": "selection_unresolved",
+                        "selection_contract_status": "ambiguous",
+                        "packet_selection_reason": (
+                            "ground_llm_disabled"
+                            if llm_disabled
+                            else (
+                                "batch_closed_set_llm_rejected"
+                                if precomputed is not None
+                                else "closed_set_llm_failed_or_rejected"
+                            )
+                        ),
+                    })
+                    return CandidateSet(), "selection_unresolved", meta
             meta["selection_contract_status"] = "selected"
 
         selected_packet = packet.model_copy(
@@ -2584,18 +2613,43 @@ class SpatialResolver:
 
             llm = create_flash_llm(max_tokens=800, temperature=0.1)
             ground_settings = get_llm_settings()
-            lines = chr(10).join(candidate_lines)
-            hint_clause = f"《{hints}》" if hints else ""
+            from app.infrastructure.context_runtime import build_bounded_table
+
+            _, query_table = build_bounded_table(
+                ("mention", "hints", "candidate_kind", "input_digest"),
+                [{
+                    "mention": mention,
+                    "hints": hints,
+                    "candidate_kind": candidate_kind,
+                    "input_digest": input_digest,
+                }],
+                max_rows=1,
+                max_chars=2400,
+            )
+            _, candidate_table = build_bounded_table(
+                ("candidate_id", "candidate_evidence"),
+                [
+                    {
+                        "candidate_id": descriptor.candidate_id,
+                        "candidate_evidence": line,
+                    }
+                    for descriptor, line in zip(descriptors, candidate_lines)
+                ],
+                max_rows=max(1, len(descriptors)),
+                max_chars=24000,
+            )
             prompt = (
                 render_candidate_selection_contract(
                     descriptor.candidate_id for descriptor in descriptors
                 )
                 + "\n"
-                f"空间引用「{mention}」{hint_clause}。"
-                f"以下是从 EvidenceGraph 召回并由 Bundle/KG 拓扑组织的{candidate_kind}，"
+                "空间查询表：\n"
+                + query_table
+                + "\n"
+                f"以下是从 EvidenceGraph 召回并由 Bundle/KG 拓扑组织的{candidate_kind}候选表，"
                 "请只返回 selected/abstain/ambiguous；selected 时填写候选稳定 candidate_id，"
-                f"本次 input_digest={input_digest};"
-                "不要输出序号或新 ID：\n" + lines
+                "不要输出序号或新 ID：\n"
+                + candidate_table
             )
             from app.infrastructure.llm.manager import LLMCallSpec, get_llm_manager
 

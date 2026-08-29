@@ -691,8 +691,12 @@ async def run_l1_dimension_loop(
             max_retries=int(base_kwargs.get("max_retries", 0)),
             timeout_s=float(base_kwargs.get("timeout", 480.0)),
             max_tokens=max(1, int(max_tokens)),
-            incomplete_output_max_tokens=int(
-                base_kwargs.get("incomplete_output_max_tokens", max_tokens)
+            incomplete_output_max_tokens=min(
+                max(1, int(max_tokens)),
+                max(
+                    1,
+                    int(base_kwargs.get("incomplete_output_max_tokens", max_tokens)),
+                ),
             ),
             max_concurrent=int(base_kwargs.get("max_concurrent", 1)),
             semaphore_scope=str(base_kwargs.get("semaphore_scope", "l1")),
@@ -706,9 +710,7 @@ async def run_l1_dimension_loop(
                 base_kwargs.get("timeout_includes_queue", False)
             ),
         )
-    allowed_fact_types_json = json.dumps(
-        list(allowed_fact_types), ensure_ascii=False, separators=(",", ":")
-    )
+    allowed_fact_types_text = "、".join(str(value) for value in allowed_fact_types)
     if cursor.source_page_count != source_page_count:
         cursor = cursor.model_copy(
             update={"source_page_count": source_page_count}
@@ -722,7 +724,7 @@ async def run_l1_dimension_loop(
         "本 pass 只负责 typed observations，不负责报告写作；响应字段、类型和默认值只以声明的 "
         "L1ObservationProviderOutput 工具 schema 为准。不要把 JSON 写入 message.content，不要输出 "
         "report_body、Markdown、正文或额外根字段。observations 必须是数组；没有内容时使用 schema 默认值。"
-        f"每条 observation 的 fact_type 只能逐字选择本维度闭集 {allowed_fact_types_json}；"
+        f"每条 observation 的 fact_type 只能逐字选择本维度闭集：{allowed_fact_types_text}；"
         "不同 fact_type 只填写其 schema 声明的专属字段，不要混用其他分支字段。"
         "分支专属字段不是可选说明：spatial_entity 必须同时提供非空 entity_type/name，"
         "spatial_relation 必须同时提供非空 subject_ref/predicate/object_ref，"
@@ -765,19 +767,28 @@ async def run_l1_dimension_loop(
                 page_index,
                 source_pages[page_index],
             )
-            page_context_json = json.dumps(
-                {
-                    "context": page_input.context.model_dump(mode="json"),
-                    "page_index": page_input.page_index,
-                    "page_segment_ids": list(page_input.page_segment_ids),
-                },
-                ensure_ascii=False,
-                sort_keys=True,
+            context_values = page_input.context.model_dump(mode="python")
+            context_rows = [
+                {"field": key, "value": value}
+                for key, value in sorted(context_values.items())
+            ]
+            context_rows.append({"field": "page_index", "value": page_input.page_index})
+            context_rows.append({
+                "field": "page_segment_ids",
+                "value": ", ".join(page_input.page_segment_ids),
+            })
+            from app.infrastructure.context_runtime import build_bounded_table
+
+            _, page_context_table = build_bounded_table(
+                ("field", "value"),
+                context_rows,
+                max_rows=64,
+                max_chars=_L1_OBSERVE_PAGE_CHARS,
             )
             page_system = (
                 observe_system
-                + "【L1DimensionInput context】\n"
-                + page_context_json
+                + "【L1DimensionInput context table】\n"
+                + page_context_table
                 + "\n"
                 + f"【L1 source page {page_index + 1}/{source_page_count}】\n"
                 "本次只处理这一页中的 source_segment；没有出现在本页的来源不得引用。"

@@ -6,6 +6,8 @@ import hashlib
 import json
 from typing import Any
 
+from app.workflow.delivery.geometry_lineage import validate_render_feature
+
 
 def assess_render_quality(render_layers: list[dict[str, Any]]) -> dict[str, Any]:
     """Validate that current and complete planned layers are renderable."""
@@ -15,11 +17,21 @@ def assess_render_quality(render_layers: list[dict[str, Any]]) -> dict[str, Any]
     empty_geometry = 0
     invalid_geometry = 0
     placeholder_geometry = 0
+    missing_lineage = 0
+    rejected_lineage = 0
     for layer in render_layers or []:
         layer_type = str(layer.get("layerType") or layer.get("layer_type") or "layer")
         features = list((layer.get("geojson") or layer.get("data") or {}).get("features") or [])
         feature_counts[layer_type] = len(features)
         for feature in features:
+            lineage = validate_render_feature(
+                feature,
+                planned=layer_type not in {"current_landuse", "current_boundary"},
+            )
+            if lineage["status"] == "diagnostic_only":
+                missing_lineage += 1
+            elif lineage["status"] == "rejected":
+                rejected_lineage += 1
             geometry = feature.get("geometry")
             if not geometry:
                 empty_geometry += 1
@@ -54,6 +66,7 @@ def assess_render_quality(render_layers: list[dict[str, Any]]) -> dict[str, Any]
         and not empty_geometry
         and not invalid_geometry
         and not placeholder_geometry
+        and not rejected_lineage
         else "failed",
         "current_layer_present": current_count > 0,
         "complete_planned_layer_present": planned_count > 0,
@@ -63,6 +76,8 @@ def assess_render_quality(render_layers: list[dict[str, Any]]) -> dict[str, Any]
         "empty_geometry_count": empty_geometry,
         "invalid_geometry_count": invalid_geometry,
         "placeholder_geometry_count": placeholder_geometry,
+        "missing_lineage_count": missing_lineage,
+        "rejected_lineage_count": rejected_lineage,
         "duplicate_feature_ids": duplicate_feature_ids,
     }
 

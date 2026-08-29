@@ -369,7 +369,8 @@ class AmapProvider:
                 # GCJ-02 → WGS-84 坐标转换
                 lon, lat = gcj02_to_wgs84(gcj_lon, gcj_lat)
 
-            poi_item = {
+            poi_item = dict(poi)
+            poi_item.update({
                 "id": poi.get("id", ""),
                 "name": poi.get("name", ""),
                 "lon": lon,
@@ -382,7 +383,9 @@ class AmapProvider:
                 "category": poi.get("type", ""),
                 "typecode": poi.get("typecode", ""),
                 "tel": poi.get("tel", ""),
-            }
+                "location_gcj02": [gcj_lon, gcj_lat] if location_str else None,
+                "coordinate_contract": "AMap response GCJ-02; lon/lat normalized to WGS84",
+            })
             poi_list.append(poi_item)
 
         return poi_list
@@ -456,7 +459,12 @@ class AmapProvider:
         """
         # 高德API需要GCJ-02坐标，将WGS-84输入转换为GCJ-02
         gcj_lon, gcj_lat = wgs84_to_gcj02(lon, lat)
-        params = {"location": f"{gcj_lon},{gcj_lat}"}
+        params = {
+            "location": f"{gcj_lon},{gcj_lat}",
+            "extensions": "all",
+            "roadlevel": "0",
+            "radius": "3000",
+        }
 
         result = self._request(REGEOCODE_URL, params)
 
@@ -479,6 +487,13 @@ class AmapProvider:
                 "street": address_component.get("streetNumber", {}).get("street", ""),
                 "number": address_component.get("streetNumber", {}).get("number", ""),
                 "adcode": address_component.get("adcode", ""),
+                "roads": regeocode.get("roads", []),
+                "roadinters": regeocode.get("roadinters", []),
+                "pois": regeocode.get("pois", []),
+                "aois": regeocode.get("aois", []),
+                "neighborhood": regeocode.get("neighborhood", {}),
+                "building": regeocode.get("building", {}),
+                "raw_regeocode": regeocode,
             },
             metadata={"lon": lon, "lat": lat, "source": "amap"},
         )

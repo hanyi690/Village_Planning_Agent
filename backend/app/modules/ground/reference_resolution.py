@@ -276,6 +276,7 @@ def resolve_l1_location_mentions(
     *,
     ground_llm_budget: dict[str, Any] | None = None,
     evidence_packets: dict[str, Any] | None = None,
+    candidate_selection_decisions: dict[str, Any] | None = None,
     max_rounds: int = 2,
 ) -> list[GroundedEntityBinding]:
     """Resolve every L1 location work item against current source evidence.
@@ -293,7 +294,11 @@ def resolve_l1_location_mentions(
     observations = ObservationStore.from_location_mentions(mentions)
     context.evidence_observations = observations
     bindings_by_ref = {binding.mention_ref: binding for binding in base_bindings}
-    resolver = SpatialResolver(context, ground_llm_budget=ground_llm_budget)
+    resolver = SpatialResolver(
+        context,
+        ground_llm_budget=ground_llm_budget,
+        candidate_selection_decisions=candidate_selection_decisions,
+    )
     rounds = max(1, min(int(max_rounds or 1), 3))
     for round_index in range(rounds):
         changed = False

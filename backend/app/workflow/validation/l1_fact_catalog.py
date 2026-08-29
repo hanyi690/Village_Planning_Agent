@@ -143,6 +143,8 @@ def build_l1_fact_catalog(fact_records: Iterable[Any] | None) -> L1FactCatalog:
         fact_kind = _text(_value(record, "fact_kind"))
         dimension_key = _text(_value(record, "dimension_key"))
         statement = _text(_value(record, "statement"))
+        fact_status = _text(_value(record, "status")) or "observed"
+        uncertainty = _text(_value(record, "uncertainty"))
         is_spatial = fact_kind in SPATIAL_L1_FACT_KINDS
         candidates.append(
             CandidateDescriptor(
@@ -153,6 +155,8 @@ def build_l1_fact_catalog(fact_records: Iterable[Any] | None) -> L1FactCatalog:
                     "dimension_key": dimension_key,
                     "fact_kind": fact_kind,
                     "spatial": is_spatial,
+                    "status": fact_status,
+                    "uncertainty": uncertainty,
                 },
             )
         )

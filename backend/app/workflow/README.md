@@ -5,7 +5,7 @@ interrupt 和 checkpoint 边界；数据层、空间层和交付 adapter 不反�
 
 ## 文件职责
 
-- `root_graph.py`：`create_unified_planning_graph`、主图边和条件路由。
+- `graph.py`：`create_unified_planning_graph`、主图边和条件路由。
 - `stages/target_projection.py`：唯一 TARGET_PROJECTION 阶段服务，将 PlanningProgram 投影为可验证的空间引用。
 - `stages/ground.py`：唯一 GROUND 阶段服务，将空间引用绑定到数据层证据和候选集。
 - `stages/select.py`：唯一 SELECT 阶段服务，产出 solver decision、portfolio artifacts 和 ExecutionPlan。

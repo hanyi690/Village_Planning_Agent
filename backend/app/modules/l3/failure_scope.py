@@ -35,6 +35,7 @@ _CLAIM_CODES = frozenset({
     "claim_contract_invalid",
     "draft_contract_invalid",
     "claim_admission_incomplete",
+    "claim_lineage_missing",
     "claim_not_executable",
     "spatial_claim_unknown_fact",
     "missing_asset_kind",

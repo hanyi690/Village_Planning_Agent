@@ -80,9 +80,10 @@ DIMENSION_EXECUTION_TIMEOUT_S = float(
 )  # includes provider queue wait plus one long real request
 LAYER_TIMEOUT_S = int(os.getenv("LAYER_TIMEOUT_S", "1800"))  # bounds a full provider wave set without allowing an unbounded fan-in
 GROUND_ANCHOR_TIMEOUT_S = float(os.getenv("GROUND_ANCHOR_TIMEOUT_S", "180"))  # optional L1 enrichment budget; never block L2 indefinitely
-# Spatial grounding is still opt-in below.  Once enabled, one run needs enough
-# time for grouped ambiguous mentions and typed topology-aware choices; the
-# deterministic candidate graph always runs first, so these are not blind calls.
+# Spatial grounding uses the shared LLM selector by default. One run still has
+# a bounded call budget for grouped ambiguous mentions and typed topology-aware
+# choices; the deterministic candidate graph always runs first, so these are
+# evidence-constrained calls rather than blind generation.
 GROUND_LLM_CALL_TIMEOUT_S = float(LLM_CONFIG.ground_call_timeout_s)
 GROUND_MAX_LLM_CALLS = int(LLM_CONFIG.ground_max_calls)
 GROUND_LLM_MAX_CONCURRENT = LLM_CONFIG.stage_concurrency("ground")
@@ -95,6 +96,13 @@ GROUND_LLM_PARSE_RETRIES = int(LLM_CONFIG.ground_parse_retries)
 GROUND_LLM_ENABLED = bool(LLM_CONFIG.ground_llm_enabled)
 RAG_TIMEOUT_S = int(os.getenv("RAG_TIMEOUT_S", "60"))  # per-dimension RAG retrieval cap
 EXTERNAL_ANCHOR_TIMEOUT_S = int(os.getenv("EXTERNAL_ANCHOR_TIMEOUT_S", "30"))  # 外源锚点总预算，超时跳过（绝不阻塞 L1 派发）
+# Normalized map observations are loaded from this local cache only.  The
+# loader never owns an HTTP client; changing this path therefore cannot turn
+# evidence retrieval into an implicit provider request.
+EXTERNAL_MAP_CACHE_ROOT = os.getenv(
+    "EXTERNAL_MAP_CACHE_ROOT",
+    str(PROJECT_ROOT / "output" / "map_validation"),
+)
 
 def _parse_dimension_timeouts(raw: str) -> dict[str, float]:
     """Parse the per-dimension idle-timeout map from ``DIMENSION_TIMEOUT_S``.

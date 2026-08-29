@@ -148,51 +148,6 @@ class ContextBuildError(RuntimeError):
     pass
 
 
-def _load_session_semantic_memory(session_id: str) -> Any:
-    """Restore the latest persisted KG semantic annotations for a session.
-
-    L1 enrichment writes village→ResidentialCluster bindings to the semantic
-    memory round files.  A resumed LangGraph thread may run in a fresh worker
-    where the process singleton is empty; rebuilding a gazetteer without this
-    persisted memory silently drops the L1 bindings and makes GROUND diverge
-    from the checkpoint.  Loading the latest round is deterministic and scoped
-    to the session id, so it does not introduce cross-session state.
-    """
-    try:
-        from app.infrastructure.kg.memory import (
-            SemanticMemoryStore,
-            get_memory_dir,
-            load_memory_state,
-        )
-
-        candidates = list(get_memory_dir().glob(f"{session_id}_round_*.json"))
-        if not candidates:
-            return SemanticMemoryStore()
-
-        def round_number(path: Any) -> int:
-            try:
-                return int(path.stem.rsplit("_round_", 1)[1])
-            except (IndexError, TypeError, ValueError):
-                return -1
-
-        latest = max(candidates, key=round_number)
-        round_num = round_number(latest)
-        if round_num < 0:
-            return SemanticMemoryStore()
-        return load_memory_state(session_id, round_num)
-    except Exception as exc:
-        logger.warning(
-            "[PlanningContext] semantic memory restore failed: %s",
-            type(exc).__name__,
-        )
-        try:
-            from app.infrastructure.kg.memory import SemanticMemoryStore
-
-            return SemanticMemoryStore()
-        except Exception:
-            return None
-
-
 def _next_version(session_id: str) -> int:
     _build_counter[session_id] = _build_counter.get(session_id, 0) + 1
     return _build_counter[session_id]
@@ -341,16 +296,9 @@ async def build_planning_context(
             from app.infrastructure.kg.gazetteer import build_gazetteer
 
             if kg is not None and bundle is not None and getattr(kg, "g", None) is not None:
-                # The latest L1/L2/L3 enrichment round is part of the
-                # authoritative context inputs.  It must be restored before
-                # any checkpoint replay; otherwise the same thread sees a
-                # different gazetteer after process restart.
-                memory = _load_session_semantic_memory(session_id)
                 gazetteer = build_gazetteer(
                     kg,
                     bundle,
-                    memory=memory,
-                    village_name=resolved_village,
                 )
         except Exception as e:
             logger.warning(
@@ -508,6 +456,22 @@ async def build_planning_context(
             "[PlanningContext] external provider unavailable: %s",
             type(exc).__name__,
         )
+    external_observation_snapshot = None
+    try:
+        from app.core.settings import EXTERNAL_MAP_CACHE_ROOT
+        from app.data.catalog.external_observation_cache import (
+            load_cached_external_observation_snapshot,
+        )
+
+        external_observation_snapshot = load_cached_external_observation_snapshot(
+            resolved_village,
+            root=EXTERNAL_MAP_CACHE_ROOT,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[PlanningContext] cached map observations unavailable: %s",
+            type(exc).__name__,
+        )
     context = PlanningContext(
         session_id=session_id,
         village_name=resolved_village,
@@ -526,6 +490,7 @@ async def build_planning_context(
         reports_loaded=bool(include_reports and session_id and bundle is not None),
         report_summary_index=report_summary_index,
         external_search_port=external_search_port,
+        external_observation_snapshot=external_observation_snapshot,
         ports=ports,
     )
 
@@ -552,11 +517,17 @@ async def build_planning_context(
         "report_count": len(reports),
         "reports_loaded": context.reports_loaded,
         "report_keys": sorted(reports.keys()),
+        "external_observation_digest": str(
+            getattr(external_observation_snapshot, "digest", "") or ""
+        ),
+        "external_observation_count": len(
+            getattr(external_observation_snapshot, "observations", []) or []
+        ),
     }
     context._record_capabilities()
     context.required_capabilities_missing = [
         cap for cap, present in context.capabilities.items()
-        if not present and cap != "bundle"
+        if not present and cap not in {"bundle", "external_observations"}
     ]
     context._recompute_hash()
 

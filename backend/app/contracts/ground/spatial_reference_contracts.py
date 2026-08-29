@@ -32,6 +32,22 @@ _VALID_DIRECTIONS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
 _VALID_OPS = ("and", "or", "not")
 
 _SPATIAL_ROLE_ALIASES: dict[str, str] = {
+    # L1 roles describe the business work item.  GROUND must translate them
+    # into the small set of retrieval roles before applying source filters.
+    "parent_area": "scope",
+    "building_concentration_area": "scope",
+    "new_building_location": "scope",
+    "facility_location": "scope",
+    "facility_cluster": "scope",
+    "cluster_location": "scope",
+    "service_area": "scope",
+    "location": "scope",
+    "primary_road": "road",
+    "internal_road": "road",
+    "east_west_road": "road",
+    "parking_facility": "facility",
+    "transit_facility": "facility",
+    "infrastructure": "facility",
     "transportation_facility": "facility",
     "transport_facility": "facility",
     "public_facility": "facility",
@@ -201,6 +217,25 @@ class CandidateSelectionBatchProposal(BaseModel):
     decisions: list[CandidateSelectionBatchDecision]
 
 
+class GroundTargetPriorityDecision(BaseModel):
+    """LLM priority advice for already admitted grounding targets."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_id: str
+    priority: Literal["high", "medium", "low"]
+    input_digest: str
+    reason: str = Field(default="", max_length=300)
+
+
+class GroundTargetPriorityBatchProposal(BaseModel):
+    """Strict batch envelope for bounded target-order reasoning."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decisions: list[GroundTargetPriorityDecision]
+
+
 def render_candidate_selection_batch_contract() -> str:
     """Render the provider-facing contract for batched closed-set choices."""
 
@@ -213,6 +248,30 @@ def render_candidate_selection_batch_contract() -> str:
         "每个 decision_id 必须逐字复制任务输入；每个 input_digest 必须逐字复制同一任务输入。",
         "selected_candidate_id 只能逐字复制同一任务允许集合中的一个 ID；无法确定时 status=abstain 或 ambiguous，且 selected_candidate_id 为空字符串。",
         '输出形状示例（示例值不可照抄）：{"decisions":[{"decision_id":"<任务 ID>","status":"abstain","selected_candidate_id":"","input_digest":"<任务 digest>"}]}',
+    ))
+
+
+def render_ground_target_priority_contract(target_ids: Iterable[str]) -> str:
+    """Render the closed target-set contract for priority advice."""
+
+    ids = tuple(
+        dict.fromkeys(
+            str(value).strip()
+            for value in target_ids
+            if str(value).strip()
+        )
+    )
+    allowed = json.dumps(list(ids), ensure_ascii=False)
+    return "\n".join((
+        "【结构化 GROUND 目标优先级契约】",
+        "这是处理顺序建议，不是空间解析结果；不得创建、改写或删除目标。",
+        f"本次允许排序的 target_id 集合（仅供判断）：{allowed}",
+        "顶层字段必须且只能是 decisions；数组项字段必须且只能是 target_id、priority、input_digest、reason。",
+        "每个 target_id 必须逐字复制输入集合中的一个 ID；不要输出其他 ID。",
+        "priority 只能是 high、medium、low；high 表示当前证据更可能完成闭集解析。",
+        "input_digest 必须逐字复制对应目标输入的 digest；无法判断时使用 low。",
+        "reason 只能说明证据充分度、候选规模、关系线索或缺口，不得声称已经生成坐标、几何或权威身份。",
+        '输出形状示例（示例值不可照抄）：{"decisions":[{"target_id":"<输入 target_id>","priority":"low","input_digest":"<输入 digest>","reason":"证据仍不充分"}]}',
     ))
 
 

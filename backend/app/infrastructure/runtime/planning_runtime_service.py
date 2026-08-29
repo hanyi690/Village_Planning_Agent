@@ -38,7 +38,7 @@ from app.application.projections.models import TaskStatus
 from app.infrastructure.events import event_hub as sse_manager
 from app.application.queries.checkpoint import checkpoint_service, checkpoint_persistence_manager
 from app.core.settings import GRAPH_MAX_CONCURRENCY, GRAPH_RECURSION_LIMIT
-from app.workflow.root_graph import create_unified_planning_graph
+from app.workflow.graph import create_unified_planning_graph
 from app.workflow.runtime_adapter import materialize_workflow_state, pack_workflow_patch
 from app.workflow.plan_state.state import state_to_ui_status
 from app.workflow.layers.phase_machine import (

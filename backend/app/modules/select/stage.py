@@ -93,6 +93,7 @@ async def _reason_select_scenario(
         create_flash_model,
         run_structured,
     )
+    from app.infrastructure.context_runtime import build_bounded_table
 
     settings = get_llm_settings()
     if settings.disable_llm:
@@ -123,21 +124,37 @@ async def _reason_select_scenario(
         query_text=query_text,
         candidates=descriptors,
     )
+    _, scenario_table = build_bounded_table(
+        (
+            "candidate_id",
+            "status",
+            "target_selections",
+            "objective_vector",
+            "metrics",
+            "findings",
+        ),
+        [
+            {
+                "candidate_id": item.candidate_id,
+                "status": item.label,
+                "target_selections": item.metadata.get("target_selections", []),
+                "objective_vector": item.metadata.get("objective_vector", {}),
+                "metrics": item.metadata.get("metrics", {}),
+                "findings": item.metadata.get("findings", []),
+            }
+            for item in descriptors
+        ],
+        max_rows=32,
+        max_chars=12000,
+    )
     prompt = "\n".join((
         render_candidate_selection_contract(item.candidate_id for item in descriptors),
         "这是 SELECT 的场景卡 advisory reasoning。只能从 solver 已生成的场景闭集中选择；"
         "不得生成候选、改写约束、改变指标或输出 geometry。solver certificate 和 gate 才是最终权威。",
         f"场景集合语义={query_text}",
         f"input_digest={input_digest}",
-        "场景卡：",
-        "| candidate_id | status | 关键约束/指标 |",
-        "|---|---|---|",
-        "\n".join(
-            f"| {item.candidate_id} | {item.label} | "
-            + str(item.metadata).replace("|", "\\|").replace("\n", " ")
-            + " |"
-            for item in descriptors
-        ),
+        "场景卡（Context Runtime 有界结构化表格）：",
+        scenario_table,
     ))
     try:
         if llm is None:

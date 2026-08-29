@@ -29,6 +29,7 @@ class SpatialKGEntity:
     geometry_wkt: str | None = None
     geometry_crs: str = "EPSG:4326"
     snapshot_digest: str = ""
+    properties: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,12 @@ class RdfSpatialKGIndex:
                 feature_bsm=feature_bsm,
                 source_feature_id=source_feature_id,
                 source_layer=str(graph.value(subject, PLN.source_layer) or "").strip() or None,
+                properties=tuple(sorted(
+                    (str(predicate), str(value))
+                    for predicate, value in graph.predicate_objects(subject)
+                    if getattr(value, "datatype", None) is not None
+                    or not str(value).startswith("http")
+                )),
             )
             if name or types or feature_bsm or source_feature_id:
                 self._entities[entity_ref] = entity
@@ -340,7 +347,7 @@ class PostGISKGStore:
             self._text(
                 """SELECT entity_ref, entity_type, canonical_name, aliases,
                         feature_bsm, source_feature_id, source_layer,
-                        ST_AsText(geometry) AS geometry_wkt, geometry_crs
+                        ST_AsText(geometry) AS geometry_wkt, geometry_crs, properties
                    FROM kg_entities
                   WHERE """ + " AND ".join(filters) +
                 " ORDER BY entity_ref LIMIT :limit"
@@ -365,6 +372,10 @@ class PostGISKGStore:
                     geometry_wkt=data["geometry_wkt"],
                     geometry_crs=str(data["geometry_crs"] or "EPSG:4326"),
                     snapshot_digest=self.snapshot_digest,
+                    properties=tuple(
+                        (str(key), str(value))
+                        for key, value in (json.loads(data["properties"]) if isinstance(data["properties"], str) else (data["properties"] or {})).items()
+                    ),
                 )
             )
         return result

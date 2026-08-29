@@ -264,40 +264,51 @@ def _analysis_evidence_context(
                 *(str(ref).strip() for ref in fact.get("evidence_refs", []) or []),
             })
         ]
-    def cell(value: Any) -> str:
-        if value is None:
-            return ""
-        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True)
-        return str(text).replace("|", "\\|").replace("\n", " ")
-
     sections = ["## EXPLORE 证据"]
     facts = projection.get("facts", [])
     if facts:
-        sections.extend([
-            "### 事实",
-            "| fact_id | statement | subject_ref | predicate | value | source_refs | evidence_refs |",
-            "| --- | --- | --- | --- | --- | --- | --- |",
-        ])
-        sections.extend(
-            "| " + " | ".join(cell(fact.get(key)) for key in (
-                "fact_id", "statement", "subject_ref", "predicate", "value", "source_refs", "evidence_refs"
-            )) + " |"
-            for fact in facts
+        from app.infrastructure.context_runtime import build_bounded_table
+
+        _, fact_table = build_bounded_table(
+            (
+                "fact_id",
+                "statement",
+                "subject_ref",
+                "predicate",
+                "value",
+                "source_refs",
+                "evidence_refs",
+            ),
+            facts,
+            max_rows=min(budget, 16),
+            max_chars=9000,
         )
+        sections.extend(["### 事实", fact_table])
     coverage = projection.get("coverage", {})
     if coverage:
-        sections.extend(["### 覆盖状态", "| 字段 | 值 |", "| --- | --- |"])
-        sections.extend(
-            f"| {cell(key)} | {cell(value)} |"
-            for key, value in coverage.items()
+        from app.infrastructure.context_runtime import build_bounded_table
+
+        _, coverage_table = build_bounded_table(
+            ("field", "value"),
+            [
+                {"field": key, "value": value}
+                for key, value in coverage.items()
+            ],
+            max_rows=24,
+            max_chars=5000,
         )
+        sections.extend(["### 覆盖状态", coverage_table])
     gaps = projection.get("gap", [])
     if gaps:
-        sections.extend(["### 证据缺口", "| gap_id | status | reason |", "| --- | --- | --- |"])
-        sections.extend(
-            "| " + " | ".join(cell(row.get(key)) for key in ("gap_id", "status", "reason")) + " |"
-            for row in gaps
+        from app.infrastructure.context_runtime import build_bounded_table
+
+        _, gap_table = build_bounded_table(
+            ("gap_id", "status", "reason"),
+            gaps,
+            max_rows=min(budget, 16),
+            max_chars=5000,
         )
+        sections.extend(["### 证据缺口", gap_table])
     return "\n".join(sections)
 
 

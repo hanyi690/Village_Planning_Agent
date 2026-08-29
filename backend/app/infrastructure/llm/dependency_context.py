@@ -5,7 +5,7 @@ from collections.abc import Collection
 import json
 from typing import Any
 
-from app.infrastructure.context_runtime.table_renderer import render_dependency_table, render_table
+from app.infrastructure.context_runtime.table_renderer import build_bounded_table
 from app.infrastructure.reports.report_store import ReportStore
 
 
@@ -41,42 +41,50 @@ class DependencyContext:
             item for item in self.artifacts if item.dimension_key in selected
         ]
         if instruction_projection == "decision":
+            decision_columns = (
+                "source_dimensions",
+                "decision_type",
+                "decision_id",
+                "statement_or_name",
+                "scope_or_value",
+                "refs",
+                "requirements",
+            )
+            _, decision_table = build_bounded_table(
+                decision_columns,
+                _decision_rows(selected_artifacts),
+                max_rows=48,
+                max_chars=12000,
+            )
             lines = [
                 "【跨依赖去重后的 L2 abstract decisions】",
-                render_table(
-                    (
-                        "source_dimensions",
-                        "decision_type",
-                        "decision_id",
-                        "statement_or_name",
-                        "scope_or_value",
-                        "refs",
-                        "requirements",
-                    ),
-                    _decision_rows(selected_artifacts),
-                ),
+                decision_table,
             ]
             missing = [key for key in self.missing_keys if key in selected]
             if missing:
                 lines.append("缺失的直接依赖：" + "、".join(missing))
             return "\n".join(lines)
         if instruction_projection == "claim":
+            claim_columns = (
+                "source_dimensions",
+                "claim_id",
+                "claim_family",
+                "planning_role",
+                "statement",
+                "location_hints",
+                "refs",
+                "grounding_requirements",
+                "uncertainty",
+            )
+            _, claim_table = build_bounded_table(
+                claim_columns,
+                _claim_rows(selected_artifacts),
+                max_rows=48,
+                max_chars=12000,
+            )
             lines = [
                 "【跨依赖去重后的 L3 rough claims】",
-                render_table(
-                    (
-                        "source_dimensions",
-                        "claim_id",
-                        "claim_family",
-                        "planning_role",
-                        "statement",
-                        "location_hints",
-                        "refs",
-                        "grounding_requirements",
-                        "uncertainty",
-                    ),
-                    _claim_rows(selected_artifacts),
-                ),
+                claim_table,
             ]
             missing = [key for key in self.missing_keys if key in selected]
             if missing:
@@ -105,9 +113,23 @@ class DependencyContext:
         missing = [
             key for key in self.missing_keys if key in selected
         ]
+        _, dependency_table = build_bounded_table(
+            (
+                "dimension_key",
+                "layer",
+                "version",
+                "report_id",
+                "instruction_status",
+                "summary",
+                "instruction",
+            ),
+            allowed_dependencies,
+            max_rows=32,
+            max_chars=12000,
+        )
         lines = [
             f"消费维度：{self.dimension_key}（L{self.layer}）",
-            render_dependency_table(allowed_dependencies),
+            dependency_table,
         ]
         if missing:
             lines.append("\n缺失的直接依赖：" + "、".join(missing))

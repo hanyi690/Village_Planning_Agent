@@ -7,6 +7,7 @@ geometry and it never invents semantic candidates.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from app.contracts.evidence.source_semantic_contracts import (
@@ -34,10 +35,19 @@ _L1_ROLE_TO_KG_TYPE = {
 _KG_TYPE_TO_SOURCE_SHAPE = {
     str(EntityTypes.Facility): (("annotations_current", "facilities_current"), ("Point", "MultiPoint")),
     str(EntityTypes.Road): (("roads_current", "current_road"), ("LineString", "MultiLineString")),
-    str(EntityTypes.WaterBody): (("water_current", "water"), ("Polygon", "MultiPolygon", "LineString", "MultiLineString")),
+    str(EntityTypes.WaterBody): (("water_bodies", "water_current", "water"), ("Polygon", "MultiPolygon", "LineString", "MultiLineString")),
 }
 
 MAX_KG_SEMANTIC_CANDIDATES = 128
+
+_NON_SEMANTIC_PROPERTY_TOKENS = (
+    "geometry", "coordinate", "longitude", "latitude", "经度", "纬度",
+    "wkt", "shape", "source_feature_id", "source_uri", "source_path",
+    "feature_bsm", "source_bsm", "snapshot_digest", "source_dataset",
+    "source_content_digest", "source_label", "source_feature_index",
+    "content_digest", "feature_index", "objectid", "fid", "layer_type",
+    "source_layer", "source_crs", "crs", "bsm",
+)
 
 
 _RUNTIME_STORE: Any | None = None
@@ -52,11 +62,91 @@ def _runtime_store() -> Any:
     return _RUNTIME_STORE
 
 
+def _property_text(value: Any) -> str:
+    if value is None or isinstance(value, (dict, list, tuple, set)):
+        if isinstance(value, (list, tuple, set)) and all(
+            isinstance(item, (str, int, float, bool)) for item in value
+        ):
+            return ", ".join(str(item) for item in value)
+        return ""
+    return str(value).strip()
+
+
+def _semantic_property_key(key: Any) -> str:
+    return str(key or "").strip()
+
+
+def _is_semantic_property(key: str) -> bool:
+    folded = key.casefold().replace("-", "_").replace(" ", "_")
+    return bool(folded) and not folded.startswith("_") and not any(
+        token in folded for token in _NON_SEMANTIC_PROPERTY_TOKENS
+    )
+
+
+def _feature_property_sources(feature: object) -> list[tuple[str, dict[str, Any]]]:
+    sources: list[tuple[str, dict[str, Any]]] = []
+    for prefix, value in (
+        ("gis", getattr(feature, "properties", None)),
+        ("raw", getattr(feature, "_raw", None)),
+    ):
+        if isinstance(value, dict):
+            sources.append((prefix, value))
+    dumper = getattr(feature, "model_dump", None)
+    if callable(dumper):
+        try:
+            dumped = dumper(mode="python")
+        except TypeError:
+            dumped = dumper()
+        if isinstance(dumped, dict):
+            sources.append(("model", dumped))
+    values = getattr(feature, "__dict__", None)
+    if isinstance(values, dict):
+        sources.append(("object", values))
+    return sources
+
+
+def _feature_source_id(feature: object) -> str:
+    raw = getattr(feature, "_raw", None)
+    properties = getattr(feature, "properties", None)
+    for source in (raw, properties):
+        if isinstance(source, dict) and str(source.get("source_feature_id") or "").strip():
+            return str(source["source_feature_id"]).strip()
+    return str(getattr(feature, "source_feature_id", "") or "").strip()
+
+
+def _semantic_properties(feature: object) -> tuple[str, dict[str, str]]:
+    properties: dict[str, str] = {}
+    seen_field_names: set[str] = set()
+    for prefix, source in _feature_property_sources(feature):
+        for raw_key, raw_value in source.items():
+            key = _semantic_property_key(raw_key)
+            value = _property_text(raw_value)
+            if not value or not _is_semantic_property(key):
+                continue
+            field_name = key.casefold().replace("-", "_").replace(" ", "_")
+            if field_name in seen_field_names:
+                continue
+            seen_field_names.add(field_name)
+            properties.setdefault(f"{prefix}.{key}", value)
+    label = ""
+    label_keys = {
+        "text", "name", "label", "road_name", "facility_name", "water_name",
+        "注记", "名称", "地质灾害点名称", "source_label",
+    }
+    for key, value in properties.items():
+        field_name = key.rsplit(".", 1)[-1].casefold().replace("-", "_").replace(" ", "_")
+        if field_name in label_keys:
+            label = value
+            break
+    return label, properties
+
+
 def collect_authoritative_source_features(context: Any) -> dict[str, list[object]]:
-    """Collect current facility/road source features with bounded identity."""
+    """Collect current facility/road/water source features with bounded identity."""
     workspace = getattr(context, "workspace", None)
     point_layers = getattr(workspace, "points", None)
     line_layers = getattr(workspace, "lines", None)
+    polygon_layers = getattr(workspace, "polygons", None)
 
     def collect(group: Any, layer_names: tuple[str, ...]) -> list[object]:
         get = getattr(group, "get", None)
@@ -65,9 +155,8 @@ def collect_authoritative_source_features(context: Any) -> dict[str, list[object
         for layer_name in layer_names:
             values = get(layer_name) if callable(get) else []
             for feature in values or []:
-                raw = getattr(feature, "_raw", {}) or {}
-                source_id = str(
-                    raw.get("source_feature_id") if isinstance(raw, dict) else ""
+                source_id = _feature_source_id(feature) or str(
+                    getattr(feature, "bsm", "") or ""
                 ).strip()
                 identity = source_id or f"object:{id(feature)}"
                 if identity in seen:
@@ -82,6 +171,7 @@ def collect_authoritative_source_features(context: Any) -> dict[str, list[object
             ("annotations_current", "facilities_current"),
         ),
         "road": collect(line_layers, ("roads_current",)),
+        "water": collect(polygon_layers, ("water_bodies", "water_current", "water")),
     }
 
 
@@ -93,27 +183,21 @@ def source_feature_descriptor(
     raw = getattr(feature, "_raw", {}) or {}
     if not isinstance(raw, dict):
         raw = {}
-    source_feature_id = str(raw.get("source_feature_id") or "").strip()
+    source_feature_id = _feature_source_id(feature)
+    if not source_feature_id:
+        feature_bsm = str(getattr(feature, "bsm", "") or "").strip()
+        if feature_bsm:
+            source_feature_id = f"bundle:{group_key}:{feature_bsm}"
     if not source_feature_id:
         return None
-    label = ""
-    for attr in ("text", "name", "label", "road_name", "facility_name", "注记"):
-        value = getattr(feature, attr, "")
-        if not value and isinstance(getattr(feature, "properties", None), dict):
-            value = feature.properties.get(attr, "")
-        if str(value or "").strip():
-            label = str(value).strip()
-            break
+    label, semantic_properties = _semantic_properties(feature)
     geometry = getattr(feature, "geometry", {}) or {}
     geometry_kind = str(geometry.get("type") or "") if isinstance(geometry, dict) else ""
-    properties = {
-        key: str(raw[key])
-        for key in ("source_label", "source_dataset", "category", "分类")
-        if str(raw.get(key) or "").strip()
-    }
+    properties = semantic_properties
     descriptor_layer_key = {
         "facility": "annotations_current",
         "road": "roads_current",
+        "water": "water_bodies",
     }.get(group_key, group_key)
     return SourceFeatureDescriptor(
         source_feature_id=source_feature_id,
@@ -138,6 +222,23 @@ def source_descriptors(
                 continue
             descriptors.append(descriptor)
     return descriptors, missing_identity
+
+
+def _kg_entity_attributes(entity: Any) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for key in ("canonical_name", "entity_type"):
+        value = str(getattr(entity, key, "") or "").strip()
+        if value:
+            values[key] = value
+    aliases = [str(value).strip() for value in (getattr(entity, "aliases", None) or []) if str(value).strip()]
+    if aliases:
+        values["aliases"] = ", ".join(dict.fromkeys(aliases))
+    for key, value in (getattr(entity, "properties", None) or ()):
+        key_text = str(key).strip()
+        value_text = str(value).strip()
+        if key_text and value_text and _is_semantic_property(key_text):
+            values.setdefault(key_text, value_text)
+    return values
 
 
 def kg_semantic_candidates(
@@ -218,6 +319,11 @@ def kg_semantic_candidates(
                 optional_kg_concept_ref=concept_ref,
                 compatible_layers=list(layers),
                 compatible_geometry_kinds=list(geometry_kinds),
+                supporting_attributes={
+                    key: value
+                    for entity in entities[:8]
+                    for key, value in _kg_entity_attributes(entity).items()
+                },
             )
         )
         if len(candidates) >= MAX_KG_SEMANTIC_CANDIDATES:
@@ -346,6 +452,7 @@ async def classify_source_semantics(
         source_snapshot_digest=snapshot_digest,
         source_items=descriptors,
         l1_facts=list(getattr(context, "l1_fact_records", []) or []),
+        l1_mentions=list(getattr(context, "location_mentions", []) or []),
         kg_candidates=kg_semantic_candidates(
             context,
             list(getattr(context, "l1_fact_records", []) or []),

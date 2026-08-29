@@ -634,8 +634,20 @@ def _compile_typed_observation_facts(
             raw = observation_to_compiler_payload(item)
         except Exception:
             continue
-        if str(raw.get("status") or "").strip() != "confirmed":
+        raw_status = str(raw.get("status") or "").strip().lower()
+        if raw_status not in {
+            "confirmed",
+            "uncertain",
+            "conflict",
+            "source_exhausted",
+        }:
             continue
+        fact_level, fact_status = {
+            "confirmed": ("observed", "observed"),
+            "uncertain": ("pending", "pending"),
+            "conflict": ("conflicted", "conflicted"),
+            "source_exhausted": ("pending", "pending"),
+        }[raw_status]
         name = str(raw.get("name") or "").strip()
         entity_type = str(raw.get("entity_type") or "").strip()
         location = str(raw.get("location") or "").strip()
@@ -694,6 +706,13 @@ def _compile_typed_observation_facts(
             for key, value in (raw.get("attributes") or {}).items()
             if str(key).strip() and str(value).strip()
         }
+        raw_uncertainty = str(raw.get("uncertainty") or "").strip()
+        if raw_status != "confirmed":
+            attributes.setdefault("observation_status", raw_status)
+        uncertainty = raw_uncertainty or (
+            "" if raw_status == "confirmed"
+            else f"provider_status:{raw_status}"
+        )
         standard_attributes = {
             "fact_type": kind,
             "entity_type": entity_type,
@@ -741,6 +760,9 @@ def _compile_typed_observation_facts(
             source_refs=source_refs,
             source_span=source_span,
             source_feature_ids=(raw.get("source_feature_ids") or []),
+            inference_level=fact_level,
+            uncertainty=uncertainty,
+            status=fact_status,
         )
         if record is not None:
             records.append(record)

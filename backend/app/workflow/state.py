@@ -14,7 +14,7 @@ from app.contracts.workflow.workflow_contracts import GateDecision
 
 
 # ``execute`` 是有意不在 GATE_STAGES 里的显式豁免（A4）：EXECUTE 阶段不
-# 产出 gate artifact，其路由只看 fatal_error（见 root_graph.route_after_execute）。
+# 产出 gate artifact，其路由只看 fatal_error（见 graph.route_after_execute）。
 GATE_STAGES = frozenset(
     {
         "l1",
