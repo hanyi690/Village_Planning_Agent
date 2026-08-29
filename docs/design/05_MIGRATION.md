@@ -545,3 +545,43 @@ SELECT 对“没有可解 GroundedPlanningProblem”的结果新增明确终点�
 
 这样“无法解决”会成为可追踪的 partial/pending/deferred 结果，而不是伪造
 满足或让 workflow 无期限停留在原维度。
+
+### 2026-08-28 KG/GIS 异构属性与 GROUND 上下文收敛
+
+当前金田村复核发现，`roads_current` 的 131 条线有真实 BSM/几何但没有道路名称，
+`water_bodies` 的 44 条有效水体候选主要带有分类属性而没有“金田河/石窟河”命名几何。
+如果只按 canonical name 查询，L1 的道路/水体地点会错误地得到零候选，GROUND 无法进行
+后续推理。当前修复为：
+
+1. `infrastructure/evidence_runtime/source_semantic_runtime.py` 从 GIS
+   `properties`、`_raw`、模型字段和 KG RDF literal predicate/value 统一投影业务属性；
+   只排除 geometry、坐标、BSM、source identity、layer/CRS 等元数据，不维护村庄专属
+   实体字段白名单。新实体类型可进入当前快照闭集，已知类型只增加可选 layer/geometry
+   约束。
+2. 源语义分类、GROUND 候选选择、L1→GROUND 批量选择、GROUND 目标优先级和 L1 observe
+   页均通过 `Context Runtime.build_bounded_table()` 生成有界结构化表格；JSON 只用于
+   digest/持久化，不作为业务上下文直接传给 LLM。没有名称且只有来源元数据/纯数值的
+   道路行仍写入 unresolved，但不消耗 provider 调用。
+3. `EvidenceGraph` 在名称缺失时按显式 `road`/`water` 角色召回当前源候选；对 L1
+   提供的“东西向”等线走向语义，runtime 从真实线几何做 15 度容差的方向过滤。过滤后
+   仍是 candidate set，不会选择首条、最长条或任意水面；候选身份、几何和 provenance
+   仍由 Bundle/KG 提供，闭集 LLM 只能选择或 abstain。
+
+当前金田村非测试探针结果：道路角色域 131 条，东西向几何候选 26 条；水体角色域 44
+条。两者均保持 `ambiguous`，说明上下文已经进入 GROUND，但当前源仍不足以证明唯一的
+`122乡道`、`金田河`或`石窟河`。下一步必须消费候选分页、加入 KG/水系关系约束并记录每轮
+“新证据使哪些候选可解析”，不能把该域误标为 exact。
+
+同时，生产阶段不再从 `get_session_step_reports()` 回读旧步骤来构造 LLM 输入、恢复
+L1 语义输出或补写 L1Snapshot。gazetteer 也不再自动读取 `data/gazetteer/*.json`
+和 `kg_memory/*_round_*.json`。新的调用只能消费当前冻结上下文、当前状态中的
+artifact/CAS checkpoint 和本轮 Evidence Runtime projection；step report/history 仅
+作为审计、展示和运行观测面。
+这样重新执行同一事项时不会把历史会话的旧结论混入当前 source digest，也不会因为历史
+报告存在而跳过当前输入的 L1 observe。
+
+所有直接交给模型的业务数据入口现在统一使用 `Context Runtime.build_bounded_table()`：
+L1 source page、L2/L3 依赖投影、Evidence/EXPLORE facts、source semantic rows、GROUND
+候选/目标表和 SELECT 场景表均由同一运行时执行行数与字符预算。表格单元格可以承载经过
+白名单投影的列表或映射，但不再把 Python `dict` 通过 `str()` 拼成无结构提示文本；JSON
+只保留在 digest、artifact、checkpoint 和审计持久化平面。

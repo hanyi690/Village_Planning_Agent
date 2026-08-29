@@ -14,7 +14,7 @@ must be unified into a single canonical map. This is done by
 copying them into the canonical keys.
 
 It is currently called from multiple runtime node sites:
-- `backend/app/workflow/root_graph.py` inside
+- `backend/app/workflow/graph.py` inside
   `_load_ref_artifact`, which itself is invoked from `post_l3_main_nodes` — a
   runtime node.
 - `backend/app/workflow/layers/context_bootstrap.py` inside

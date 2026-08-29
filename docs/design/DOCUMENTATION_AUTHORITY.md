@@ -12,6 +12,10 @@ This file resolves documentation conflicts before any rewrite or cleanup work. W
 | Documentation governance | `design/DOCUMENTATION_AUTHORITY.md` | Defines which documents are authoritative, supporting, historical, or cleanup-only. |
 | Cleanup record | `design/DOCUMENT_CLEANUP_MANIFEST.md` | Exact record of removed legacy, historical, and generated material; it is not a runtime input. |
 | Overall target architecture and efficiency principles | `design/00_SYSTEM_DESIGN.md` | Target architecture, main chain, efficiency principles, and completion framing. |
+| Cognitive world model and dynamic GIS semantics | `design/07_COGNITIVE_WORLD_MODEL_AND_DYNAMIC_GIS.md` | Cross-stage authority for source data, schema cognition, entity resolution, multi-representation geometry, Session KG, entity retrieval, and GROUND implementation boundaries. |
+| Cognitive world model migration sequence | `design/08_COGNITIVE_WORLD_MODEL_MIGRATION.md` | Normative task ordering, compatibility gates, tests, rollback, and retirement criteria; it does not report current completion status. |
+| Module implementation specification | `design/09_MODULE_IMPLEMENTATION_SPEC.md` | Concrete Data/provider-cache/Cognition-KG/Evidence/GROUND/SELECT/EXECUTE/DELIVER contracts and the gap to a renderable planning result. |
+| Module-level executable design | `design/10_MODULE_LEVEL_EXECUTABLE_DESIGN.md` | Normative module boundaries, Context/Structured Runtime ownership, tabular LLM protocol, dependency products, ref namespaces, gap propagation, and module acceptance gates. |
 | L1 fact construction | `design/01_CONTRACTS_AND_INVARIANTS.md` | L1 facts, source lineage, fact types, and structured-output boundaries. |
 | L2 planning cognition | `design/02_PLANNING_COGNITION.md` | Problems, objectives, demand, suitability, strategy, and L2 output. |
 | L3 planning intent | `design/03_PLANNING_INTENT.md` | Claims, PlanningProgram, lineage, and pre-grounding boundaries. |
@@ -36,9 +40,9 @@ This file resolves documentation conflicts before any rewrite or cleanup work. W
 
 ## Operating rules
 
-1. `docs/design/00` through `docs/design/06` are the only target-design authority set; their primary reading order is the business flow.
+1. `docs/design/00` through `docs/design/10` form the target-design authority set. `00` through `06` remain the primary business-flow reading order; `07` is the cross-stage cognitive world-model and dynamic-GIS authority, `08` is its implementation sequence, `09` is the cache/data integration specification, and `10` is the module-level executable baseline.
 2. `docs/architecture/` documents only observed current behavior. Target claims do not belong there.
-3. `docs/design/05_MIGRATION.md` is the only migration/status ledger between target and current implementation.
+3. `docs/design/05_MIGRATION.md` is the only migration/status ledger between target and current implementation. `08_COGNITIVE_WORLD_MODEL_MIGRATION.md` prescribes the migration sequence but must not be read as evidence that any task is complete.
 4. Historical plans, reports, archive directories, and generated audit snapshots are deleted; they are never workflow inputs.
 5. Pydantic contracts, generated OpenAPI, and repeatable tests remain the field-level authority. Design docs describe ownership, boundaries, and invariants instead of duplicating full schema tables.
 6. Retired design paths that no longer exist in the active tree stay out of active navigation; if they must be mentioned for cleanup work, the mention belongs in the cleanup manifest and task reports only.

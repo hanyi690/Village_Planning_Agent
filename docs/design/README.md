@@ -16,13 +16,18 @@
 - [04_EVIDENCE.md](04_EVIDENCE.md)：Evidence 检索、KG/Bundle 融合、推理、coverage 和 gap 闭合。
 - [05_PROJECTION_AND_GROUND.md](05_PROJECTION_AND_GROUND.md)：目标编译和 GROUND 迭代接地子图。
 - [06_SELECT_EXECUTE_AND_CODE.md](06_SELECT_EXECUTE_AND_CODE.md)：SELECT、EXECUTE、后处理和目标代码树。
+- [07_COGNITIVE_WORLD_MODEL_AND_DYNAMIC_GIS.md](07_COGNITIVE_WORLD_MODEL_AND_DYNAMIC_GIS.md)：Source Data、动态 GIS 语义认知、实体解析、多空间表示、Session KG、实体检索和 GROUND 重构的跨阶段详细设计。
+- [08_COGNITIVE_WORLD_MODEL_MIGRATION.md](08_COGNITIVE_WORLD_MODEL_MIGRATION.md)：上述专项设计的增量实施顺序、双轨门禁、测试、回滚和旧路径退出条件；不代表当前完成状态。
+- [09_MODULE_IMPLEMENTATION_SPEC.md](09_MODULE_IMPLEMENTATION_SPEC.md)：把缓存外源证据、Data/KG 解耦、GROUND 到 SELECT/EXECUTE 资源协议和 DELIVER 渲染验收落实到各模块。
+- [10_MODULE_LEVEL_EXECUTABLE_DESIGN.md](10_MODULE_LEVEL_EXECUTABLE_DESIGN.md)：模块级可执行基线，统一 Context/Structured Runtime、DATA、KG、EVIDENCE、L1/L2/L3、GROUND、SELECT、EXECUTE、DELIVER 的产品、依赖树、LLM 表格协议和验收。
 - [05_MIGRATION.md](05_MIGRATION.md)：目标到当前的迁移状态和前后阶段适配记录。
 
 ## Reading paths
 
 - 理解目标：`00` → `01` → `02` → `03` → `04` → `05` → `06`。
+- 理解通用 GIS 与认知世界模型：先读 `00` 的主链，再读 `07` 的专项设计；准备实施时读 `08`。
 - 核对现状：[CURRENT_RUNTIME.md](../architecture/CURRENT_RUNTIME.md) → [API_AND_STATE.md](../architecture/API_AND_STATE.md) → [OPERATIONS.md](../architecture/OPERATIONS.md)。
 - 判断差距：先读目标 owner，再只查 `05_MIGRATION.md`；不要从历史计划、报告或会话状态推断完成度。
 - 理解决策历史：[ADR](../adr/)；ADR 约束设计，但不替代 current-runtime evidence。
 
-不得在 `design/` 新建日期状态页、第二套总体蓝图或重复契约表。新内容必须修改其 canonical owner；历史与执行材料按 cleanup manifest 处理。
+不得在 `design/` 新建日期状态页、第二套总体蓝图或重复契约表。`07` 是经 authority map 明确授权的跨阶段专项 owner，`08` 是其实施计划；新内容必须修改对应 canonical owner，历史与执行材料按 cleanup manifest 处理。

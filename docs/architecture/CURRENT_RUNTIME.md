@@ -7,7 +7,7 @@
 
 FastAPI is created in [`backend/app/main.py`](../../backend/app/main.py), with lifespan wiring in [`backend/app/bootstrap/lifespan.py`](../../backend/app/bootstrap/lifespan.py) and dependency composition in [`backend/app/bootstrap/composition.py`](../../backend/app/bootstrap/composition.py). The API runtime entry is [`PlanningRuntimeService`](../../backend/app/infrastructure/runtime/planning_runtime_service.py).
 
-The root workflow is built in [`backend/app/workflow/root_graph.py`](../../backend/app/workflow/root_graph.py) and segmented in [`backend/app/workflow/segments.py`](../../backend/app/workflow/segments.py) into:
+The root workflow is built in [`backend/app/workflow/graph.py`](../../backend/app/workflow/graph.py) and segmented in [`backend/app/workflow/segments.py`](../../backend/app/workflow/segments.py) into:
 
 - `intent_loop`
 - `cognitive`

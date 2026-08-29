@@ -23,7 +23,7 @@
 
 ## 代码入口
 
-- 根图：`backend/app/workflow/root_graph.py`
+- 根图：`backend/app/workflow/graph.py`
 - API contracts：`backend/app/api/v1/contracts.py`
 - artifact contracts/runtime：`backend/app/contracts/artifacts/`、`backend/app/infrastructure/artifacts/`
 - 阶段节点：`backend/app/workflow/stages/`
