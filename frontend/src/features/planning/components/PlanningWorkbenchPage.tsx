@@ -1320,7 +1320,7 @@ function TaskFilePicker({ id, files, onChange }: { id: string; files: File[]; on
           />
         </label>
         <span className="text-[10px] text-[#8aa59a]">
-          {files.length ? `${files.length} 个文件` : '可选 · 支持文档/表格/PDF'}
+          {files.length ? `${files.length} 个文件` : '可选 · 非 GIS 文件将由 MinerU 转为 Markdown'}
         </span>
       </div>
       {files.length > 0 && (
@@ -1470,7 +1470,7 @@ function PlanningTaskPanel(props: PlanningTaskPanelProps) {
             />
             <div className="mt-3 rounded-lg bg-[#eef8f3] px-3 py-2 text-[11px] leading-5 text-[#5f8174]">
               村庄名称将绑定 DataCatalog GIS 参考数据；一键示例不会上传 GIS
-              文件。文本用于补充地图难以表达的村情、产业和居民诉求。
+              文件。非 GIS 附件会先由 MinerU 转成 Markdown；图表保留为文本表格，图片先登记为待补充的多模态证据，不阻塞规划。
             </div>
           </section>
           <section className="rounded-2xl border border-[#dcebe4] bg-white p-4 shadow-sm">

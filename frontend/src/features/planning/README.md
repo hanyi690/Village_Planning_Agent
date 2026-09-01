@@ -22,7 +22,8 @@
 ## 数据流
 
 ```text
-VillageInputForm → planningApi.startPlanning(POST /api/v1/sessions, multipart)
+VillageInputForm（MIME/扩展名分类；非 GIS 附件交给 MinerU 预处理）→ planningApi.startPlanning(POST /api/v1/sessions, multipart)
+  → 后端 MinerU → UTF-8 Markdown artifact → DATA catalog
   → useSSE 连接 GET /api/v1/sessions/{id}/events（Last-Event-ID + sync 补偿）
   → planningStore 事件 reducer（progress / dimension_* / gis_layer_update / tool_* /
     human_review / delivery_ready / completed / failed / resync_required）

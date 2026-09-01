@@ -70,7 +70,32 @@ export function getLayerPhase(layer: number): LayerPhase {
 
 export const MIN_FILE_CONTENT_LENGTH = 50;
 export const FILE_ACCEPT =
-  '.docx,.doc,.pdf,.pptx,.ppt,.xlsx,.xls,.txt,.md,.jpg,.jpeg,.png,.gif,.webp,.bmp';
+  '.docx,.doc,.pdf,.pptx,.ppt,.xlsx,.xls,.txt,.md,.markdown,.jpg,.jpeg,.png,.gif,.webp,.bmp,' +
+  '.geojson,.json,.shp,.zip,.gpkg,.gdb,.gml,.gpx,.kml,.kmz,.tif,.tiff,.img,.asc';
+
+/** Text-field attachments are preprocessed to Markdown before DATA. */
+export const MINERU_FILE_EXTENSIONS = new Set([
+  '.docx', '.doc', '.pdf', '.pptx', '.ppt', '.xlsx', '.xls',
+  '.txt', '.md', '.markdown', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp',
+]);
+
+export function isMineruAttachment(file: File): boolean {
+  const name = file.name.toLowerCase();
+  const dot = name.lastIndexOf('.');
+  return dot >= 0 && MINERU_FILE_EXTENSIONS.has(name.slice(dot));
+}
+
+/** GIS attachments stay in the spatial DATA path and are not sent to MinerU. */
+export const GIS_FILE_EXTENSIONS = new Set([
+  '.geojson', '.json', '.shp', '.zip', '.gpkg', '.gdb', '.gml', '.gpx',
+  '.kml', '.kmz', '.tif', '.tiff', '.img', '.asc',
+]);
+
+export function isGisAttachment(file: File): boolean {
+  const name = file.name.toLowerCase();
+  const dot = name.lastIndexOf('.');
+  return dot >= 0 && GIS_FILE_EXTENSIONS.has(name.slice(dot));
+}
 
 export const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
 export const MAX_IMAGE_SIZE = 10 * 1024 * 1024;

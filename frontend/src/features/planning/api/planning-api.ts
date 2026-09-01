@@ -4,6 +4,7 @@
 
 import { apiRequest, API_BASE_URL } from './client';
 import { usePlanningStore } from '../store/planningStore';
+import { isGisAttachment, isMineruAttachment } from '../constants';
 import {
   assemblePlanningTextDocument,
   assemblePlanningTextVersions,
@@ -39,6 +40,33 @@ import type {
   CurrentSourceLayerCollection,
 } from './types';
 
+const PLANNING_ARTIFACT_FILENAME_PATTERNS = [
+  /(?:^|[^a-z0-9])planned(?:$|[^a-z0-9])/i,
+  /(?:^|[^a-z0-9])planning[\s_-]*(?:result|output|artifact)(?:$|[^a-z0-9])/i,
+  /(?:plan[\s_-]*result|planned[\s_-]*(?:state|features)|selection[\s_-]*decision|execution[\s_-]*result|spatial[\s_-]*changeset|approved[\s_-]*execution[\s_-]*input)/i,
+  /规划[\s_-]*(?:结果|成果|方案|思路|细化|文本|说明书|用地|道路|产物|输出|图件?)/u,
+  /(?:详细规划|产业规划)/u,
+];
+
+const GIS_OR_TABLE_FILENAME_PATTERN = /\.(?:geojson|json|zip|shp|gpkg|kml|kmz|gml|csv|tsv|xlsx?|tif|tiff)$/i;
+
+/**
+ * Return whether a filename explicitly identifies a planning artifact.
+ *
+ * This is intentionally only a conflict check.  A filename must never be
+ * used to infer that a document describes current conditions or to classify
+ * its contents.
+ */
+export function isPlanningArtifactFilename(fileOrFilename: File | string): boolean {
+  const filename = typeof fileOrFilename === 'string' ? fileOrFilename : fileOrFilename.name;
+  const basename = filename.split(/[\\/]/).pop() || filename;
+  const stem = basename.replace(/\.[^.]+$/, '');
+  return (
+    PLANNING_ARTIFACT_FILENAME_PATTERNS.some((pattern) => pattern.test(stem)) ||
+    (GIS_OR_TABLE_FILENAME_PATTERN.test(basename) && /(?:规划|planned|planning)/iu.test(stem))
+  );
+}
+
 // ============================================
 // Planning API
 // ============================================
@@ -49,6 +77,27 @@ export const planningApi = {
    * POST /api/v1/sessions
    */
   async startPlanning(request: StartPlanningRequest): Promise<StartPlanningResponse> {
+    const attachmentGroups = [
+      { label: '村庄基础数据', files: request.villageDataFiles || [] },
+      { label: '任务描述', files: request.taskFiles || [] },
+      { label: '约束条件', files: request.constraintFiles || [] },
+    ];
+    const planningArtifactConflicts = attachmentGroups.flatMap(({ label, files }) =>
+      files
+        .filter(isPlanningArtifactFilename)
+        .map((file) => `${label}“${file.name}”`),
+    );
+    if (planningArtifactConflicts.length > 0) {
+      throw new Error(
+        `上传被拒绝：${planningArtifactConflicts.join('、')}的文件名明确指向规划成果，不能作为村庄基础数据、任务描述或约束条件输入。请移除后再上传。这里只做文件名冲突拒绝，不据此判断文件内容或现状真实性。`,
+      );
+    }
+
+    const attachments = attachmentGroups.flatMap(({ files }) => files);
+    const unsupported = attachments.filter((file) => !isMineruAttachment(file) && !isGisAttachment(file));
+    if (unsupported.length > 0) {
+      throw new Error(`附件格式不受支持：${unsupported.map((file) => file.name).join('、')}。非 GIS 附件必须由 MinerU 预处理为 Markdown，GIS 附件进入空间 DATA。`);
+    }
     const formData = new FormData();
     formData.append('project_name', request.project_name);
     formData.append('village_name', request.village_name || '');

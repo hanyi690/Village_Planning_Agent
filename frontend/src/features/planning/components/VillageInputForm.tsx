@@ -13,6 +13,7 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { FILE_ACCEPT } from '@/features/planning/constants';
+import { isPlanningArtifactFilename } from '@/features/planning/api/planning-api';
 import { loadJintianDemoInput } from '@/features/planning/utils/demo-input';
 
 export interface UploadedFileInfo {
@@ -335,7 +336,18 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
       }[type];
 
       const newFiles = Array.from(files);
-      setFiles((prev) => [...prev, ...newFiles]);
+      const conflicts = newFiles.filter(isPlanningArtifactFilename);
+      if (conflicts.length > 0) {
+        alert(
+          `已拒绝规划成果文件：${conflicts.map((file) => file.name).join('、')}。规划结果不能作为现状、任务或约束输入。`,
+        );
+      }
+      const acceptedFiles = newFiles.filter(
+        (file) => !isPlanningArtifactFilename(file),
+      );
+      if (acceptedFiles.length > 0) {
+        setFiles((prev) => [...prev, ...acceptedFiles]);
+      }
       e.target.value = '';
     },
     []
@@ -532,7 +544,7 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
                 onRemoveFile={removeFile}
                 onFocus={() => setFocusedField('villageData')}
                 onBlur={() => setFocusedField(null)}
-                helpText="支持上传文件或直接输入数据"
+                helpText="支持上传文件或直接输入；非 GIS 附件先由 MinerU 转为 Markdown"
               />
             </div>
 
