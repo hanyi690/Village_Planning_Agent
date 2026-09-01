@@ -11,6 +11,7 @@ from app.contracts.artifacts.contract_meta import ContractMeta
 from app.contracts.artifacts.provenance import Provenance
 from app.contracts.execute.materialization_contracts import TargetAssignment
 from app.contracts.select.scenario import ScenarioFeature
+from app.contracts.select.selection_decision import SelectionDecision
 
 
 class WorkerType(str, Enum):
@@ -30,12 +31,14 @@ class WorkerTask(BaseModel):
     worker_type: WorkerType
     target_id: str
     target_type: str
-    expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"]
+    expected_output_kind: Literal["parcel", "polygon", "point", "line", "multipatch", "action"]
     assignment: TargetAssignment
     payload: dict = Field(default_factory=dict)
     depends_on: list[str] = Field(default_factory=list)
     input_artifact_refs: list[str] = Field(default_factory=list)
     required_capability: str = ""
+    operation: str = "select"
+    operation_parameters: dict[str, Any] = Field(default_factory=dict)
     defer_reason: str = ""
     scenario_id: str = ""
     candidate_id: str = ""
@@ -44,8 +47,18 @@ class WorkerTask(BaseModel):
     feature_ids: list[str] = Field(default_factory=list)
     source_feature_ids: list[str] = Field(default_factory=list)
     entity_refs: list[str] = Field(default_factory=list)
+    part_ref: str = ""
     relation_refs: list[str] = Field(default_factory=list)
     target_binding: dict[str, Any] = Field(default_factory=dict)
+    resource_refs: list[str] = Field(default_factory=list)
+    representation_refs: list[str] = Field(default_factory=list)
+    geometry_refs: list[str] = Field(default_factory=list)
+    source_snapshot_refs: list[str] = Field(default_factory=list)
+    resource_digests: list[str] = Field(default_factory=list)
+    capability_refs: list[str] = Field(default_factory=list)
+    selection_decision_refs: list[str] = Field(default_factory=list)
+    input_crs: str = ""
+    output_crs: str = ""
     feature_bsms: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     l1_snapshot_ref: str = ""
@@ -69,17 +82,27 @@ class TaskExecutionResult(BaseModel):
     task_id: str
     target_id: str = ""
     status: Literal["pending", "running", "succeeded", "deferred", "failed"] = "pending"
-    expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"] = "parcel"
+    expected_output_kind: Literal["parcel", "polygon", "point", "line", "multipatch", "action"] = "polygon"
     output_artifacts: list[str] = Field(default_factory=list)
+    output_artifact_refs: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     diagnostics: list[dict] = Field(default_factory=list)
+    operation: str = ""
     scenario_id: str = ""
     candidate_id: str = ""
     candidate_ids: list[str] = Field(default_factory=list)
     relation_ids: list[str] = Field(default_factory=list)
     feature_ids: list[str] = Field(default_factory=list)
     source_feature_ids: list[str] = Field(default_factory=list)
+    resource_refs: list[str] = Field(default_factory=list)
+    representation_refs: list[str] = Field(default_factory=list)
+    geometry_refs: list[str] = Field(default_factory=list)
+    source_snapshot_refs: list[str] = Field(default_factory=list)
+    resource_digests: list[str] = Field(default_factory=list)
+    capability_refs: list[str] = Field(default_factory=list)
+    selection_decision_refs: list[str] = Field(default_factory=list)
     entity_refs: list[str] = Field(default_factory=list)
+    part_ref: str = ""
     relation_refs: list[str] = Field(default_factory=list)
     execution_trace_refs: list[str] = Field(default_factory=list)
     feature_bsms: list[str] = Field(default_factory=list)
@@ -123,6 +146,11 @@ class ExecutionResult(ContractMeta):
     # manufacture a formal PlannedState.  Formal child refs are therefore
     # optional at the abort boundary and required for a committed result.
     parcel_changeset_ref: ArtifactRef | None = None
+    spatial_changeset_ref: ArtifactRef | None = None
+    planned_entity_set_ref: ArtifactRef | None = None
+    planned_representation_set_ref: ArtifactRef | None = None
+    execution_trace_ref: ArtifactRef | None = None
+    delivery_spatial_snapshot_ref: ArtifactRef | None = None
     planned_state_ref: ArtifactRef | None = None
     deferral_ledger_ref: ArtifactRef | None = Field(default=None)
     layout_configs_ref: ArtifactRef | None = None
@@ -134,6 +162,7 @@ class ExecutionResult(ContractMeta):
     execution_trace_refs: list[str] = Field(default_factory=list)
     bundle_snapshot_digest: str = ""
     evidence_refs: list[str] = Field(default_factory=list)
+    parcel_compatibility_mode: Literal["legacy_bsm", "generic_data", "not_applicable"] = "not_applicable"
     approved_input_ref: ArtifactRef | None = Field(default=None)
     atomic_commit_id: str = ""
     atomic_commit_status: Literal["committed", "aborted"] = "aborted"
@@ -148,9 +177,9 @@ class ExecutionResult(ContractMeta):
     @model_validator(mode="after")
     def validate_atomic_contract(self) -> "ExecutionResult":
         formal_refs = {
-            "parcel_changeset_ref": self.parcel_changeset_ref,
             "planned_state_ref": self.planned_state_ref,
             "layout_configs_ref": self.layout_configs_ref,
+            "delivery_spatial_snapshot_ref": self.delivery_spatial_snapshot_ref,
         }
         if self.atomic_commit_status == "committed":
             if self.approved_input_ref is None:
@@ -165,10 +194,59 @@ class ExecutionResult(ContractMeta):
                     "committed execution result requires promoted formal refs: "
                     + ", ".join(missing)
                 )
+            if self.parcel_compatibility_mode == "legacy_bsm" and self.parcel_changeset_ref is None:
+                raise ValueError(
+                    "legacy_bsm committed execution requires parcel_changeset_ref"
+                )
+            spatial_results = [
+                item
+                for item in self.task_results
+                if item.status == "succeeded"
+                and item.expected_output_kind != "action"
+            ]
+            if spatial_results and self.spatial_changeset_ref is None:
+                raise ValueError(
+                    "committed spatial execution requires spatial_changeset_ref"
+                )
+            if spatial_results:
+                missing_spatial_views = [
+                    name
+                    for name, ref in {
+                        "planned_entity_set_ref": self.planned_entity_set_ref,
+                        "planned_representation_set_ref": self.planned_representation_set_ref,
+                        "execution_trace_ref": self.execution_trace_ref,
+                    }.items()
+                    if ref is None
+                ]
+                if missing_spatial_views:
+                    raise ValueError(
+                        "committed spatial execution requires typed output views: "
+                        + ", ".join(missing_spatial_views)
+                    )
+            incomplete_outputs = [
+                item.task_id
+                for item in spatial_results
+                if not item.feature_ids or not item.output_artifact_refs
+            ]
+            if incomplete_outputs:
+                raise ValueError(
+                    "committed spatial task results require feature and artifact refs: "
+                    + ", ".join(sorted(incomplete_outputs))
+                )
         else:
             if self.atomic_commit_id:
                 raise ValueError("aborted execution result cannot expose atomic_commit_id")
             promoted = [name for name, ref in formal_refs.items() if ref is not None]
+            if self.parcel_changeset_ref is not None:
+                promoted.append("parcel_changeset_ref")
+            if self.spatial_changeset_ref is not None:
+                promoted.append("spatial_changeset_ref")
+            if self.planned_entity_set_ref is not None:
+                promoted.append("planned_entity_set_ref")
+            if self.planned_representation_set_ref is not None:
+                promoted.append("planned_representation_set_ref")
+            if self.execution_trace_ref is not None:
+                promoted.append("execution_trace_ref")
             if promoted:
                 raise ValueError(
                     "aborted execution result cannot expose promoted formal refs: "
@@ -192,6 +270,7 @@ class ExecutionPlan(ContractMeta):
     scenario_fingerprint: str = ""
     problem_fingerprint: str = ""
     candidate_ids: list[str] = Field(default_factory=list)
+    selection_decisions: list[SelectionDecision] = Field(default_factory=list)
     portfolio_decision_ref: str = ""
     worker_tasks: list[WorkerTask] = Field(default_factory=list)
     deferred_tasks: list[WorkerTask] = Field(default_factory=list)

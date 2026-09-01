@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict
 
 from app.infrastructure.logging import get_logger
@@ -410,7 +411,7 @@ def _task_results_from_execution(execution_plan: Any, result: Dict[str, Any]) ->
     for task in list(getattr(execution_plan, "worker_tasks", None) or []):
         task_id = str(getattr(task, "task_id", ""))
         target_id = str(getattr(task, "target_id", ""))
-        output_kind = getattr(task, "expected_output_kind", "parcel")
+        output_kind = getattr(task, "expected_output_kind", "polygon")
         worker_type = str(getattr(getattr(task, "worker_type", ""), "value", getattr(task, "worker_type", "")))
         stage = worker_route_key(worker_type)
         result_key = worker_result_key(worker_type)
@@ -459,6 +460,23 @@ def _task_results_from_execution(execution_plan: Any, result: Dict[str, Any]) ->
             status="failed" if failed else "succeeded",
             expected_output_kind=output_kind,
             output_artifacts=[] if failed else [output_kind],
+            output_artifact_refs=(
+                []
+                if failed or output_kind == "action"
+                else list(
+                    record_value("output_artifact_refs", None)
+                    or [
+                        f"spatial-feature:{feature_id}"
+                        for feature_id in list(
+                            record_value("feature_ids", None)
+                            or getattr(task, "feature_ids", None)
+                            or binding.get("feature_ids", [])
+                            or []
+                        )
+                        if str(feature_id).strip()
+                    ]
+                )
+            ),
             feature_ids=list(record_value("feature_ids", None) or getattr(task, "feature_ids", None) or binding.get("feature_ids", []) or []),
             scenario_id=(
                 str(getattr(task_records[-1], "scenario_id", "") or getattr(task, "scenario_id", "") or "")
@@ -491,7 +509,7 @@ def _task_results_from_execution(execution_plan: Any, result: Dict[str, Any]) ->
             task_id=str(getattr(task, "task_id", "")),
             target_id=str(getattr(task, "target_id", "")),
             status="deferred",
-            expected_output_kind=getattr(task, "expected_output_kind", "parcel"),
+            expected_output_kind=getattr(task, "expected_output_kind", "polygon"),
             candidate_id=str(getattr(task, "candidate_id", "") or ""),
             candidate_ids=list(getattr(task, "candidate_ids", None) or []),
             feature_ids=list(getattr(task, "feature_ids", None) or []),
@@ -513,6 +531,15 @@ def _task_results_from_execution(execution_plan: Any, result: Dict[str, Any]) ->
 
 async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Run the worker subgraph and persist only typed output references."""
+    from app.workflow.stages.support import require_upstream_gates
+
+    require_upstream_gates(
+        dict(state),
+        (
+            "data", "kg", "evidence", "l1", "l2", "l3",
+            "target_projection", "ground", "select",
+        ),
+    )
     from app.modules.execute.execute_state import ExecuteAgentState
     from app.modules.execute.execution_boundaries import (
         candidate_geometry_drift_diagnostics,
@@ -527,11 +554,23 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.contracts.execute.execution_plan_contracts import ExecutionPlan, ExecutionResult
     from app.modules.l2.suitability_model import SuitabilitySurface
     from app.contracts.select.approval import ApprovedExecutionInput
+    from app.contracts.select.selection_decision import SelectionDecisionSet
+    from app.contracts.data.source_contracts import DataResourceCatalogSnapshot
 
+    data_catalog_snapshot = _load_ref_artifact(
+        state,
+        "data_catalog",
+        DataResourceCatalogSnapshot,
+    )
     intent = _load_ref_artifact(state, "target_projection", IntentCompilationResult)
     plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)
     approved_input = _load_ref_artifact(
         state, "approved_execution_input", ApprovedExecutionInput
+    )
+    selection_decision_set = _load_ref_artifact(
+        state,
+        "selection_decisions",
+        SelectionDecisionSet,
     )
     from app.contracts.select.scenario import ScenarioSet
 
@@ -563,6 +602,23 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             approved_scenario=None,
             context=None,
         )
+    if selection_decision_set is None:
+        return _approval_boundary_diagnostic(
+            state,
+            code="EXECUTE_SELECTION_DECISIONS_REQUIRED",
+            message="EXECUTE requires the typed SelectionDecisionSet produced by SELECT.",
+        )
+    selection_ref = (state.get("artifact_refs") or {}).get("selection_decisions")
+    if (
+        approved_input.selection_decision_set_ref != _ref_digest(selection_ref)
+        or approved_input.selection_decision_set_digest
+        != selection_decision_set.decision_set_digest
+    ):
+        return _approval_boundary_diagnostic(
+            state,
+            code="EXECUTE_SELECTION_DECISION_SET_MISMATCH",
+            message="Selection decisions are stale or were substituted after approval.",
+        )
     if not approved_input.can_execute or scenario_set is None or approved_scenario is None:
         return _execute_approval_error(
             state,
@@ -579,6 +635,19 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             code="EXECUTE_EXECUTION_PLAN_MISMATCH",
             message="ExecutionPlan is missing, stale, or not approval-bound.",
             diagnostics=[{"code": "EXECUTE_EXECUTION_PLAN_MISMATCH", "exception_type": type(exc).__name__}],
+        )
+    plan_decision_digests = {
+        str(item.decision_digest)
+        for item in list(getattr(execution_plan, "selection_decisions", None) or [])
+    }
+    set_decision_digests = {
+        str(item.decision_digest) for item in selection_decision_set.decisions
+    }
+    if plan_decision_digests != set_decision_digests:
+        return _approval_boundary_diagnostic(
+            state,
+            code="EXECUTE_SELECTION_DECISION_PLAN_MISMATCH",
+            message="ExecutionPlan does not consume the approved SelectionDecisionSet.",
         )
     plan_candidate_ids = [
         str(getattr(task, "candidate_id", "") or "")
@@ -657,16 +726,44 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             message="Current candidate catalog differs from the approval-bound task geometry or lineage.",
             diagnostics=geometry_diagnostics,
         )
+    from app.modules.execute.spatial_operation_runtime import (
+        ExecutionResourceError,
+        materialize_approved_candidates,
+    )
+
+    try:
+        candidate_catalog, approved_operation_trace = materialize_approved_candidates(
+            selection_decision_set,
+            getattr(context, "data_resource_catalog", None),
+            candidate_catalog,
+        )
+    except ExecutionResourceError as exc:
+        return _approval_boundary_diagnostic(
+            state,
+            code="EXECUTE_DATA_RESOURCE_BINDING_INVALID",
+            message=(
+                "Approved resources, capabilities, CRS or operation results no "
+                "longer match the frozen DATA catalog."
+            ),
+            diagnostics=exc.diagnostics,
+        )
     exec_state = ExecuteAgentState(
         session_id=state.get("session_id", ""),
         village_name=state.get("config", {}).get("village_name", ""),
         spatial_workspace=getattr(context, "workspace", None),
         facility_anchors=[],
+        operation_sequence=approved_operation_trace,
         candidate_geometry_by_id=candidate_catalog,
         land_design_briefs=list(getattr(execution_plan, "land_design_briefs", None) or []),
         execution_plan=execution_plan,
         approved_execution_input=approved_input,
         approved_input_fingerprint=approved_input.fingerprint,
+        world_model_digest=str(
+            (state.get("context_ref") or {}).get("world_model_snapshot_digest")
+            or (state.get("context_ref") or {}).get("world_model_digest")
+            or ""
+        ),
+        ports=getattr(context, "ports", None),
         kg_session_ref=getattr(context, "kg_session_ref", "") or "",
         kg_three_lines=list(state.get("kg_three_lines") or []),
         messages=list(state.get("messages") or []),
@@ -676,13 +773,6 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.execute.workers.worker_common import _execution_intent_from_plan
     execution_intent = _execution_intent_from_plan(exec_state)
     graph = _get_execute_subgraph()
-    kg_obj = getattr(context, "kg", None)
-    if kg_obj is not None and execution_intent is not None:
-        try:
-            from app.infrastructure.kg.builder.layer3 import build_intent_layer
-            build_intent_layer(kg_obj, execution_intent)
-        except Exception as exc:
-            logger.warning("[workflow:execute] build_intent_layer failed: %s", type(exc).__name__)
     import asyncio
     from app.core.settings import LLM_REQUEST_TIMEOUT
     try:
@@ -736,17 +826,40 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     changeset = result.get("parcel_changeset")
+    spatial_changeset = result.get("spatial_changeset")
+    parcel_mode = str(
+        result.get("parcel_compatibility_mode", "not_applicable")
+        or "not_applicable"
+    )
+    if parcel_mode not in {"legacy_bsm", "generic_data", "not_applicable"}:
+        parcel_mode = "not_applicable"
+    # An empty compatibility envelope is an internal merge detail, not a
+    # public artifact for generic DATA execution.  Drop it before staging so
+    # the default path no longer publishes or replays ParcelChangeSet.
+    if (
+        parcel_mode != "legacy_bsm"
+        and changeset is not None
+        and not list(getattr(changeset, "changes", None) or [])
+    ):
+        changeset = None
     planned_state = result.get("planned_state")
     blocking_conflicts = [
         item
         for item in list(result.get("worker_conflict_diagnostics", []) or [])
         if isinstance(item, dict) and bool(item.get("blocking"))
     ]
-    if planned_state is None and changeset is not None and not blocking_conflicts:
+    if (
+        planned_state is None
+        and (changeset is not None or spatial_changeset is not None)
+        and not blocking_conflicts
+    ):
         planned_state = changeset_to_planned_state(
             changeset,
             execution_intent,
             list(result.get("layout_configs", []) or []),
+            scenario_features=list(
+                getattr(spatial_changeset, "features", None) or []
+            ),
         )
     outcome = _task_results_from_execution(execution_plan, result)
     result_candidate_ids = sorted(
@@ -769,31 +882,27 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             execution_plan,
             require_evidence_target_ids,
         )
-    from app.modules.execute.atomic_commit import (
-        ExecutionBatch,
-        commit_execution_batch,
-    )
+    planned_entity_set = None
+    planned_representation_set = None
+    formal_execution_trace = None
+    if spatial_changeset is not None:
+        try:
+            from app.modules.execute.spatial_output_projection import (
+                project_spatial_outputs,
+            )
 
-    commit_result = commit_execution_batch(
-        ExecutionBatch(
-            approved_input=approved_input,
-            expected_task_ids=[
-                str(getattr(task, "task_id", "") or "")
-                for task in list(getattr(execution_plan, "worker_tasks", None) or [])
-                if str(getattr(task, "task_id", "") or "").strip()
-            ],
-            worker_results=list(outcome.get("task_results", []) or []),
-            planned_state=planned_state,
-            diagnostics=[
-                str(item.get("code") or item.get("message") or "")
-                for item in blocking_conflicts
-                if isinstance(item, dict)
-            ],
-        )
-    )
-    l4_write_result: Dict[str, Any] = {}
-    working_state = {**state, "artifact_refs": dict(state.get("artifact_refs") or {})}
-    scenario_ref = (
+            (
+                planned_entity_set,
+                planned_representation_set,
+                formal_execution_trace,
+            ) = project_spatial_outputs(spatial_changeset)
+        except Exception as exc:
+            blocking_conflicts.append({
+                "code": "EXECUTE_SPATIAL_OUTPUT_PROJECTION_FAILED",
+                "blocking": True,
+                "exception_type": type(exc).__name__,
+            })
+    scenario_ref: Any = (
         (state.get("artifact_refs") or {}).get("planning_scenario")
         or (state.get("artifact_refs") or {}).get("scenario")
         or ""
@@ -803,23 +912,6 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             scenario_ref.get("descriptor_digest")
             or scenario_ref.get("digest")
             or ""
-        )
-    from app.contracts.select.scenario import PlanningScenario
-
-    scenario_artifact = (
-        _load_ref_artifact(
-            state,
-            "planning_scenario",
-            PlanningScenario,
-        )
-        if (state.get("artifact_refs") or {}).get("planning_scenario")
-        else None
-    )
-    if scenario_artifact is not None:
-        selection_scenario_id = str(
-            getattr(scenario_artifact, "scenario_id", "")
-            or (scenario_artifact.get("scenario_id", "") if isinstance(scenario_artifact, dict) else "")
-            or str(getattr(approved_input, "scenario_id", "") or "")
         )
     scenario_id = str(
         state.get("scenario_id")
@@ -838,9 +930,101 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
                         for item in list(result.get("execution_trace", []) or [])
                         if item.get("task_id") and item.get("event")
                     ]
+                    + (
+                        [formal_execution_trace.trace_ref]
+                        if formal_execution_trace is not None
+                        else []
+                    )
                 )
             ),
         })
+    delivery_spatial_snapshot = None
+    if planned_state is not None:
+        try:
+            from app.infrastructure.artifacts.fingerprint import semantic_checksum
+            from app.infrastructure.export.delivery_snapshot_projection import (
+                build_execution_delivery_snapshot,
+            )
+            from app.infrastructure.paths import run_tmp_root
+
+            projection_digest = semantic_checksum({
+                "data_catalog": data_catalog_snapshot,
+                "spatial_changeset": spatial_changeset,
+                "planned_state": planned_state,
+                "parcel_changes": list(getattr(changeset, "changes", None) or []),
+            })
+            artifact_root = Path(
+                str(state.get("artifact_root") or run_tmp_root())
+            ).resolve()
+            delivery_spatial_snapshot = build_execution_delivery_snapshot(
+                data_catalog_snapshot=data_catalog_snapshot,
+                spatial_changeset=spatial_changeset,
+                planned_state=planned_state,
+                planned_changes=list(getattr(changeset, "changes", None) or []),
+                output_dir=(
+                    artifact_root
+                    / "materialized"
+                    / "delivery_spatial_snapshot"
+                    / projection_digest
+                ),
+                output_artifact_ref=(
+                    "delivery-spatial-snapshot:" + projection_digest[:24]
+                ),
+                parent_digests={
+                    "data_catalog": _ref_digest(
+                        (state.get("artifact_refs") or {}).get("data_catalog")
+                    ),
+                    "approved_execution_input": _ref_digest(
+                        (state.get("artifact_refs") or {}).get(
+                            "approved_execution_input"
+                        )
+                    ),
+                    "execution_plan": _ref_digest(
+                        (state.get("artifact_refs") or {}).get("execution_plan")
+                    ),
+                    "spatial_changeset_payload": "sha256:"
+                    + semantic_checksum(spatial_changeset),
+                    "planned_state_payload": "sha256:"
+                    + semantic_checksum(planned_state),
+                },
+            )
+        except Exception as exc:
+            blocking_conflicts.append({
+                "code": "EXECUTE_DELIVERY_SNAPSHOT_PROJECTION_FAILED",
+                "blocking": True,
+                "exception_type": type(exc).__name__,
+                "message": str(exc),
+            })
+
+    from app.modules.execute.atomic_commit import (
+        ExecutionBatch,
+        commit_execution_batch,
+    )
+
+    commit_result = commit_execution_batch(
+        ExecutionBatch(
+            approved_input=approved_input,
+            expected_task_ids=[
+                str(getattr(task, "task_id", "") or "")
+                for task in list(getattr(execution_plan, "worker_tasks", None) or [])
+                if str(getattr(task, "task_id", "") or "").strip()
+            ],
+            worker_results=list(outcome.get("task_results", []) or []),
+            planned_state=planned_state,
+            spatial_changeset=spatial_changeset,
+            planned_entity_set=planned_entity_set,
+            planned_representation_set=planned_representation_set,
+            execution_trace=formal_execution_trace,
+            delivery_spatial_snapshot=delivery_spatial_snapshot,
+            diagnostics=[
+                str(item.get("code") or item.get("message") or "")
+                for item in blocking_conflicts
+                if isinstance(item, dict)
+            ],
+        )
+    )
+    l4_write_result: Dict[str, Any] = {}
+    working_state = {**state, "artifact_refs": dict(state.get("artifact_refs") or {})}
     from app.contracts.execute.execution_staging_contracts import ExecutionStaging
 
     staged_changeset_ref = None
@@ -853,6 +1037,58 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             artifact_key="staged_parcel_changeset",
         )
         working_state["artifact_refs"]["staged_parcel_changeset"] = staged_changeset_ref
+    staged_spatial_changeset_ref = None
+    if spatial_changeset is not None:
+        staged_spatial_changeset_ref = persist_stage_artifact(
+            working_state,
+            "execute",
+            "SpatialChangeSet",
+            spatial_changeset,
+            artifact_key="staged_spatial_changeset",
+        )
+        working_state["artifact_refs"]["staged_spatial_changeset"] = staged_spatial_changeset_ref
+    staged_planned_entity_set_ref = None
+    if planned_entity_set is not None:
+        staged_planned_entity_set_ref = persist_stage_artifact(
+            working_state,
+            "execute",
+            "PlannedEntitySet",
+            planned_entity_set,
+            artifact_key="staged_planned_entity_set",
+        )
+        working_state["artifact_refs"]["staged_planned_entity_set"] = staged_planned_entity_set_ref
+    staged_planned_representation_set_ref = None
+    if planned_representation_set is not None:
+        staged_planned_representation_set_ref = persist_stage_artifact(
+            working_state,
+            "execute",
+            "PlannedRepresentationSet",
+            planned_representation_set,
+            artifact_key="staged_planned_representation_set",
+        )
+        working_state["artifact_refs"]["staged_planned_representation_set"] = staged_planned_representation_set_ref
+    staged_execution_trace_ref = None
+    if formal_execution_trace is not None:
+        staged_execution_trace_ref = persist_stage_artifact(
+            working_state,
+            "execute",
+            "ExecutionTrace",
+            formal_execution_trace,
+            artifact_key="staged_execution_trace",
+        )
+        working_state["artifact_refs"]["staged_execution_trace"] = staged_execution_trace_ref
+    staged_delivery_spatial_snapshot_ref = None
+    if delivery_spatial_snapshot is not None:
+        staged_delivery_spatial_snapshot_ref = persist_stage_artifact(
+            working_state,
+            "execute",
+            "DeliverySpatialSnapshot",
+            delivery_spatial_snapshot,
+            artifact_key="staged_delivery_spatial_snapshot",
+        )
+        working_state["artifact_refs"]["staged_delivery_spatial_snapshot"] = (
+            staged_delivery_spatial_snapshot_ref
+        )
     staged_planned_state_ref = None
     if planned_state is not None:
         staged_planned_state_ref = persist_stage_artifact(
@@ -881,9 +1117,21 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             staging_id=f"staging:{_run_id(state)}:{scenario_id or 'baseline'}",
             approved_input_ref=_ref_digest(approved_input_ref),
             execution_plan_ref=_ref_digest(execution_plan_ref),
-            staged_parcel_changeset_ref=_ref_digest(staged_changeset_ref),
+            staged_parcel_changeset_ref=(
+                _ref_digest(staged_changeset_ref)
+                if parcel_mode == "legacy_bsm"
+                else ""
+            ),
             staged_planned_state_ref=_ref_digest(staged_planned_state_ref),
             staged_layout_configs_ref=_ref_digest(staged_layout_configs_ref),
+            staged_spatial_changeset_ref=_ref_digest(staged_spatial_changeset_ref),
+            staged_planned_entity_set_ref=_ref_digest(staged_planned_entity_set_ref),
+            staged_planned_representation_set_ref=_ref_digest(staged_planned_representation_set_ref),
+            staged_execution_trace_ref=_ref_digest(staged_execution_trace_ref),
+            staged_delivery_spatial_snapshot_ref=_ref_digest(
+                staged_delivery_spatial_snapshot_ref
+            ),
+            compatibility_mode=parcel_mode,
             worker_task_ids=[
                 str(getattr(item, "task_id", "") or "")
                 for item in list(outcome.get("task_results", []) or [])
@@ -929,7 +1177,30 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     l4_error = l4_write_result.get("l4_write_error")
     staged_commit_succeeded = commit_result.status == "committed" and not l4_error
-    parcel_changeset_ref = staged_changeset_ref if staged_commit_succeeded else None
+    parcel_changeset_ref = (
+        staged_changeset_ref
+        if staged_commit_succeeded and parcel_mode == "legacy_bsm"
+        else None
+    )
+    spatial_changeset_ref = (
+        staged_spatial_changeset_ref if staged_commit_succeeded else None
+    )
+    planned_entity_set_ref = (
+        staged_planned_entity_set_ref if staged_commit_succeeded else None
+    )
+    planned_representation_set_ref = (
+        staged_planned_representation_set_ref
+        if staged_commit_succeeded
+        else None
+    )
+    execution_trace_ref = (
+        staged_execution_trace_ref if staged_commit_succeeded else None
+    )
+    delivery_spatial_snapshot_ref = (
+        staged_delivery_spatial_snapshot_ref
+        if staged_commit_succeeded
+        else None
+    )
     planned_state_ref = staged_planned_state_ref if staged_commit_succeeded else None
     layout_configs_ref = staged_layout_configs_ref if staged_commit_succeeded else None
     if staged_commit_succeeded:
@@ -939,6 +1210,15 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         working_state["artifact_refs"].update(
             {
                 **({"parcel_changeset": parcel_changeset_ref} if parcel_changeset_ref else {}),
+                **({"spatial_changeset": spatial_changeset_ref} if spatial_changeset_ref else {}),
+                **({"planned_entity_set": planned_entity_set_ref} if planned_entity_set_ref else {}),
+                **({"planned_representation_set": planned_representation_set_ref} if planned_representation_set_ref else {}),
+                **({"execution_trace": execution_trace_ref} if execution_trace_ref else {}),
+                **(
+                    {"delivery_spatial_snapshot": delivery_spatial_snapshot_ref}
+                    if delivery_spatial_snapshot_ref
+                    else {}
+                ),
                 **({"planned_state": planned_state_ref} if planned_state_ref else {}),
                 "layout_configs": layout_configs_ref,
             }
@@ -951,9 +1231,21 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             staging_id=f"staging:{_run_id(state)}:{scenario_id or 'baseline'}",
             approved_input_ref=_ref_digest(approved_input_ref),
             execution_plan_ref=_ref_digest(execution_plan_ref),
-            staged_parcel_changeset_ref=_ref_digest(staged_changeset_ref),
+            staged_parcel_changeset_ref=(
+                _ref_digest(staged_changeset_ref)
+                if parcel_mode == "legacy_bsm"
+                else ""
+            ),
             staged_planned_state_ref=_ref_digest(staged_planned_state_ref),
             staged_layout_configs_ref=_ref_digest(staged_layout_configs_ref),
+            staged_spatial_changeset_ref=_ref_digest(staged_spatial_changeset_ref),
+            staged_planned_entity_set_ref=_ref_digest(staged_planned_entity_set_ref),
+            staged_planned_representation_set_ref=_ref_digest(staged_planned_representation_set_ref),
+            staged_execution_trace_ref=_ref_digest(staged_execution_trace_ref),
+            staged_delivery_spatial_snapshot_ref=_ref_digest(
+                staged_delivery_spatial_snapshot_ref
+            ),
+            compatibility_mode=parcel_mode,
             worker_task_ids=[
                 str(getattr(item, "task_id", "") or "")
                 for item in list(outcome.get("task_results", []) or [])
@@ -1029,6 +1321,10 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         else []
     )
     execution_diagnostics = list(outcome.get("diagnostics", []) or []) + lineage_diagnostics
+    execution_diagnostics.append({
+        "code": "parcel_compatibility_mode",
+        "mode": parcel_mode,
+    })
     if l4_write_result:
         execution_diagnostics.append({"l4_write": _jsonable(l4_write_result)})
     if commit_result.diagnostics:
@@ -1036,6 +1332,11 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     execution_result = ExecutionResult(
         execution_plan_ref=(state.get("artifact_refs") or {}).get("execution_plan", {}),
         parcel_changeset_ref=parcel_changeset_ref,
+        spatial_changeset_ref=spatial_changeset_ref,
+        planned_entity_set_ref=planned_entity_set_ref,
+        planned_representation_set_ref=planned_representation_set_ref,
+        execution_trace_ref=execution_trace_ref,
+        delivery_spatial_snapshot_ref=delivery_spatial_snapshot_ref,
         planned_state_ref=planned_state_ref,
         layout_configs_ref=layout_configs_ref,
         task_results=list(outcome.get("task_results", []) or []),
@@ -1056,6 +1357,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             bundle_snapshot_digests[0] if len(bundle_snapshot_digests) == 1 else ""
         ),
         evidence_refs=execution_evidence_refs,
+        parcel_compatibility_mode=parcel_mode,
         approved_input_ref=(state.get("artifact_refs") or {}).get("approved_execution_input"),
         atomic_commit_id=(
             commit_result.commit_id
@@ -1077,6 +1379,15 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             **dict(state.get("artifact_refs") or {}),
             "execution_result": execution_result_ref,
             **({"parcel_changeset": parcel_changeset_ref} if parcel_changeset_ref else {}),
+            **({"spatial_changeset": spatial_changeset_ref} if spatial_changeset_ref else {}),
+            **({"planned_entity_set": planned_entity_set_ref} if planned_entity_set_ref else {}),
+            **({"planned_representation_set": planned_representation_set_ref} if planned_representation_set_ref else {}),
+            **({"execution_trace": execution_trace_ref} if execution_trace_ref else {}),
+            **(
+                {"delivery_spatial_snapshot": delivery_spatial_snapshot_ref}
+                if delivery_spatial_snapshot_ref
+                else {}
+            ),
             **({"planned_state": planned_state_ref} if planned_state_ref else {}),
             **({"layout_configs": layout_configs_ref} if layout_configs_ref else {}),
             "execution_staging": staging_ref,

@@ -7,7 +7,7 @@ from app.modules.execute.road_parcel_materializer import (
     _target_matches,
     materialize_road_parcel_changes,
 )
-from app.modules.execute.workers.worker_common import _attach_feature_lineage, _execution_intent_from_plan, _intent_list, _plan_tasks, _scenario_features_for_layer, _task_enabled, _task_execution_result, _task_value
+from app.modules.execute.workers.worker_common import _attach_feature_lineage, _candidate_capability_block, _execution_intent_from_plan, _intent_list, _plan_tasks, _scenario_features_for_layer, _task_enabled, _task_execution_result, _task_value
 from app.contracts.execute.execution_plan_contracts import WorkerResult
 from app.infrastructure.logging import get_logger
 
@@ -368,6 +368,11 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
         line and polygon outputs in one road worker while preserving their
         separate contracts.
         """
+        explicit_parcel_binding = str(
+            getattr(state, "parcel_compatibility_mode", "") or ""
+        ).strip() == "legacy_bsm"
+        if not explicit_parcel_binding:
+            return result
         changes = []
         parcel_diagnostics = []
         try:
@@ -391,6 +396,21 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
                 "target_id": "",
                 "message": "New-corridor road materialization requires current land-use features.",
             })
+        # A DATA-only baseline may contain arbitrary polygons/lines but no
+        # cadastral BSM/DLBM classification.  The accepted road line remains
+        # a valid executable output; only the optional transport-land parcel
+        # split is deferred.  Never fabricate a parcel identity or land-use
+        # code from generic attributes.
+        generic_baseline = bool(landuse_payload.get("features")) and not any(
+            isinstance(feature, dict)
+            and any(
+                str((feature.get("properties") or {}).get(key) or "").strip()
+                for key in ("bsm", "BSM", "dlbm", "DLBM")
+            )
+            for feature in (landuse_payload.get("features") or [])
+        )
+        if generic_baseline:
+            return result
         for road in road_targets:
             target_id = str(_road_value(road, "target_id", "") or "")
             action = str(_road_value(road, "action", "") or "")
@@ -469,6 +489,8 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
         )
         if role != "execution_geometry":
             continue
+        if _candidate_capability_block(state, candidate):
+            continue
         try:
             from shapely import wkt as shapely_wkt
             from shapely.geometry import mapping as shapely_mapping
@@ -486,6 +508,8 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
                     "candidate_id": candidate_id,
                     "scenario_id": str(getattr(task, "scenario_id", "") or ""),
                     "source_feature_ids": list(getattr(task, "target_binding", {}).get("source_feature_ids", []) or []),
+                    "resource_refs": list(getattr(task, "resource_refs", None) or getattr(task, "target_binding", {}).get("resource_refs", []) or []),
+                    "representation_refs": list(getattr(task, "representation_refs", None) or getattr(task, "target_binding", {}).get("representation_refs", []) or []),
                     "evidence_refs": list(getattr(task, "evidence_refs", []) or []),
                     "roadbed_width_m": getattr(task, "target_binding", {}).get("roadbed_width_m", None),
                     "pavement_width_m": getattr(task, "target_binding", {}).get("pavement_width_m", None),

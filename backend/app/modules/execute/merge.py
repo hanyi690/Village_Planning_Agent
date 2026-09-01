@@ -1,4 +1,4 @@
-"""merge_worker_results - unified WorkerResult merge into ParcelChangeSet + layout_configs.
+"""Merge WorkerResult outputs into compatibility and generic projections.
 
 Pure deterministic merge of the EXECUTE worker outputs. No side effects, no
 I/O, no LLM. Consumed by the ``merge_worker_results`` node in execute_agent.py
@@ -9,17 +9,19 @@ Responsibilities:
   blocks the whole ParcelChangeSet, even when classification codes match.
 - layout_configs dedup by layerType: the higher-priority (later) worker wins
   when two workers emit the same layer type.
-- Build the unified ``ParcelChangeSet`` via
-  ``land_design_worker.build_parcel_change_set``.
+- Build ``ParcelChangeSet`` only for explicit BSM-compatible changes; generic
+  ScenarioFeature rows are aggregated separately as ``SpatialChangeSet`` by
+  the execute materialization node.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
-from app.modules.execute.land_design_worker import build_parcel_change_set
 from app.contracts.execute.execution_plan_contracts import TypedActionResult
-from app.contracts.execute.parcel_change_contracts import ParcelChange, ParcelChangeSet
+
+if TYPE_CHECKING:
+    from app.contracts.execute.parcel_change_contracts import ParcelChangeSet
 
 # Later workers win when two workers emit the same layerType.
 _WORKER_PRIORITY: Dict[str, int] = {
@@ -59,7 +61,11 @@ def _change_source_bsms(change: Any) -> set[str]:
     return {str(value).strip() for value in values if str(value).strip()}
 
 
-def _detect_bsm_conflicts(worker_results: List[Any]) -> List[Dict[str, Any]]:
+def _detect_bsm_conflicts(
+    worker_results: List[Any],
+    *,
+    parcel_compatibility_mode: str = "not_applicable",
+) -> List[Dict[str, Any]]:
     """Detect conflicting authoritative writes to source parcels.
 
     A worker may split a source parcel and therefore emit a derived BSM rather
@@ -72,6 +78,10 @@ def _detect_bsm_conflicts(worker_results: List[Any]) -> List[Dict[str, Any]]:
     authoritative: list[tuple[Any, Any]] = []
     for result in worker_results or []:
         for change in _result_get(result, "parcel_changes") or []:
+            if parcel_compatibility_mode != "legacy_bsm" and not _change_source_bsms(change):
+                # Generic feature outputs are carried by SpatialChangeSet and
+                # must not be treated as synthetic BSM writes.
+                continue
             bsm = _change_bsm(change)
             action = str(getattr(change, "action", "") or "")
             if not bsm or action == "preserve":
@@ -282,36 +292,56 @@ def _verify_area_conservation(changes: list) -> bool:
 
 def merge_worker_results(
     worker_results: List[Any],
+    *,
+    parcel_compatibility_mode: str = "not_applicable",
 ) -> Tuple[ParcelChangeSet, List[Dict[str, Any]], List[Dict[str, Any]], List[TypedActionResult]]:
-    """Merge WorkerResults into parcel, layout, diagnostics, and action outputs.
+    """Merge WorkerResults into compatibility parcel, layout, diagnostics, and action outputs.
 
     - Any duplicate authoritative BSM write blocks all parcel changes.
     - layout_configs deduped by layerType (later worker wins by priority).
-    - ParcelChangeSet built via ``land_design_worker.build_parcel_change_set``
-      with area-conservation and geometry-validity flags derived from the
-      merged changes.
+    - When ``parcel_compatibility_mode`` is not ``legacy_bsm``, changes without
+      source BSM lineage are excluded from the compatibility changeset.
 
     Returns:
         (parcel_changeset, merged_layout_configs, diagnostics, action_results)
     """
-    conflicts = _detect_bsm_conflicts(worker_results)
+    conflicts = _detect_bsm_conflicts(
+        worker_results,
+        parcel_compatibility_mode=parcel_compatibility_mode,
+    )
 
     changes: List[ParcelChange] = []
     for result in worker_results or []:
         changes.extend(_result_get(result, "parcel_changes") or [])
+    if parcel_compatibility_mode != "legacy_bsm":
+        changes = [change for change in changes if _change_source_bsms(change)]
 
     if conflicts:
         changes = []
 
-    changeset = build_parcel_change_set(
-        changes,
-        area_conservation_verified=(
-            not conflicts and _verify_area_conservation(changes)
-        ),
-        geometry_validity_verified=(
-            not conflicts and _verify_geometry_valid(changes)
-        ),
-    )
+    # Construct the empty/generic envelope locally so DATA execution does not
+    # import the retired land-design worker.  The legacy builder is loaded only
+    # when an explicit BSM change actually needs compatibility serialization.
+    if changes:
+        from app.modules.execute.land_design_worker import build_parcel_change_set
+
+        changeset = build_parcel_change_set(
+            changes,
+            area_conservation_verified=(
+                not conflicts and _verify_area_conservation(changes)
+            ),
+            geometry_validity_verified=(
+                not conflicts and _verify_geometry_valid(changes)
+            ),
+        )
+    else:
+        from app.contracts.execute.parcel_change_contracts import ParcelChangeSet
+
+        changeset = ParcelChangeSet(
+            changes=[],
+            area_conservation_verified=not conflicts,
+            geometry_validity_verified=not conflicts,
+        )
     layout_configs = _dedup_layout_configs(worker_results)
     return changeset, layout_configs, list(conflicts), _collect_action_results(worker_results)
 

@@ -58,6 +58,7 @@ def _build_parcel_lineage(changeset: ParcelChangeSet) -> list[dict[str, Any]]:
 def _build_planned_state_summary(planned_state: PlannedState) -> dict[str, Any]:
     return {
         "parcels": len(planned_state.parcels),
+        "features": len(getattr(planned_state, "features", None) or []),
         "zones": len(planned_state.zones),
         "facilities": len(planned_state.facilities),
         "roads": len(planned_state.roads),

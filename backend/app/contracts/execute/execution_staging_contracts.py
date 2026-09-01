@@ -23,8 +23,17 @@ class ExecutionStaging(ContractMeta):
     approved_input_ref: str = ""
     execution_plan_ref: str = ""
     staged_parcel_changeset_ref: str = ""
+    staged_spatial_changeset_ref: str = ""
+    staged_planned_entity_set_ref: str = ""
+    staged_planned_representation_set_ref: str = ""
+    staged_execution_trace_ref: str = ""
+    staged_delivery_spatial_snapshot_ref: str = ""
     staged_planned_state_ref: str = ""
     staged_layout_configs_ref: str = ""
+    # Generic DATA is the default.  Legacy BSM staging must be an explicit
+    # caller decision so omitted fields cannot silently reintroduce parcel
+    # prerequisites.
+    compatibility_mode: Literal["legacy_bsm", "generic_data", "not_applicable"] = "not_applicable"
     worker_task_ids: list[str] = Field(default_factory=list)
     failed_task_ids: list[str] = Field(default_factory=list)
     status: Literal["staged", "committed", "aborted"] = "staged"
@@ -45,10 +54,19 @@ class ExecutionStaging(ContractMeta):
             required_refs = {
                 "approved_input_ref": self.approved_input_ref,
                 "execution_plan_ref": self.execution_plan_ref,
-                "staged_parcel_changeset_ref": self.staged_parcel_changeset_ref,
                 "staged_planned_state_ref": self.staged_planned_state_ref,
                 "staged_layout_configs_ref": self.staged_layout_configs_ref,
+                "staged_delivery_spatial_snapshot_ref": (
+                    self.staged_delivery_spatial_snapshot_ref
+                ),
             }
+            if self.staged_spatial_changeset_ref:
+                required_refs["staged_spatial_changeset_ref"] = self.staged_spatial_changeset_ref
+                required_refs["staged_planned_entity_set_ref"] = self.staged_planned_entity_set_ref
+                required_refs["staged_planned_representation_set_ref"] = self.staged_planned_representation_set_ref
+                required_refs["staged_execution_trace_ref"] = self.staged_execution_trace_ref
+            if self.compatibility_mode == "legacy_bsm":
+                required_refs["staged_parcel_changeset_ref"] = self.staged_parcel_changeset_ref
             missing = [name for name, value in required_refs.items() if not value]
             if missing:
                 raise ValueError(

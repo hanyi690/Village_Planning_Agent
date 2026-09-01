@@ -28,11 +28,30 @@ def contradictory_statuses(results: list[Any]) -> bool:
 
 
 def active_output_covered(results: list[Any], output_kind: str) -> bool:
-    return bool(results) and not contradictory_statuses(results) and all(
-        getattr(result, "status", "failed") == "succeeded"
-        and output_kind in list(getattr(result, "output_artifacts", None) or [])
-        for result in results
-    )
+    if not results or contradictory_statuses(results):
+        return False
+    for result in results:
+        if getattr(result, "status", "failed") != "succeeded":
+            return False
+        if output_kind == "action":
+            if output_kind not in list(getattr(result, "output_artifacts", None) or []):
+                return False
+            continue
+        feature_ids = [
+            str(value)
+            for value in list(getattr(result, "feature_ids", None) or [])
+            if str(value).strip()
+        ]
+        artifact_refs = {
+            str(value)
+            for value in list(getattr(result, "output_artifact_refs", None) or [])
+            if str(value).strip()
+        }
+        if not feature_ids or not {
+            f"spatial-feature:{feature_id}" for feature_id in feature_ids
+        }.issubset(artifact_refs):
+            return False
+    return True
 
 
 def deferred_outcome_contradiction(results: list[Any]) -> bool:

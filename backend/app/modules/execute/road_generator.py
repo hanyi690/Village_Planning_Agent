@@ -29,7 +29,6 @@ from app.modules.execute.existing_road_materializer import (
 from app.spatial.network import (
     NetworkBuildConfig,
     PlanningNodeBuildConfig,
-    RDFLibKGSpatialRetryAdapter,
     RoadPlanningConfig,
     SpatialBindingConfig,
     bind_road_spatial_requirements,
@@ -374,43 +373,21 @@ def _write_optional_json_payload(root: Path, name: str, payload: Any) -> Optiona
 
 
 def _kg_retry_adapter(state: Any, gis_data: Mapping[str, Any]) -> Tuple[Optional[Any], Optional[str]]:
-    """Create the standard RDFLib retry adapter from the active planning KG.
+    """Create the retry adapter through the injected world-model port.
 
-    A caller-supplied adapter remains the explicit integration point.  The
-    session KG is resolved through its typed interface; raw ``kg_turtle`` is
-    never deserialized here because only an already-built KG may confirm a
-    target.
+    ``gis_data`` is intentionally not inspected for raw KG objects.  The
+    explicit ``road_kg_retry_adapter`` hook remains available to infrastructure
+    composition, while normal workflow execution uses the current port.
     """
 
-    kg = (
-        gis_data.get("planning_kg")
-        or gis_data.get("kg")
-        or getattr(state, "planning_kg", None)
-        or getattr(state, "kg", None)
-    )
-    source = "gis_data_planning_kg" if kg is not None else None
-    if kg is None:
-        session_ref = str(
-            getattr(state, "kg_session_ref", "")
-            or getattr(state, "session_id", "")
-            or ""
-        )
-        if session_ref:
-            try:
-                from app.infrastructure.kg import require_session_kg
-
-                kg = require_session_kg(session_ref)
-                source = "kg_session_interface"
-            except LookupError:
-                kg = None
-            except Exception as exc:  # KG is optional at the road-execution boundary.
-                logger.warning("[road_execute] Could not access session PlanningKG: %s", type(exc).__name__)
-    if kg is None:
+    world_model = getattr(getattr(state, "ports", None), "world_model", None)
+    builder = getattr(world_model, "build_network_retry_adapter", None)
+    if not callable(builder):
         return None, None
     try:
-        return RDFLibKGSpatialRetryAdapter(kg), source
+        return builder(), "world_model_port"
     except (TypeError, ValueError) as exc:
-        logger.warning("[road_execute] Ignoring incompatible PlanningKG: %s", type(exc).__name__)
+        logger.warning("[road_execute] Ignoring incompatible world-model retry port: %s", type(exc).__name__)
         return None, None
 
 

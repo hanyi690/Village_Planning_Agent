@@ -18,6 +18,7 @@ from app.modules.execute.workers.worker_common import (
     _attach_feature_lineage,
     _task_enabled,
     _task_execution_result,
+    _candidate_capability_block,
 )
 from app.contracts.execute.execution_plan_contracts import TypedActionResult, WorkerResult
 from app.contracts.execute.parcel_change_contracts import ParcelChange
@@ -79,7 +80,6 @@ def _candidate_site_footprint_changes(
     from shapely.geometry import shape
 
     from app.modules.execute.classification_utils import _classification_from_decision
-    from app.modules.execute.land_design_worker import _parcel_classification
 
     classification = _classification_from_decision(
         getattr(project, "classification_decision", None)
@@ -91,6 +91,9 @@ def _candidate_site_footprint_changes(
     ))
     if classification is None or len(source_bsms) != 1:
         return []
+    # Only source-backed parcel footprints need the legacy classification
+    # adapter.  Generic DATA geometries must not import or invoke it.
+    from app.modules.execute.land_design_worker import _parcel_classification
     # A fully prohibited source must never be revived by EXECUTE.  Partial
     # availability is valid: the approved candidate geometry is the clipped
     # footprint and the source parcel remainder is preserved separately.
@@ -557,13 +560,14 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
     Joins selected parcels and design briefs by stable target ID. Non-spatial
     action targets produce typed action results and never parcel changes.
     """
-    from app.modules.execute.land_design_worker import design_project_footprint
-
     if not _task_enabled(state, "site_area"):
         return WorkerResult(worker_type="site_area")
 
     projects = list(getattr(_execution_intent_from_plan(state), "site_area_targets", None) or [])
     parcel_by_bsm = _resolve_parcel_by_bsm(state)
+    legacy_parcel_mode = str(
+        getattr(state, "parcel_compatibility_mode", "") or ""
+    ) == "legacy_bsm"
     selected_by_target = {
         str(_task_value(task, "target_id", "")): str(_task_value(_task_value(task, "assignment"), "selected_bsm", ""))
         for task in _plan_tasks(state, {"site_area_footprint"})
@@ -596,16 +600,17 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
     shared_footprint_changes_by_candidate: dict[str, list[ParcelChange]] = {}
     shared_remainder_by_bsm: dict[str, list[ParcelChange]] = {}
     candidate_groups: dict[str, list[tuple[str, Any, Any]]] = {}
-    for target_id, entries in candidate_tasks_by_target.items():
-        project = projects_by_target.get(target_id)
-        if project is None or str(getattr(project, "materialization_role", "") or "") != "site_footprint":
-            continue
-        for candidate_id, task in entries:
-            candidate = candidate_geometry_by_id.get(candidate_id)
-            source_bsms = list(getattr(candidate, "source_bsms", None) or []) if candidate is not None else []
-            if candidate is None or len(source_bsms) != 1:
+    if legacy_parcel_mode:
+        for target_id, entries in candidate_tasks_by_target.items():
+            project = projects_by_target.get(target_id)
+            if project is None or str(getattr(project, "materialization_role", "") or "") != "site_footprint":
                 continue
-            candidate_groups.setdefault(str(source_bsms[0]), []).append((target_id, candidate_id, task))
+            for candidate_id, task in entries:
+                candidate = candidate_geometry_by_id.get(candidate_id)
+                source_bsms = list(getattr(candidate, "source_bsms", None) or []) if candidate is not None else []
+                if candidate is None or len(source_bsms) != 1:
+                    continue
+                candidate_groups.setdefault(str(source_bsms[0]), []).append((target_id, candidate_id, task))
     for source_bsm, entries in candidate_groups.items():
         target_ids = {item[0] for item in entries}
         if len(entries) < 2 or len(target_ids) != len(entries):
@@ -748,6 +753,9 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
         brief = briefs_by_target.get(target_id)
         if brief is None:
             continue
+        if not legacy_parcel_mode:
+            continue
+        from app.modules.execute.land_design_worker import design_project_footprint
         change_list = design_project_footprint(project, brief, str(bsm), parcel_by_bsm)
         if not change_list:
             continue
@@ -793,6 +801,10 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
         geometry_wkt = str(getattr(candidate, "wkt", "") or "")
         if candidate is None or str(getattr(candidate, "role", "") or "") != "execution_geometry":
             continue
+        capability_block = _candidate_capability_block(state, candidate)
+        if capability_block:
+            direct_materialization_diagnostics[target_id] = capability_block
+            continue
         if not geometry_wkt:
             continue
         try:
@@ -804,6 +816,25 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
         project = projects_by_target.get(target_id)
         if project is None:
             continue
+        # These lineage fields are required for every direct DATA geometry,
+        # not only for the site-footprint compatibility branch.  Initialize
+        # them before role dispatch so facility/zone/overlay candidates cannot
+        # reach the feature projection with an unbound local variable.
+        source_bsms = [
+            str(value)
+            for value in (getattr(candidate, "source_bsms", None) or [])
+            if str(value)
+        ]
+        resource_refs = [
+            str(value)
+            for value in (getattr(candidate, "resource_refs", None) or [])
+            if str(value).strip()
+        ]
+        representation_refs = [
+            str(value)
+            for value in (getattr(candidate, "representation_refs", None) or [])
+            if str(value).strip()
+        ]
         semantic_role = str(getattr(project, "materialization_role", "") or "")
         if semantic_role == "site_footprint":
             shared_source_bsm = shared_group_by_candidate.get(candidate_id)
@@ -829,11 +860,14 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
                     "shared_parcel_remainder_missing",
                 )
                 continue
-            source_bsms = [
-                str(value)
-                for value in (getattr(candidate, "source_bsms", None) or [])
-                if str(value)
-            ]
+            # Exact DATA geometry is executable without a cadastral source
+            # parcel.  It is still bound to the selected candidate and its
+            # resource/representation lineage; no synthetic parcel change is
+            # created in this case.
+            generic_geometry_only = bool(
+                resource_refs or representation_refs
+                or any(str(value).startswith("resource:") for value in (getattr(candidate, "source_refs", None) or []))
+            )
             has_source_geometry = bool(
                 len(source_bsms) == 1
                 and parcel_by_bsm.get(source_bsms[0]) is not None
@@ -862,6 +896,11 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
                     diagnostic = "approved_site_footprint_cannot_be_materialized_as_source_backed_change"
                 direct_materialization_diagnostics[target_id] = diagnostic
                 continue
+            if not footprint_changes and not has_source_geometry and not generic_geometry_only:
+                direct_materialization_diagnostics[target_id] = (
+                    "approved_site_footprint_source_geometry_missing"
+                )
+                continue
             changes.extend(footprint_changes)
             if shared_source_bsm:
                 shared_remainders_used.add(shared_source_bsm)
@@ -873,6 +912,8 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
                 "project_name": getattr(project, "name", ""),
                 "project_category": getattr(project, "category", "other"),
                 "candidate_id": candidate_id,
+                "resource_refs": resource_refs,
+                "representation_refs": representation_refs,
                 "source_bsms": list(getattr(candidate, "source_bsms", None) or []),
                 "feature_bsms": list(getattr(candidate, "feature_bsms", None) or []),
                 "crs": str(getattr(candidate, "crs", "") or "EPSG:4326"),

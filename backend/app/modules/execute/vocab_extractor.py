@@ -26,6 +26,7 @@ from app.contracts.execute.custom_zone_contracts import (
     VocabularyCategory,
 )
 from app.data.encodings.dicts.vocabularies.loader import register_vocabulary
+from app.infrastructure.artifacts.fingerprint import semantic_checksum
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
@@ -660,22 +661,36 @@ async def _extract_vocabulary_llm(
     max_rule_nodes: int = _MAX_RULE_NODES,
     sanity_hook: Callable[[VocabularyDryRunResult], str | None] | None = None,
 ) -> VocabularyCompileResult:
-    reports_text = "\n\n".join(
-        f"[{key}]\n{str(value or '')[:3000]}"
-        for key, value in (reports or {}).items()
+    from app.infrastructure.context_runtime import build_bounded_table
+
+    _, reports_text = build_bounded_table(
+        ("source_ref", "text"),
+        [
+            {"source_ref": str(key), "text": str(value or "")[:3000]}
+            for key, value in (reports or {}).items()
+        ],
+        max_rows=32,
+        max_chars=_MAX_REPORT_CHARS,
     )
     closed_set = _build_bundle_closed_set(bundle)
+    _, closed_set_table = build_bounded_table(
+        ("kind", "value"),
+        [
+            {"kind": kind, "value": value}
+            for kind, values in (
+                ("dlbm", sorted(closed_set.dlbm_ids)),
+                ("zone", sorted(closed_set.zone_ids)),
+                ("poi", sorted(closed_set.poi_ids)),
+                ("road", sorted(closed_set.road_ids)),
+            )
+            for value in values
+        ],
+        max_rows=64,
+        max_chars=4200,
+    )
     prompt = _VOCAB_PROMPT.format(
-        reports=reports_text[:_MAX_REPORT_CHARS],
-        closed_set=json.dumps(
-            {
-                "dlbm_ids": sorted(closed_set.dlbm_ids),
-                "zone_ids": sorted(closed_set.zone_ids),
-                "poi_ids": sorted(closed_set.poi_ids),
-                "road_ids": sorted(closed_set.road_ids),
-            },
-            ensure_ascii=False,
-        ),
+        reports=reports_text,
+        closed_set=closed_set_table,
     )
     from app.infrastructure.structured_runtime.facade import LLMCallSpec, run_structured
     from app.core.llm_config import get_llm_settings
@@ -700,12 +715,18 @@ async def _extract_vocabulary_llm(
         [{"role": "user", "content": prompt}],
         llm=llm,
         context={
-            "closed_set": {
+            "closed_set_digest": semantic_checksum({
                 "dlbm_ids": sorted(closed_set.dlbm_ids),
                 "zone_ids": sorted(closed_set.zone_ids),
                 "poi_ids": sorted(closed_set.poi_ids),
                 "road_ids": sorted(closed_set.road_ids),
-            }
+            }),
+            "closed_set_rows": str(
+                len(closed_set.dlbm_ids)
+                + len(closed_set.zone_ids)
+                + len(closed_set.poi_ids)
+                + len(closed_set.road_ids)
+            ),
         },
     )
     return _compile_vocabulary_output(

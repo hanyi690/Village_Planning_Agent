@@ -7,7 +7,6 @@ from typing import Any, Dict
 from app.modules.execute.execute_state import ExecuteAgentState
 from app.modules.execute.workers.common import _execution_error
 from app.modules.execute.workers.worker_common import (
-    _build_parcel_by_bsm,
     _execution_intent_from_plan,
     _plan_tasks,
     worker_route_key,
@@ -54,67 +53,26 @@ async def _route_tasks_node(state: ExecuteAgentState) -> dict:
     session_id = getattr(state, "session_id", "")
     bound_intent = _execution_intent_from_plan(state)
     if session_id and bound_intent is not None:
+        world_model_commit = getattr(
+            getattr(state, "ports", None),
+            "world_model_commit",
+            None,
+        )
+        if world_model_commit is None:
+            return _execution_error(
+                error_state,
+                "route",
+                "missing_world_model_commit_port",
+                "EXECUTE requires the injected world-model commit port.",
+            ) | result
         try:
-            from rdflib import RDF
-            from app.infrastructure.kg.manager import get_kg_manager
-            from app.infrastructure.kg.ontology import EntityTypes, PLN
-
-            kg = get_kg_manager().get_session_kg(session_id)
-            if kg is None:
-                return _execution_error(
-                    error_state,
-                    "route",
-                    "missing_session_kg",
-                    "Session KG is required before EXECUTE.",
-                ) | result
-            from app.infrastructure.kg.builder.layer3 import build_intent_layer
-
-            build_intent_layer(kg, bound_intent)
-            expected = {
-                EntityTypes.SiteAreaTarget: {
-                    str(item.target_id) for item in (getattr(bound_intent, "site_area_targets", None) or [])
-                },
-                EntityTypes.ZoneTarget: {
-                    str(item.target_id) for item in (getattr(bound_intent, "zone_targets", None) or [])
-                },
-                EntityTypes.FacilityTarget: {
-                    str(item.target_id) for item in (getattr(bound_intent, "facilities", None) or [])
-                },
-                EntityTypes.AxisTarget: {
-                    str(item.target_id) for item in (getattr(bound_intent, "development_axes", None) or [])
-                },
-                EntityTypes.RoadTarget: {
-                    str(item.target_id) for item in (getattr(bound_intent, "road_targets", None) or [])
-                },
-                EntityTypes.LinearTarget: {
-                    str(item.target_id) for item in (getattr(bound_intent, "linear_targets", None) or [])
-                },
-            }
-            mismatches = []
-            for entity_type, expected_ids in expected.items():
-                if not expected_ids:
-                    continue
-                subjects = set(kg.g.subjects(RDF.type, entity_type))
-                actual_ids = {
-                    str(target_id)
-                    for subject in subjects
-                    for target_id in kg.g.objects(subject, PLN.target_id)
-                }
-                missing_ids = expected_ids - actual_ids
-                if actual_ids and missing_ids:
-                    mismatches.append(
-                        f"{entity_type.split('/')[-1]} missing={sorted(missing_ids)}"
-                    )
-                elif not actual_ids and len(subjects) < len(expected_ids):
-                    mismatches.append(
-                        f"{entity_type.split('/')[-1]} state={len(expected_ids)} kg={len(subjects)}"
-                    )
-            if mismatches:
+            outcome = world_model_commit.ensure_intent(bound_intent)
+            if str(outcome.get("status", "")) != "committed":
                 return _execution_error(
                     error_state,
                     "route",
                     "kg_l3_intent_mismatch",
-                    "L3 intent mismatch: " + "; ".join(mismatches),
+                    "World-model intent commit did not produce a committed result.",
                 ) | result
         except Exception as e:
             return _execution_error(
@@ -133,21 +91,18 @@ async def _prepare_inputs_node(state: ExecuteAgentState) -> dict:
     Planning revisions must produce a new ExecutionPlan upstream; EXECUTE does
     not mutate target intent while preparing inputs.
     """
-    # Action-only/empty plans do not have a spatial parcel input.  Do not
-    # require a GIS bundle when routing produced no spatial workers; a
-    # text-only session must be able to continue into an explicit partial
-    # delivery.  Spatial workers still validate the bundle when they are
-    # actually routed.
+    # Approved spatial operations have already resolved DATA-owned
+    # resource/representation/geometry references. BSM is source metadata,
+    # never an execution-mode switch and never a reason to rebuild a parcel
+    # index from a fixed land-use layer.
     spatial_tasks = {"site_area", "layout", "facility", "axis", "road"}
-    needs_parcels = bool(spatial_tasks.intersection(state.tasks_to_run or []))
-    parcel_by_bsm = (
-        _build_parcel_by_bsm(state)
-        if needs_parcels and state.spatial_workspace is not None
-        else {}
-    )
+    has_spatial_tasks = bool(spatial_tasks.intersection(state.tasks_to_run or []))
     execution_plan = state.execution_plan
     return {
-        "parcel_by_bsm": parcel_by_bsm,
+        "parcel_by_bsm": {},
+        "parcel_compatibility_mode": (
+            "generic_data" if has_spatial_tasks else "not_applicable"
+        ),
         "execution_plan": execution_plan,
     }
 
@@ -280,7 +235,7 @@ async def _task_level_execution_node(state: ExecuteAgentState) -> dict:
                         task_id=task_id,
                         target_id=str(getattr(task, "target_id", "")),
                         status="deferred",
-                        expected_output_kind=getattr(task, "expected_output_kind", "parcel"),
+                        expected_output_kind=getattr(task, "expected_output_kind", "polygon"),
                         errors=["unsupported_capability"],
                         diagnostics=[{"code": "unsupported_capability", "required_capability": getattr(task, "required_capability", "")}],
                     )],
@@ -299,7 +254,7 @@ async def _task_level_execution_node(state: ExecuteAgentState) -> dict:
                             task_id=task_id,
                             target_id=str(getattr(task, "target_id", "")),
                             status="failed",
-                            expected_output_kind=getattr(task, "expected_output_kind", "parcel"),
+                            expected_output_kind=getattr(task, "expected_output_kind", "polygon"),
                             errors=[f"WORKER_RAISED:{type(exc).__name__}"],
                         )],
                         unresolved_items=[{"code": "worker_raised", "target_id": getattr(task, "target_id", ""), "exception_type": type(exc).__name__}],
@@ -318,7 +273,7 @@ async def _task_level_execution_node(state: ExecuteAgentState) -> dict:
                 task_id=task_id,
                 target_id=str(getattr(task, "target_id", "")),
                 status="deferred",
-                expected_output_kind=getattr(task, "expected_output_kind", "parcel"),
+                expected_output_kind=getattr(task, "expected_output_kind", "polygon"),
                 errors=["dependency_deferred"],
             )],
             unresolved_items=[{"code": "dependency_deferred", "target_id": getattr(task, "target_id", "")}],

@@ -13,6 +13,10 @@ from typing import Any
 from app.contracts.execute.materialization_contracts import TargetAssignment
 from app.contracts.select.approval import ApprovedExecutionInput
 from app.contracts.select.scenario import PlanningScenario, ScenarioSet
+from app.contracts.select.selection_decision import (
+    SelectionDecision,
+    SelectionDecisionSet,
+)
 from app.contracts.execute.execution_plan_contracts import (
     ExecutionPlan,
     WorkerTask,
@@ -67,6 +71,24 @@ def _worker_type(target_type: str, target: Any) -> WorkerType:
     }[target_type]
 
 
+def _expected_output_kind(target_type: str, target: Any) -> str:
+    """Resolve output kind without silently defaulting generic tasks to parcel."""
+
+    explicit = str(_value(target, "expected_output_kind", "") or "").strip()
+    if explicit:
+        return explicit
+    if _value(target, "execution_mode", "spatial") == "non_spatial":
+        return "action"
+    return {
+        "site_area": "polygon",
+        "zone": "polygon",
+        "facility": "point",
+        "axis": "line",
+        "road": "line",
+        "linear": "line",
+    }.get(target_type, "polygon")
+
+
 def _candidate_index(problem: Any) -> dict[str, Any]:
     return {
         str(_value(item, "candidate_id", "")): item
@@ -84,10 +106,13 @@ def _candidate_binding(candidate_ids: list[str], candidate_by_id: dict[str, Any]
     binding: dict[str, Any] = {
         "candidate_ids": list(candidate_ids),
         "source_refs": sorted({str(ref) for item in candidates for ref in (_value(item, "source_refs", None) or []) if str(ref)}),
+        "resource_refs": sorted({str(ref) for item in candidates for ref in (_value(item, "resource_refs", None) or []) if str(ref)}),
+        "representation_refs": sorted({str(ref) for item in candidates for ref in (_value(item, "representation_refs", None) or []) if str(ref)}),
         "source_bsms": sorted({str(ref) for item in candidates for ref in (_value(item, "source_bsms", None) or []) if str(ref)}),
         "feature_bsms": sorted({str(ref) for item in candidates for ref in (_value(item, "feature_bsms", None) or []) if str(ref)}),
         "source_feature_ids": sorted({str(ref) for item in candidates for ref in (_value(item, "source_feature_ids", None) or []) if str(ref)}),
         "entity_refs": sorted({str(ref) for item in candidates for ref in (_value(item, "entity_refs", None) or []) if str(ref)}),
+        "part_refs": sorted({str(ref) for item in candidates for ref in [(_value(item, "part_ref", "") or "")] if str(ref)}),
         "relation_refs": sorted({str(ref) for item in candidates for ref in (_value(item, "relation_refs", None) or []) if str(ref)}),
         "evidence_refs": sorted({str(ref) for item in candidates for ref in (_value(item, "evidence_refs", None) or []) if str(ref)}),
         "adjacent_parcel_bsms": sorted({str(ref) for item in candidates for ref in (_value(item, "adjacent_parcel_bsms", None) or []) if str(ref)}),
@@ -99,6 +124,7 @@ def _candidate_binding(candidate_ids: list[str], candidate_by_id: dict[str, Any]
             "candidate_geometry_wkt": str(_value(candidate, "wkt", "") or ""),
             "geometry_role": str(_value(candidate, "role", "") or ""),
             "geometry_kind": str(_value(candidate, "kind", "") or ""),
+            "part_ref": str(_value(candidate, "part_ref", "") or ""),
             "crs": str(_value(candidate, "crs", "") or ""),
             "source_binding_ref": str(_value(candidate, "source_binding_ref", "") or ""),
             "l1_snapshot_ref": str(_value(candidate, "l1_snapshot_ref", "") or ""),
@@ -112,12 +138,43 @@ def _candidate_binding(candidate_ids: list[str], candidate_by_id: dict[str, Any]
     return binding
 
 
+def _selection_decisions(
+    scenario: PlanningScenario,
+    candidate_by_id: dict[str, Any],
+    decision_set: SelectionDecisionSet | None,
+) -> list[SelectionDecision]:
+    """Load the DATA-closed SELECT output; never recreate it from WKT."""
+
+    if decision_set is None:
+        raise ValueError("execution plan requires a SelectionDecisionSet")
+    validated = SelectionDecisionSet.model_validate(
+        decision_set.model_dump(mode="python")
+    )
+    if validated.scenario_id != str(scenario.scenario_id):
+        raise ValueError("selection decisions belong to another scenario")
+    if validated.scenario_fingerprint != str(scenario.fingerprint):
+        raise ValueError("selection decisions have a stale scenario fingerprint")
+    selected = {
+        str(candidate_id)
+        for selection in list(scenario.target_selections or [])
+        for candidate_id in list(selection.candidate_ids or [])
+        if str(candidate_id).strip()
+    }
+    decision_candidates = {item.candidate_ref for item in validated.decisions}
+    if decision_candidates != selected:
+        raise ValueError("selection decision candidate coverage is incomplete")
+    if not selected.issubset(candidate_by_id):
+        raise ValueError("selection decision references unknown candidate geometry")
+    return list(validated.decisions)
+
+
 def build_execution_plan_draft(
     scenario_set: ScenarioSet,
     scenario: PlanningScenario,
     plan_intent: Any,
     problem: Any,
     *,
+    selection_decision_set: SelectionDecisionSet | None = None,
     run_id: str = "",
     context_version: str = "",
     context_fingerprint: str = "",
@@ -134,6 +191,14 @@ def build_execution_plan_draft(
         raise ValueError("approved scenario problem fingerprint is stale")
 
     candidate_by_id = _candidate_index(problem)
+    selection_decisions = _selection_decisions(
+        scenario,
+        candidate_by_id,
+        selection_decision_set,
+    )
+    decisions_by_candidate: dict[str, list[SelectionDecision]] = {}
+    for decision in selection_decisions:
+        decisions_by_candidate.setdefault(decision.candidate_ref, []).append(decision)
     selections = {
         str(item.target_id): list(item.candidate_ids)
         for item in list(scenario.target_selections or [])
@@ -179,14 +244,46 @@ def build_execution_plan_draft(
             for candidate_id in task_candidate_ids:
                 member_ids = [candidate_id] if candidate_id else []
                 binding = {**payload, **_candidate_binding(member_ids, candidate_by_id)}
+                candidate_decisions = list(decisions_by_candidate.get(candidate_id, []))
+                if spatial and not candidate_decisions:
+                    raise ValueError(
+                        f"approved candidate has no DATA-closed selection decision: {candidate_id}"
+                    )
+                if candidate_decisions:
+                    operations = {item.operation for item in candidate_decisions}
+                    parameters = {
+                        str(item.operation_parameters)
+                        for item in candidate_decisions
+                    }
+                    capabilities = {
+                        item.required_capability for item in candidate_decisions
+                    }
+                    if len(operations) != 1 or len(parameters) != 1 or len(capabilities) != 1:
+                        raise ValueError(
+                            f"candidate resource decisions disagree: {candidate_id}"
+                        )
+                    binding.update({
+                        "resource_refs": sorted({item.resource_ref for item in candidate_decisions}),
+                        "representation_refs": sorted({item.representation_ref for item in candidate_decisions}),
+                        "geometry_refs": sorted({item.geometry_ref for item in candidate_decisions}),
+                        "source_snapshot_refs": sorted({item.source_snapshot_ref for item in candidate_decisions}),
+                        "resource_digests": sorted({item.resource_digest for item in candidate_decisions}),
+                        "capability_refs": sorted({item.capability_ref for item in candidate_decisions}),
+                        "selection_decision_refs": sorted({item.selection_ref for item in candidate_decisions}),
+                        "input_crs": candidate_decisions[0].input_crs,
+                        "output_crs": candidate_decisions[0].output_crs,
+                    })
                 assignment = TargetAssignment(
                     target_id=target_id,
                     target_type=target_type,
                     status="placed" if spatial else "ready",
-                    expected_output_kind=str(_value(target, "expected_output_kind", "parcel") or "parcel"),
+                    expected_output_kind=_expected_output_kind(target_type, target),
                     target_binding=binding,
                     selected_bsm=(binding.get("source_bsms") or [""])[0],
                     selected_bsms=list(binding.get("source_bsms") or []),
+                    part_ref=str((binding.get("part_refs") or [""])[0] or ""),
+                    resource_refs=list(binding.get("resource_refs") or []),
+                    representation_refs=list(binding.get("representation_refs") or []),
                     relation_refs=list(_value(target, "relation_refs", None) or []),
                     evidence_refs=list(binding.get("evidence_refs") or []),
                     availability_status=str(binding.get("availability_status") or "unknown"),
@@ -204,7 +301,19 @@ def build_execution_plan_draft(
                     expected_output_kind=assignment.expected_output_kind,
                     assignment=assignment,
                     payload={"target_id": target_id},
-                    required_capability=worker_type.value,
+                    required_capability=str(
+                        (candidate_decisions[0].required_capability if candidate_decisions else "")
+                        or ("read" if binding.get("resource_refs") else worker_type.value)
+                    ),
+                    operation=str(
+                        (candidate_decisions[0].operation if candidate_decisions else "")
+                        or "select"
+                    ),
+                    operation_parameters=(
+                        dict(candidate_decisions[0].operation_parameters)
+                        if candidate_decisions
+                        else {}
+                    ),
                     scenario_id=str(scenario.scenario_id),
                     candidate_id=candidate_id,
                     candidate_ids=member_ids,
@@ -212,8 +321,18 @@ def build_execution_plan_draft(
                     feature_ids=list(binding.get("feature_ids") or []),
                     source_feature_ids=list(binding.get("source_feature_ids") or []),
                     entity_refs=list(binding.get("entity_refs") or []),
+                    part_ref=str((binding.get("part_refs") or [""])[0] or ""),
                     relation_refs=list(assignment.relation_refs or binding.get("relation_refs") or []),
                     target_binding=binding,
+                    resource_refs=list(binding.get("resource_refs") or []),
+                    representation_refs=list(binding.get("representation_refs") or []),
+                    geometry_refs=list(binding.get("geometry_refs") or []),
+                    source_snapshot_refs=list(binding.get("source_snapshot_refs") or []),
+                    resource_digests=list(binding.get("resource_digests") or []),
+                    capability_refs=list(binding.get("capability_refs") or []),
+                    selection_decision_refs=list(binding.get("selection_decision_refs") or []),
+                    input_crs=str(binding.get("input_crs") or ""),
+                    output_crs=str(binding.get("output_crs") or ""),
                     feature_bsms=list(binding.get("feature_bsms") or []),
                     evidence_refs=list(binding.get("evidence_refs") or []),
                     l1_snapshot_ref=str(binding.get("l1_snapshot_ref") or ""),
@@ -233,6 +352,7 @@ def build_execution_plan_draft(
         scenario_fingerprint=str(scenario.fingerprint),
         problem_fingerprint=str(scenario.problem_fingerprint),
         candidate_ids=sorted(approved_candidates),
+        selection_decisions=selection_decisions,
         worker_tasks=tasks,
         context_version=context_version,
         context_fingerprint=context_fingerprint,

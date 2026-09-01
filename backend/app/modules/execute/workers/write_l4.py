@@ -25,29 +25,38 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
     if not session_id:
         logger.warning("[EXECUTE:l4_write] No session_id - skipping L4 write")
         return {}
+    world_model_commit = getattr(
+        getattr(state, "ports", None),
+        "world_model_commit",
+        None,
+    )
+    if world_model_commit is None:
+        logger.warning("[EXECUTE:l4_write] World-model commit port unavailable")
+        return {"l4_write_error": "missing_world_model_commit_port"}
 
-    try:
-        from app.infrastructure.kg.manager import get_kg_manager
-        manager = get_kg_manager()
-        kg = manager.get_session_kg(session_id)
-        if kg is None:
-            logger.warning("[EXECUTE:l4_write] No KG for session %s", session_id)
-            return {}
-    except Exception as e:
-        logger.warning("[EXECUTE:l4_write] KG access failed: %s", type(e).__name__)
-        return {}
-
-    from app.infrastructure.kg.builder.layer4 import apply_planned_state
-
-    planned_state = None
-    if getattr(state, "parcel_changeset", None) is not None:
+    planned_state = getattr(state, "planned_state", None)
+    if planned_state is None and getattr(state, "parcel_changeset", None) is not None:
         from app.modules.execute.planned_state_builder import changeset_to_planned_state
-        from app.modules.execute.workers.worker_common import _execution_intent_from_plan
+        from app.modules.execute.workers.worker_common import (
+            _execution_intent_from_plan,
+            _worker_result_get,
+        )
 
         planned_state = changeset_to_planned_state(
             state.parcel_changeset,
             _execution_intent_from_plan(state),
             list(state.layout_configs or []),
+            scenario_features=[
+                feature
+                for feature in list(
+                    getattr(getattr(state, "spatial_changeset", None), "features", None)
+                    or []
+                )
+            ] or [
+                feature
+                for result in list(getattr(state, "worker_results", None) or [])
+                for feature in list(_worker_result_get(result, "scenario_features") or [])
+            ],
         )
         logger.info(
             "[EXECUTE:l4_write] building PlannedState from ParcelChangeSet (%d changes)",
@@ -57,7 +66,7 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
         planned_state = state.planned_state
 
     if planned_state is None:
-        logger.warning("[EXECUTE:l4_write] no parcel_changeset/planned_state; skipping L4 write")
+        logger.warning("[EXECUTE:l4_write] no planned output; skipping L4 write")
         return {}
 
     outcome = getattr(state, "execution_result", None)
@@ -96,6 +105,7 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
         len(items)
         for items in (
             planned_state.parcels,
+            getattr(planned_state, "features", []),
             planned_state.zones,
             planned_state.facilities,
             planned_state.roads,
@@ -103,27 +113,24 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
         )
     )
     if written:
-        # RDFLib has no transaction API.  Keep a graph snapshot around the
-        # single commit boundary so an exception during any entity write
-        # restores the pre-EXECUTE graph and cannot expose a half-materialized
-        # PlannedState.
-        graph_snapshot = list(kg.g)
         try:
-            apply_planned_state(kg, planned_state)
+            outcome = world_model_commit.commit_planned_state(planned_state)
         except Exception as exc:
-            kg.g.remove((None, None, None))
-            for triple in graph_snapshot:
-                kg.g.add(triple)
             logger.error(
-                "[EXECUTE:l4_write] atomic graph commit rolled back (exception_type=%s)",
+                "[EXECUTE:l4_write] world-model commit failed (exception_type=%s)",
                 type(exc).__name__,
             )
             return {
                 "l4_write_error": "atomic_commit_failed",
                 "error_type": type(exc).__name__,
             }
-        manager.bump_version(session_id)
-        logger.info("[EXECUTE:l4_write] Wrote %d L4 entities to KG", written)
+        if str(outcome.get("status", "")) != "committed":
+            return {
+                "l4_write_error": "atomic_commit_failed",
+                "error_type": str(outcome.get("error_type", "unknown")),
+            }
+        written = int(outcome.get("written", written) or written)
+        logger.info("[EXECUTE:l4_write] Wrote %d planned entities", written)
 
     return {
         "l4_written": written,

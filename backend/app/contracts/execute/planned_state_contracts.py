@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.contracts.artifacts.contract_meta import ContractMeta
 from app.contracts.artifacts.provenance import Provenance
+from app.contracts.select.scenario import ScenarioFeature
 
 
 class PlannedParcel(BaseModel):
@@ -202,6 +203,11 @@ class PlannedAxis(BaseModel):
 class PlannedState(ContractMeta):
     version: str = "v1"
     parcels: list[PlannedParcel] = Field(default_factory=list)
+    # Canonical non-cadastral planning outputs.  ``parcels`` remains a
+    # compatibility projection for explicit BSM workflows only; generic
+    # feature/candidate geometry is carried here with its own identity and
+    # representation lineage.
+    features: list[ScenarioFeature] = Field(default_factory=list)
     zones: list[PlannedZone] = Field(default_factory=list)
     overlays: list[PlannedZoneOverlay] = Field(default_factory=list)
     coverage_domains: list[CoverageDomain] = Field(default_factory=list)

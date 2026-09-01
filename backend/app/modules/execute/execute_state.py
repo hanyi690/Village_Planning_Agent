@@ -1,8 +1,9 @@
 """EXECUTE Agent state - execution layer sub-state.
 
-Execution state follows the current EXECUTE boundary in docs/design/06_SELECT_EXECUTE_AND_CODE.md.
-
-Constructed from the canonical planning bundle at the execute boundary.
+Execution state follows the current EXECUTE boundary in
+docs/design/10_MODULE_LEVEL_EXECUTABLE_DESIGN.md. It is constructed from the
+approval-bound plan and DATA-owned resource/representation refs. A legacy
+planning Bundle is only consulted by explicit BSM compatibility tasks.
 Focused on spatial result production (layout / facility / axis / road).
 
 Stage-local state is exchanged through
@@ -17,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from app.contracts.execute.materialization_contracts import LandDesignBrief
 from app.contracts.select.approval import ApprovedExecutionInput
+from app.contracts.execute.spatial_change_contracts import SpatialChangeSet
 
 
 def _upsert_worker_results(current: List[Any], updates: List[Any]) -> List[Any]:
@@ -89,8 +91,9 @@ class ExecuteAgentState(BaseModel):
     land_design_briefs: List[LandDesignBrief] = Field(default_factory=list)  # list[LandDesignBrief] — SELECT output
     parcel_changes: List[Any] = Field(default_factory=list)  # list[ParcelChange] — accumulated by Land Design Worker nodes
     parcel_changeset: Optional[Any] = None  # ParcelChangeSet — final aggregated changeset
+    spatial_changeset: Optional[SpatialChangeSet] = None  # canonical generic geometry output
 
-    # ── KG context (read-only view from KGManager) ──
+    # ── Cognitive world-model context (read-only compatibility view) ──
     kg_turtle: str = ""
     kg_constraints: List[Dict[str, Any]] = Field(default_factory=list)
     kg_adjacency_map: Dict[str, List[str]] = Field(default_factory=dict)
@@ -109,10 +112,19 @@ class ExecuteAgentState(BaseModel):
     unresolved_targets: List[Dict[str, Any]] = Field(default_factory=list)
 
     # ── Wave O: multi-worker subgraph ──
-    parcel_by_bsm: Dict[str, Any] = Field(default_factory=dict)  # bsm -> parcel (prepared once)
+    # Compatibility-only BSM -> parcel index. Generic DATA tasks do not
+    # populate this field; they carry resource/representation references and
+    # approved geometry instead.
+    parcel_by_bsm: Dict[str, Any] = Field(default_factory=dict)
+    # Runtime telemetry for the progressive parcel migration.  This is a
+    # decision record, not a geometry source: legacy_bsm means an explicit
+    # BSM-bound task opted into the adapter; generic_data means no parcel
+    # adapter was needed for the routed spatial tasks.
+    parcel_compatibility_mode: str = "not_applicable"
     execution_plan: Optional[Any] = None  # ExecutionPlan — built upstream (post-L3 select)
     approved_execution_input: Optional[ApprovedExecutionInput] = None
     approved_input_fingerprint: str = ""
+    world_model_digest: str = ""
     ports: Optional[Any] = None  # PlanningPorts — injected zone_allocator/road_planner
     worker_results: Annotated[List[Any], _upsert_worker_results] = Field(default_factory=list)  # list[WorkerResult]
     task_schedule: Optional[Any] = None

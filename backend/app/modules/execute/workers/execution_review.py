@@ -86,11 +86,27 @@ async def _execution_review_node(state: ExecuteAgentState) -> dict:
         str(getattr(task, "expected_output_kind", "")) == "action"
         for task in plan_tasks
     )
-    input_ok = bool(state.parcel_by_bsm) or action_only
+    # DATA-backed exact candidate geometries are a valid spatial input even
+    # when no cadastral parcel/BSM exists.  Parcel indexes remain required
+    # only for legacy parcel transformation workers.
+    resource_geometry_ok = any(
+        str(getattr(candidate, "role", "") or "") == "execution_geometry"
+        and str(getattr(candidate, "wkt", "") or "").strip()
+        and (
+            list(getattr(candidate, "resource_refs", None) or [])
+            or list(getattr(candidate, "representation_refs", None) or [])
+            or any(
+                str(value).startswith("resource:")
+                for value in (getattr(candidate, "source_refs", None) or [])
+            )
+        )
+        for candidate in (state.candidate_geometry_by_id or {}).values()
+    )
+    input_ok = bool(state.parcel_by_bsm) or resource_geometry_ok or action_only
     if not input_ok:
         violations.append({
             "check": "missing_parcel_input",
-            "message": "No parcel_by_bsm prepared for spatial execution (landuse input missing).",
+            "message": "No parcel index or DATA-backed executable geometry prepared for spatial execution.",
         })
     checks.append({"check": "input_completeness", "passed": input_ok})
 

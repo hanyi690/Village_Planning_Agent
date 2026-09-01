@@ -11,6 +11,7 @@ from app.modules.execute.workers.worker_common import (
     _intent_list,
     _resolve_parcel_by_bsm,
     _candidate_availability_block,
+    _candidate_capability_block,
     _scenario_features_for_layer,
     _task_enabled,
     _task_execution_result,
@@ -200,6 +201,9 @@ def _zone_worker(
             })
             continue
         availability_block = _candidate_availability_block(candidate)
+        capability_block = _candidate_capability_block(state, candidate)
+        if not availability_block and capability_block:
+            availability_block = capability_block
         if availability_block:
             blocked_targets.append(target)
             blocked_unresolved.append({
@@ -247,6 +251,12 @@ def _zone_worker(
                 "feature_bsms": list(getattr(candidate, "feature_bsms", None) or []),
                 "source_feature_ids": list(
                     getattr(candidate, "source_feature_ids", None) or []
+                ),
+                "resource_refs": list(
+                    getattr(candidate, "resource_refs", None) or []
+                ),
+                "representation_refs": list(
+                    getattr(candidate, "representation_refs", None) or []
                 ),
                 "entity_refs": list(getattr(candidate, "entity_refs", None) or []),
                 "relation_refs": list(getattr(candidate, "relation_refs", None) or []),

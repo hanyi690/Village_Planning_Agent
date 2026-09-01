@@ -17,6 +17,7 @@ from app.contracts.execute.planned_state_contracts import (
     PlannedRoad,
     PlannedState,
 )
+from app.contracts.select.scenario import ScenarioFeature
 
 
 def _geometry_area_ha(wkt: str) -> float:
@@ -248,12 +249,16 @@ def _facility_target_to_planned_facility(target: Any, geometry: str, target_id: 
 
 
 def changeset_to_planned_state(
-    changeset: ParcelChangeSet,
+    changeset: ParcelChangeSet | None,
     intent: Any = None,
     layout_configs: list[dict[str, Any]] | None = None,
+    scenario_features: list[ScenarioFeature] | None = None,
 ) -> PlannedState:
     """Build the authoritative PlannedState from changes and worker geometry."""
-    parcels = [_change_to_planned_parcel(c) for c in changeset.changes]
+    parcels = [
+        _change_to_planned_parcel(c)
+        for c in (getattr(changeset, "changes", None) or [])
+    ]
     overlays: list[PlannedZoneOverlay] = []
     target_by_id = _target_by_id(intent)
 
@@ -332,10 +337,20 @@ def changeset_to_planned_state(
                 **_lineage_kwargs(properties),
             ))
             continue
+        source_bsms = [
+            str(value)
+            for value in (properties.get("source_bsms") or [])
+            if str(value).strip()
+        ]
+        if not source_bsms:
+            # A generic DATA candidate is a planned representation, not a
+            # cadastral parcel.  Its ScenarioFeature is already carried by
+            # ``scenario_features`` below; creating PlannedParcel(bsm="")
+            # would silently reintroduce the retired parcel identity and make
+            # downstream consumers believe an empty BSM is authoritative.
+            continue
         parcels.append(PlannedParcel(
-            # A candidate is not a cadastral parcel and must never be looked
-            # up as a BSM by legacy current-land-use consumers.
-            bsm="",
+            bsm=source_bsms[0],
             candidate_id=candidate_id,
             project_ref=target_id,
             planning_land_use=str(
@@ -368,16 +383,8 @@ def changeset_to_planned_state(
                 if str(value).strip()
             ],
             geometry=geometry,
-            derived_from_bsms=[
-                str(value)
-                for value in (properties.get("source_bsms") or [])
-                if str(value).strip()
-            ],
-            source_bsms=[
-                str(value)
-                for value in (properties.get("source_bsms") or [])
-                if str(value).strip()
-            ],
+            derived_from_bsms=source_bsms,
+            source_bsms=source_bsms,
             target_ref=target_id,
             source_spec=str(
                 properties.get("generation_operation")
@@ -445,17 +452,51 @@ def changeset_to_planned_state(
     return PlannedState(
         version="v1",
         parcels=parcels,
+        features=list(scenario_features or []),
         zones=[],
         overlays=overlays,
         facilities=facilities,
         roads=roads,
         axes=axes,
-        source="parcel_change_set+worker_geometry",
-        provenance=changeset.provenance,
+        source=(
+            "parcel_change_set+spatial_change_set"
+            if changeset is not None and list(changeset.changes or [])
+            else "spatial_change_set"
+        ),
+        provenance=getattr(changeset, "provenance", None),
     )
+
+
+def spatial_changeset_to_planned_state(
+    spatial_changeset: Any,
+    intent: Any = None,
+    layout_configs: list[dict[str, Any]] | None = None,
+) -> PlannedState:
+    """Build the generic authoritative state without a parcel envelope."""
+
+    features = list(getattr(spatial_changeset, "features", None) or [])
+    if not features:
+        raise ValueError("generic PlannedState requires SpatialChangeSet features")
+    state = changeset_to_planned_state(
+        None,
+        intent,
+        layout_configs,
+        scenario_features=features,
+    )
+    scenario_id = str(
+        getattr(spatial_changeset, "scenario_id", "")
+        or getattr(features[0], "scenario_id", "")
+        or ""
+    )
+    return state.model_copy(update={
+        "scenario_id": scenario_id,
+        "scenario_ref": str(getattr(spatial_changeset, "scenario_ref", "") or ""),
+        "source": "spatial_change_set",
+    })
 
 
 __all__ = [
     "changeset_to_planned_state",
+    "spatial_changeset_to_planned_state",
     "_change_to_planned_parcel",
 ]

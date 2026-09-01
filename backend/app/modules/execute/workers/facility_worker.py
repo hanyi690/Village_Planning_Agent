@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import List
 
 from app.modules.execute.execute_state import ExecuteAgentState
-from app.modules.execute.workers.worker_common import _attach_feature_lineage, _candidate_availability_block, _execution_intent_from_plan, _scenario_features_for_layer, _task_enabled, _task_execution_result
+from app.modules.execute.workers.worker_common import _attach_feature_lineage, _candidate_availability_block, _candidate_capability_block, _execution_intent_from_plan, _scenario_features_for_layer, _task_enabled, _task_execution_result
 from app.contracts.execute.execution_plan_contracts import WorkerResult
 from app.contracts.execute.parcel_change_contracts import ParcelChange
 from app.infrastructure.logging import get_logger
@@ -69,6 +69,16 @@ def _candidate_provenance(candidate: object | None) -> dict[str, object]:
     return {
         "candidate_id": str(_candidate_value(candidate, "candidate_id", "") or ""),
         "source_refs": list(dict.fromkeys(source_refs)),
+        "resource_refs": [
+            str(value)
+            for value in (_candidate_value(candidate, "resource_refs", []) or [])
+            if str(value).strip()
+        ],
+        "representation_refs": [
+            str(value)
+            for value in (_candidate_value(candidate, "representation_refs", []) or [])
+            if str(value).strip()
+        ],
         "source_bsms": [
             str(value)
             for value in (_candidate_value(candidate, "source_bsms", []) or [])
@@ -136,9 +146,12 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
     Design Worker.  A selected candidate must be executable point geometry;
     candidate-only scopes are deferred and never expanded to a containing BSM.
     """
-    from app.modules.execute.land_design_worker import design_facility_parcel
     if not _task_enabled(state, "facility"):
         return WorkerResult(worker_type="facility")
+
+    legacy_parcel_mode = str(
+        getattr(state, "parcel_compatibility_mode", "") or ""
+    ) == "legacy_bsm"
 
     facilities = list(getattr(_execution_intent_from_plan(state), "facilities", None) or [])
     features = []
@@ -178,6 +191,9 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
                 task_results.append(task_result)
             continue
         availability_block = _candidate_availability_block(selected_candidate)
+        capability_block = _candidate_capability_block(state, selected_candidate)
+        if not availability_block and capability_block:
+            availability_block = capability_block
         if candidate_id and availability_block:
             diagnostic = {
                 "code": availability_block,
@@ -272,7 +288,11 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
                 break
         if selected_candidate is not None:
             candidate_provenance = _candidate_provenance(selected_candidate)
-        change = design_facility_parcel(facility)
+        change = None
+        if legacy_parcel_mode:
+            from app.modules.execute.land_design_worker import design_facility_parcel
+
+            change = design_facility_parcel(facility)
         if change is None:
             if facility.anchor_point is not None:
                 features.append({

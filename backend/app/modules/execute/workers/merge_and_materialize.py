@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import hashlib
 from typing import Any, Dict, List
 
 from app.modules.execute.execute_state import ExecuteAgentState
 from app.modules.execute.workers.worker_common import (
     _execution_intent_from_plan,
     _worker_result_get,
+)
+from app.contracts.execute.spatial_change_contracts import (
+    SpatialChangeOperation,
+    SpatialChangeSet,
 )
 
 
@@ -39,11 +44,27 @@ async def _merge_worker_results_node(state: ExecuteAgentState) -> dict:
     from app.modules.execute.merge import merge_worker_results
 
     changeset, layout_configs, diagnostics, action_results = merge_worker_results(
-        list(state.worker_results)
+        list(state.worker_results),
+        parcel_compatibility_mode=str(
+            getattr(state, "parcel_compatibility_mode", "not_applicable")
+            or "not_applicable"
+        ),
     )
     blockers = _blocking_conflicts(diagnostics)
+    spatial_changeset = None
+    if not blockers:
+        try:
+            spatial_changeset = _build_spatial_change_set(state.worker_results)
+        except ValueError as exc:
+            diagnostics.append({
+                "code": "spatial_changeset_lineage_incomplete",
+                "blocking": True,
+                "exception_type": type(exc).__name__,
+            })
+            blockers = _blocking_conflicts(diagnostics)
     update: Dict[str, Any] = {
         "parcel_changeset": None if blockers else changeset,
+        "spatial_changeset": None if blockers else spatial_changeset,
         "layout_configs": layout_configs,
         "worker_conflict_diagnostics": diagnostics,
         "action_results": action_results,
@@ -62,6 +83,96 @@ async def _merge_worker_results_node(state: ExecuteAgentState) -> dict:
             list(state.unresolved_targets or []) + unresolved
         )
     return update
+
+
+def _build_spatial_change_set(worker_results: list[Any]) -> SpatialChangeSet | None:
+    """Collect generic worker features into one deterministic change artifact."""
+    by_id: dict[str, Any] = {}
+    operations_by_id: dict[str, SpatialChangeOperation] = {}
+    source_refs: set[str] = set()
+    evidence_refs: set[str] = set()
+    for result in worker_results or []:
+        for feature in list(_worker_result_get(result, "scenario_features") or []):
+            feature_id = str(getattr(feature, "feature_id", "") or "")
+            if not feature_id:
+                continue
+            by_id.setdefault(feature_id, feature)
+            source_refs.update(str(ref) for ref in (getattr(feature, "source_refs", None) or []) if str(ref).strip())
+            evidence_refs.update(str(ref) for ref in (getattr(feature, "evidence_refs", None) or []) if str(ref).strip())
+            input_operation = str(getattr(feature, "input_operation", "") or "")
+            generation_operation = str(
+                getattr(feature, "generation_operation", "") or ""
+            )
+            if not input_operation:
+                raise ValueError(
+                    f"spatial feature lacks approved operation: {feature_id}"
+                )
+            digest = str(getattr(feature, "geometry_digest", "") or "")
+            if not digest:
+                digest = "sha256:" + hashlib.sha256(
+                    str(getattr(feature, "geometry_wkt", "") or "").encode("utf-8")
+                ).hexdigest()
+            operations_by_id[feature_id] = SpatialChangeOperation(
+                change_ref=str(getattr(feature, "change_ref", "") or ""),
+                feature_id=feature_id,
+                target_ref=str(getattr(feature, "target_id", "") or ""),
+                candidate_ref=str(getattr(feature, "candidate_id", "") or ""),
+                operation=input_operation,
+                input_operation=input_operation,
+                operation_parameters=dict(
+                    getattr(feature, "operation_parameters", None) or {}
+                ),
+                input_resource_refs=list(
+                    getattr(feature, "resource_refs", None) or []
+                ),
+                input_representation_refs=list(
+                    getattr(feature, "representation_refs", None) or []
+                ),
+                input_geometry_refs=list(
+                    getattr(feature, "input_geometry_refs", None) or []
+                ),
+                source_snapshot_refs=list(
+                    getattr(feature, "source_snapshot_refs", None) or []
+                ),
+                resource_digests=list(
+                    getattr(feature, "resource_digests", None) or []
+                ),
+                capability_refs=list(
+                    getattr(feature, "capability_refs", None) or []
+                ),
+                selection_refs=list(
+                    getattr(feature, "selection_refs", None) or []
+                ),
+                approval_ref=str(getattr(feature, "approval_ref", "") or ""),
+                world_model_digest=str(
+                    getattr(feature, "world_model_digest", "") or ""
+                ),
+                input_crs=str(getattr(feature, "input_crs", "") or ""),
+                output_crs=str(
+                    getattr(feature, "output_crs", "")
+                    or getattr(feature, "crs", "")
+                    or ""
+                ),
+                geometry_kind=str(getattr(feature, "geometry_kind", "") or ""),
+                geometry_digest=digest,
+            )
+    operations = [operations_by_id[key] for key in sorted(operations_by_id)]
+    if not by_id:
+        return None
+    scenario_ids = {
+        str(getattr(item, "scenario_id", "") or "")
+        for item in by_id.values()
+        if str(getattr(item, "scenario_id", "") or "")
+    }
+    if len(scenario_ids) != 1:
+        raise ValueError("SpatialChangeSet requires one scenario_id")
+    return SpatialChangeSet(
+        features=[by_id[key] for key in sorted(by_id)],
+        operations=operations,
+        source_refs=sorted(source_refs),
+        evidence_refs=sorted(evidence_refs),
+        scenario_id=next(iter(scenario_ids)),
+    )
 
 
 async def _geometry_materialize_node(state: ExecuteAgentState) -> dict:
@@ -391,12 +502,21 @@ async def _planned_state_builder_node(state: ExecuteAgentState) -> dict:
     blockers = _blocking_conflicts(list(state.worker_conflict_diagnostics or []))
     if blockers:
         return _planned_state_blocked_update(blockers)
-    if state.parcel_changeset is None:
+    scenario_features = list(
+        getattr(getattr(state, "spatial_changeset", None), "features", None)
+        or [
+            feature
+            for result in list(state.worker_results or [])
+            for feature in list(_worker_result_get(result, "scenario_features") or [])
+        ]
+    )
+    if state.parcel_changeset is None and not scenario_features:
         return {}
     planned_state = changeset_to_planned_state(
         state.parcel_changeset,
         _execution_intent_from_plan(state),
         list(state.layout_configs or []),
+        scenario_features=scenario_features,
     )
     enriched, diagnostics = _enrich_planned_state(
         planned_state,
@@ -404,11 +524,7 @@ async def _planned_state_builder_node(state: ExecuteAgentState) -> dict:
     )
     if diagnostics:
         return _planned_state_blocked_update(diagnostics)
-    scenario_features = [
-        feature
-        for result in list(state.worker_results or [])
-        for feature in list(_worker_result_get(result, "scenario_features") or [])
-    ]
+    scenario_features = list(getattr(enriched, "features", None) or [])
     scenario_id = str(
         getattr(getattr(state, "execution_plan", None), "scenario_id", "")
         or getattr(getattr(state, "approved_execution_input", None), "scenario_id", "")

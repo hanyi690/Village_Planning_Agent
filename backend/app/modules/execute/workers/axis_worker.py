@@ -7,7 +7,7 @@ from copy import deepcopy
 from typing import Any
 
 from app.modules.execute.execute_state import ExecuteAgentState
-from app.modules.execute.workers.worker_common import _attach_feature_lineage, _execution_intent_from_plan, _intent_list, _plan_tasks, _scenario_features_for_layer, _task_enabled, _task_execution_result, _task_value
+from app.modules.execute.workers.worker_common import _attach_feature_lineage, _candidate_capability_block, _execution_intent_from_plan, _intent_list, _plan_tasks, _scenario_features_for_layer, _task_enabled, _task_execution_result, _task_value
 from app.contracts.execute.execution_plan_contracts import WorkerResult
 from app.infrastructure.logging import get_logger
 
@@ -30,6 +30,11 @@ def _source_feature_id(feature: Any) -> str:
     if isinstance(properties, Mapping):
         return str(properties.get("source_feature_id") or "").strip()
     return ""
+
+
+def _resource_feature_id(feature: Any) -> str:
+    value = _value(feature, "source_feature_ref", "") or _value(feature, "id", "")
+    return str(value).strip()
 
 
 def _line_geometry(feature: Any) -> dict[str, Any] | None:
@@ -61,12 +66,18 @@ def _workspace_line_index(workspace: Any) -> dict[str, Any]:
     groups = _value(workspace, "lines", {}) or {}
     index: dict[str, Any] = {}
     if not isinstance(groups, Mapping):
-        return index
+        groups = {}
     for features in groups.values():
         for feature in features or []:
             source_id = _source_feature_id(feature)
             if source_id and _line_geometry(feature) is not None:
                 index.setdefault(source_id, feature)
+    # Generic DATA workspace: line features are indexed by source feature
+    # identity when no compatibility ``lines`` layer exists.
+    for feature in list(_value(workspace, "iter_source_features", lambda: [])() or []):
+        source_id = _source_feature_id(feature) or _resource_feature_id(feature)
+        if source_id and _line_geometry(feature) is not None:
+            index.setdefault(source_id, feature)
     return index
 
 
@@ -100,6 +111,16 @@ def materialize_authoritative_axis_lines(axis: Any, workspace: Any) -> tuple[lis
             "axis_type": str(_value(axis, "axis_type", "primary") or "primary"),
             "name": str(_value(axis, "label", "") or "") or "发展轴",
             "materialization_method": "authoritative_source_line",
+            "resource_ref": f"resource:{getattr(source, 'dataset_ref', '')}:{_resource_feature_id(source)}"
+            if _resource_feature_id(source) and getattr(source, "dataset_ref", "")
+            else "",
+            "representation_ref": str(
+                next(
+                    iter(getattr(source, "representation_refs", ()) or ()),
+                )
+                if getattr(source, "representation_refs", None)
+                else ""
+            ),
         }
         features.append({
             "type": "Feature",
@@ -145,10 +166,49 @@ def _axis_worker(state: ExecuteAgentState) -> WorkerResult:
         errors = []
         target_features = []
         try:
-            target_features, reason = materialize_authoritative_axis_lines(
-                axis,
-                state.spatial_workspace,
-            )
+            selected_candidate = None
+            if matching_task is not None:
+                selected_candidate = (
+                    getattr(state, "candidate_geometry_by_id", {}) or {}
+                ).get(str(_task_value(matching_task, "candidate_id", "") or ""))
+            candidate_wkt = str(
+                getattr(selected_candidate, "wkt", "") or ""
+            ).strip()
+            candidate_role = str(getattr(selected_candidate, "role", "") or "")
+            if selected_candidate is not None and candidate_role == "execution_geometry" and candidate_wkt:
+                capability_block = _candidate_capability_block(state, selected_candidate)
+                if capability_block:
+                    raise ValueError(capability_block)
+                from shapely import wkt as shapely_wkt
+                from shapely.geometry import mapping
+
+                parsed = shapely_wkt.loads(candidate_wkt)
+                if parsed.is_empty or not parsed.is_valid or parsed.geom_type not in {"LineString", "MultiLineString"}:
+                    raise ValueError("selected axis candidate geometry is invalid")
+                target_features = [{
+                    "type": "Feature",
+                    "id": f"AXIS-{target_id}-candidate",
+                    "geometry": mapping(parsed),
+                    "properties": {
+                        "target_id": target_id,
+                        "candidate_id": str(getattr(selected_candidate, "candidate_id", "") or ""),
+                        "source_feature_ids": list(getattr(selected_candidate, "source_feature_ids", None) or []),
+                        "resource_refs": list(getattr(selected_candidate, "resource_refs", None) or []),
+                        "representation_refs": list(getattr(selected_candidate, "representation_refs", None) or []),
+                        "entity_refs": list(getattr(selected_candidate, "entity_refs", None) or []),
+                        "source_refs": list(getattr(selected_candidate, "source_refs", None) or []),
+                        "crs": str(getattr(selected_candidate, "crs", "") or "EPSG:4326"),
+                        "axis_type": str(_value(axis, "axis_type", "primary") or "primary"),
+                        "name": str(_value(axis, "label", "") or "") or "发展轴",
+                        "materialization_method": "approved_candidate_geometry",
+                    },
+                }]
+                reason = ""
+            else:
+                target_features, reason = materialize_authoritative_axis_lines(
+                    axis,
+                    state.spatial_workspace,
+                )
             if target_features:
                 features.extend(target_features)
             else:

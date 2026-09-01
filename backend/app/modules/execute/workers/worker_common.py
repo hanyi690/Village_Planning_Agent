@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Mapping
 from typing import Any, Dict, Iterable, List
 
 from app.modules.execute.execute_state import ExecuteAgentState
@@ -89,6 +91,211 @@ def _candidate_availability_block(candidate: Any) -> str:
     return ""
 
 
+def _candidate_capability_block(
+    state: ExecuteAgentState,
+    candidate: Any,
+    *,
+    operation: str = "read",
+) -> str:
+    """Require an admitted DATA binding before consuming candidate geometry.
+
+    This is deliberately repeated in the worker boundary.  The approval
+    graph checks the plan once, but direct/retried worker calls must not be
+    able to consume a candidate or capability that was substituted after that
+    check.  BSM is only an auxiliary source key and never a substitute for a
+    loadable, current-world DATA resource/representation/capability.
+    """
+
+    def value(item: Any, name: str, default: Any = None) -> Any:
+        if isinstance(item, Mapping):
+            return item.get(name, default)
+        return getattr(item, name, default)
+
+    candidate_ref = str(value(candidate, "candidate_id", "") or "").strip()
+    if not candidate_ref:
+        return "execute_candidate_ref_missing"
+    refs = _string_list(value(candidate, "resource_refs", []))
+    representations = _string_list(value(candidate, "representation_refs", []))
+    if not refs:
+        return "data_resource_ref_missing"
+    if not representations:
+        return "data_representation_ref_missing"
+
+    plan = getattr(state, "execution_plan", None)
+    if plan is None:
+        return "execution_plan_missing"
+    approval = getattr(state, "approved_execution_input", None)
+    if approval is None:
+        return "approved_execution_input_missing"
+    approval_fingerprint = str(value(approval, "fingerprint", "") or "").strip()
+    plan_fingerprint = str(value(plan, "approved_input_fingerprint", "") or "").strip()
+    state_fingerprint = str(
+        getattr(state, "approved_input_fingerprint", "") or ""
+    ).strip()
+    if (
+        not approval_fingerprint
+        or not plan_fingerprint
+        or plan_fingerprint != approval_fingerprint
+        or not state_fingerprint
+        or state_fingerprint != approval_fingerprint
+    ):
+        return "execution_plan_approval_binding_stale"
+
+    def plan_refs(task: Any, name: str) -> list[str]:
+        refs_value = _string_list(_task_value(task, name, []))
+        if refs_value:
+            return refs_value
+        binding = _task_value(task, "target_binding", {}) or {}
+        if isinstance(binding, Mapping):
+            refs_value = _string_list(binding.get(name, []))
+        assignment = _task_value(task, "assignment", {}) or {}
+        if not refs_value and isinstance(assignment, Mapping):
+            refs_value = _string_list(assignment.get(name, []))
+        return refs_value
+
+    tasks = [
+        task for task in _plan_tasks(state)
+        if str(_task_value(task, "candidate_id", "") or "").strip() == candidate_ref
+    ]
+    if not tasks:
+        return "execution_plan_candidate_binding_missing"
+    task_resource_refs = {
+        tuple(plan_refs(task, "resource_refs")) for task in tasks
+    }
+    task_representation_refs = {
+        tuple(plan_refs(task, "representation_refs")) for task in tasks
+    }
+    task_capability_refs = {
+        tuple(plan_refs(task, "capability_refs")) for task in tasks
+    }
+    if (
+        len(task_resource_refs) != 1
+        or len(task_representation_refs) != 1
+        or len(task_capability_refs) != 1
+        or not next(iter(task_resource_refs), ())
+        or not next(iter(task_representation_refs), ())
+        or not next(iter(task_capability_refs), ())
+    ):
+        return "execution_plan_data_binding_missing_or_ambiguous"
+    if (
+        list(next(iter(task_resource_refs))) != refs
+        or list(next(iter(task_representation_refs))) != representations
+    ):
+        return "execution_plan_candidate_data_binding_mismatch"
+
+    workspace = getattr(state, "spatial_workspace", None)
+    catalog = None
+    if workspace is not None:
+        try:
+            catalog = workspace.to_resource_catalog()
+        except Exception:
+            catalog = None
+    if catalog is None:
+        return "data_resource_catalog_missing"
+    snapshot = getattr(catalog, "snapshot", None)
+    if snapshot is None:
+        return "data_resource_catalog_snapshot_missing"
+    if not list(getattr(snapshot, "admission_decisions", ()) or ()):
+        return "data_current_world_admission_missing"
+    try:
+        from app.data.admission import (
+            build_admission_index,
+            is_admitted_capability,
+            is_admitted_representation,
+        )
+
+        admission_index = build_admission_index(snapshot)
+    except Exception:
+        return "data_current_world_admission_invalid"
+    allowed_resources = (
+        admission_index.resource_refs
+        | admission_index.representation_resource_refs
+    )
+    if any(ref not in allowed_resources for ref in refs):
+        return "data_resource_not_admitted_current_world"
+
+    live_representations = []
+    for representation_ref in representations:
+        representation = getattr(catalog, "get_representation", lambda *_: None)(
+            representation_ref
+        )
+        if representation is None:
+            return "data_representation_missing"
+        if not is_admitted_representation(
+            snapshot,
+            representation,
+            index=admission_index,
+        ):
+            return "data_representation_not_admitted_current_world"
+        if str(getattr(representation, "status", "") or "") != "available":
+            return "data_representation_unavailable"
+        if str(getattr(representation, "resource_ref", "") or "") not in refs:
+            return "data_representation_resource_mismatch"
+        if str(getattr(representation, "source_snapshot_ref", "") or "") != str(
+            getattr(snapshot, "snapshot_id", "") or ""
+        ):
+            return "data_representation_snapshot_stale"
+        live_representations.append(representation)
+
+    candidate_snapshot = str(value(candidate, "source_snapshot_ref", "") or "")
+    snapshot_id = str(getattr(snapshot, "snapshot_id", "") or "")
+    if not candidate_snapshot or candidate_snapshot != snapshot_id:
+        return "data_candidate_snapshot_stale"
+    candidate_digest = str(value(candidate, "resource_digest", "") or "")
+    if not candidate_digest or any(
+        candidate_digest != str(getattr(item, "content_digest", "") or "")
+        for item in live_representations
+    ):
+        return "data_candidate_digest_mismatch"
+    candidate_crs = str(value(candidate, "crs", "") or "")
+    if not candidate_crs or any(
+        candidate_crs != str(getattr(item, "crs", "") or "")
+        for item in live_representations
+    ):
+        return "data_candidate_crs_mismatch"
+
+    capability_refs = list(next(iter(task_capability_refs)))
+    required_capabilities = {
+        str(_task_value(task, "required_capability", "") or "").strip()
+        for task in tasks
+    }
+    required_capabilities.discard("")
+    if not required_capabilities:
+        required_capabilities = {str(operation or "read").strip() or "read"}
+    if len(required_capabilities) != 1:
+        return "execution_plan_capability_disagreement"
+    required_capability = next(iter(required_capabilities))
+    capabilities_by_ref = {
+        str(getattr(item, "capability_ref", "") or ""): item
+        for item in list(getattr(snapshot, "capabilities", ()) or ())
+    }
+    for capability_ref in capability_refs:
+        capability = capabilities_by_ref.get(capability_ref)
+        if capability is None:
+            return "data_capability_missing"
+        if not is_admitted_capability(
+            snapshot,
+            capability,
+            index=admission_index,
+        ):
+            return "data_capability_not_admitted_current_world"
+        if str(getattr(capability, "resource_ref", "") or "") not in refs:
+            return "data_capability_resource_mismatch"
+        if str(getattr(capability, "operation", "") or "") != required_capability:
+            return "data_capability_operation_mismatch"
+        if str(getattr(capability, "source_snapshot_ref", "") or "") != snapshot_id:
+            return "data_capability_snapshot_stale"
+        if any(
+            str(getattr(capability, "content_digest", "") or "")
+            != str(getattr(item, "content_digest", "") or "")
+            for item in live_representations
+            if str(getattr(item, "resource_ref", "") or "")
+            == str(getattr(capability, "resource_ref", "") or "")
+        ):
+            return "data_capability_digest_stale"
+    return ""
+
+
 def _plan_tasks(state: ExecuteAgentState, worker_types: Iterable[str] | None = None) -> list[Any]:
     """Read dispatchable tasks only from the authoritative ExecutionPlan."""
     plan = state.execution_plan
@@ -127,7 +334,7 @@ def _task_execution_result(
     )
     if task is None:
         return None
-    output_kind = _task_value(task, "expected_output_kind", "parcel")
+    output_kind = _task_value(task, "expected_output_kind", "polygon")
     assignment = _task_value(task, "assignment")
     binding = _task_value(assignment, "target_binding", {}) or {}
     return TaskExecutionResult(
@@ -135,6 +342,7 @@ def _task_execution_result(
         target_id=str(target_id),
         status=status,
         expected_output_kind=output_kind,
+        operation=str(_task_value(task, "operation", "") or ""),
         output_artifacts=[output_kind] if status == "succeeded" else [],
         diagnostics=list(diagnostics or []),
         errors=list(errors or []),
@@ -150,10 +358,24 @@ def _task_execution_result(
             or binding.get("source_feature_ids", [])
             or _task_value(assignment, "source_feature_id", "")
         ),
+        resource_refs=_string_list(
+            _task_value(task, "resource_refs", [])
+            or binding.get("resource_refs", [])
+        ),
+        representation_refs=_string_list(
+            _task_value(task, "representation_refs", [])
+            or binding.get("representation_refs", [])
+        ),
         entity_refs=_string_list(
             _task_value(task, "entity_refs", [])
             or binding.get("entity_refs", [])
             or _task_value(assignment, "entity_ref", "")
+        ),
+        part_ref=str(
+            _task_value(task, "part_ref", "")
+            or binding.get("part_ref", "")
+            or _task_value(assignment, "part_ref", "")
+            or ""
         ),
         relation_refs=_string_list(
             _task_value(task, "relation_refs", [])
@@ -361,6 +583,36 @@ def _scenario_features_for_layer(
             properties.get("feature_id")
             or f"feature:{scenario_id}:{target_id}:{index}"
         )
+        operation_trace = next(
+            (
+                item
+                for item in list(getattr(state, "operation_sequence", None) or [])
+                if str(item.get("candidate_ref") or "") == candidate_id
+            ),
+            {},
+        )
+        geometry_digest = "sha256:" + hashlib.sha256(
+            geometry_wkt.encode("utf-8")
+        ).hexdigest()
+        approved_geometry_digest = str(
+            operation_trace.get("geometry_digest") or ""
+        )
+        if (
+            not approved_geometry_digest
+            or approved_geometry_digest != geometry_digest
+        ):
+            raise ValueError(
+                "worker geometry differs from the approved EXECUTE operation result: "
+                f"{target_id}:{candidate_id}"
+            )
+        change_ref = str(
+            operation_trace.get("change_ref")
+            or f"change:{candidate_id}:{geometry_digest.removeprefix('sha256:')[:20]}"
+        )
+        approval_ref = str(
+            getattr(getattr(state, "approved_execution_input", None), "fingerprint", "")
+            or ""
+        )
         properties.update({
             "scenario_id": scenario_id,
             "candidate_id": candidate_id,
@@ -370,6 +622,29 @@ def _scenario_features_for_layer(
             "source_refs": source_refs,
             "feature_bsms": [str(ref) for ref in feature_bsms if str(ref).strip()],
             "source_feature_ids": [str(ref) for ref in source_feature_ids if str(ref).strip()],
+            "resource_refs": _string_list(
+                properties.get("resource_refs")
+                or _task_value(task, "resource_refs", [])
+                or binding.get("resource_refs", [])
+            ),
+            "representation_refs": _string_list(
+                properties.get("representation_refs")
+                or _task_value(task, "representation_refs", [])
+                or binding.get("representation_refs", [])
+            ),
+            "input_geometry_refs": _string_list(operation_trace.get("input_geometry_refs", [])),
+            "source_snapshot_refs": _string_list(operation_trace.get("source_snapshot_refs", [])),
+            "resource_digests": _string_list(operation_trace.get("resource_digests", [])),
+            "capability_refs": _string_list(operation_trace.get("capability_refs", [])),
+            "selection_refs": _string_list(operation_trace.get("selection_refs", [])),
+            "change_ref": change_ref,
+            "approval_ref": approval_ref,
+            "world_model_digest": str(getattr(state, "world_model_digest", "") or ""),
+            "input_operation": str(operation_trace.get("operation") or ""),
+            "operation_parameters": dict(operation_trace.get("operation_parameters") or {}),
+            "input_crs": str(operation_trace.get("input_crs") or ""),
+            "output_crs": str(operation_trace.get("output_crs") or properties.get("crs") or ""),
+            "geometry_digest": geometry_digest,
             "entity_refs": [str(ref) for ref in entity_refs if str(ref).strip()],
             "relation_refs": [str(ref) for ref in relation_refs if str(ref).strip()],
             "evidence_refs": [str(ref) for ref in evidence_refs if str(ref).strip()],
@@ -392,7 +667,11 @@ def _scenario_features_for_layer(
             candidate_id=candidate_id,
             geometry_kind=geometry_kind,
             geometry_wkt=geometry_wkt,
-            crs=str(properties.get("crs") or "EPSG:4326"),
+            crs=str(
+                properties.get("crs")
+                or operation_trace.get("output_crs")
+                or ""
+            ),
             generation_operation=str(
                 properties.get("generation_operation") or generation_operation
             ),
@@ -405,6 +684,27 @@ def _scenario_features_for_layer(
             adjacency_evidence_refs=_string_list(properties.get("adjacency_evidence_refs", [])),
             feature_bsms=_string_list(properties.get("feature_bsms", [])),
             source_feature_ids=_string_list(properties.get("source_feature_ids", [])),
+            resource_refs=_string_list(properties.get("resource_refs", [])),
+            representation_refs=_string_list(properties.get("representation_refs", [])),
+            input_geometry_refs=_string_list(properties.get("input_geometry_refs", [])),
+            source_snapshot_refs=_string_list(properties.get("source_snapshot_refs", [])),
+            resource_digests=_string_list(properties.get("resource_digests", [])),
+            capability_refs=_string_list(properties.get("capability_refs", [])),
+            selection_refs=_string_list(properties.get("selection_refs", [])),
+            part_ref=str(
+                properties.get("part_ref")
+                or _task_value(task, "part_ref", "")
+                or binding.get("part_ref", "")
+                or ""
+            ),
+            change_ref=change_ref,
+            approval_ref=approval_ref,
+            world_model_digest=str(getattr(state, "world_model_digest", "") or ""),
+            input_operation=str(operation_trace.get("operation") or ""),
+            operation_parameters=dict(operation_trace.get("operation_parameters") or {}),
+            input_crs=str(operation_trace.get("input_crs") or ""),
+            output_crs=str(operation_trace.get("output_crs") or properties.get("crs") or ""),
+            geometry_digest=geometry_digest,
             entity_refs=_string_list(properties.get("entity_refs", [])),
             evidence_refs=_string_list(properties.get("evidence_refs", [])),
             relation_ids=[str(ref) for ref in relation_ids if str(ref).strip()],
@@ -429,6 +729,10 @@ def _attach_feature_lineage(task_results: list[Any], features: list[Any]) -> lis
             feature_ids = by_identity.get((target_id, ""))
         if feature_ids is not None:
             result.feature_ids = list(dict.fromkeys(feature_ids))
+            result.output_artifact_refs = [
+                f"spatial-feature:{feature_id}"
+                for feature_id in result.feature_ids
+            ]
     return task_results
 
 
@@ -517,7 +821,13 @@ def _build_landuse_geojson(state: ExecuteAgentState) -> dict:
 
 
 def _build_parcel_by_bsm(state: ExecuteAgentState) -> Dict[str, Any]:
-    """Map bsm -> parcel (Land Design Worker shape) from the current land use."""
+    """Map BSM -> parcel only for an explicit legacy allocation request.
+
+    Generic candidates carry resource/representation references and are
+    materialized from approved geometry; this adapter exists only while a
+    selected candidate still declares a source BSM or an explicit overlay
+    names target BSMs.
+    """
     landuse = _build_landuse_geojson(state)
     return {
         str((feature.get("properties") or {}).get("BSM")
@@ -526,13 +836,63 @@ def _build_parcel_by_bsm(state: ExecuteAgentState) -> Dict[str, Any]:
     }
 
 
-def _resolve_parcel_by_bsm(state: ExecuteAgentState) -> Dict[str, Any]:
-    """Prepared parcel index, falling back to a fresh build when empty.
+def _value_from_candidate_or_task(value: Any, name: str, default: Any = None) -> Any:
+    """Read a field from either a serialized candidate/task or a model."""
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
 
-    Direct node/worker invocation in tests skips ``prepare_inputs``; this keeps
-    the workers functional by deriving the index from gis_data on demand.
+
+def _has_explicit_parcel_binding(state: ExecuteAgentState) -> bool:
+    """Return whether this execution actually requests the BSM adapter.
+
+    Compatibility identifiers are not required by generic execution. An
+    arbitrary polygon/line/point task must therefore not trigger a lookup of
+    ``landuse_current``.
     """
-    return dict(state.parcel_by_bsm or {}) or _build_parcel_by_bsm(state)
+    candidates = getattr(state, "candidate_geometry_by_id", {}) or {}
+    plan = getattr(state, "execution_plan", None)
+    tasks = list(_task_value(plan, "worker_tasks", []) or []) if plan is not None else []
+    for task in tasks:
+        candidate = candidates.get(str(_task_value(task, "candidate_id", "") or ""))
+        assignment = _task_value(task, "assignment", None)
+        binding = _task_value(assignment, "target_binding", {}) or {}
+        values = [
+            _value_from_candidate_or_task(candidate, "source_bsms", []),
+            _task_value(task, "source_bsms", []),
+            _task_value(task, "selected_bsm", ""),
+            _task_value(assignment, "selected_bsm", ""),
+            _task_value(assignment, "selected_bsms", []),
+            binding.get("source_bsms", []) if isinstance(binding, dict) else [],
+            binding.get("target_bsms", []) if isinstance(binding, dict) else [],
+            binding.get("selected_bsm", "") if isinstance(binding, dict) else [],
+            binding.get("selected_bsms", []) if isinstance(binding, dict) else [],
+        ]
+        for value in values:
+            items = [value] if isinstance(value, str) else (value or [])
+            if any(str(item).strip() for item in items):
+                return True
+    return False
+
+
+def _resolve_parcel_by_bsm(state: ExecuteAgentState) -> Dict[str, Any]:
+    """Resolve the optional parcel index for explicit BSM compatibility.
+
+    Direct BSM-backed worker invocation may skip ``prepare_inputs`` and still
+    derive the index from DATA. Generic resource/representation candidates
+    return an empty mapping and do not require a legacy ``landuse_current``
+    layer.
+    """
+    if str(
+        getattr(state, "parcel_compatibility_mode", "") or ""
+    ).strip() != "legacy_bsm":
+        return {}
+    prepared = dict(state.parcel_by_bsm or {})
+    if prepared:
+        return prepared
+    if not _has_explicit_parcel_binding(state):
+        return {}
+    return _build_parcel_by_bsm(state)
 
 
 def _parcel_from_feature(feature: dict) -> Any:
