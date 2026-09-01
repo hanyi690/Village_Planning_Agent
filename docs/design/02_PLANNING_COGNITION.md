@@ -6,7 +6,10 @@ L2 回答“基于现状应该解决什么问题、采用什么策略”。它�
 
 ## 2. 输入与输出
 
-输入：`L1Snapshot`、规划任务、规划配置和 EvidencePacket。
+输入不是裸 facts，而是同一版本向量下的 <code>L1FinalProduct</code>、
+<code>L1BindingSnapshot</code>、current <code>WorldModelSnapshot</code> ref、规划任务、规划配置和
+<code>EvidencePacket</code>。Entry Gate 必须验证 observation、binding 与 World Model digest
+一致；未接地 mention 只能作为 uncertainty/gap，不能进入确定性空间事实投影。
 
 输出：`L2Strategy` artifact，内部包含各维度的 `L2DecisionSet`，并汇总 objectives、demand、metrics、suitability、strategies、priorities、conflicts、evidence_requirements 和 L1 ref。
 
@@ -32,7 +35,10 @@ L2 可以说“优先完善养老服务”“应优先使用建设边界内空�
 
 ## 5. LLM 与验收
 
-给模型的是 L1 facts、问题和配置的表格 projection；每次只生成问题、目标、策略或冲突中的一种。真实验收是 `L1Snapshot → L2DecisionSet`，每个目标可回溯事实或配置，L2 可被 L3 消费。
+给模型的是 L1 final facts、已验证 binding、不确定性、问题和配置的命名表格 projection；每次
+只生成问题、目标、策略或冲突中的一种。真实验收是
+<code>L1FinalProduct + L1BindingSnapshot + WorldModelSnapshot ref → L2DecisionSet</code>，每个
+目标可回溯事实、binding、Evidence 或配置，L2 可被 L3 消费。
 
 ## L2 目标目录与迁移出口
 
@@ -48,4 +54,6 @@ backend/app/modules/l2/
 └── aggregation.py
 ```
 
-当前 L2 的需求、目标和适宜性实现集中在 `modules/l2/`；SELECT 实现在 `modules/select/`。迁移出口是：真实 `L1Snapshot` 生成 `L2DecisionSet`，并由 L3 通过公开 contract 消费。
+当前 L2 的需求、目标和适宜性实现集中在 <code>modules/l2/</code>；SELECT 实现在
+<code>modules/select/</code>。迁移出口是：真实 <code>L1FinalProduct + L1BindingSnapshot +
+WorldModelSnapshot ref</code> 生成 <code>L2DecisionSet</code>，并由 L3 通过公开 contract 消费。

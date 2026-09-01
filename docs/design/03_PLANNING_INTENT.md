@@ -6,7 +6,9 @@ L3 将 L2 策略表达为可追溯、可编译、尚未执行的规划意图。
 
 ## 2. 输入与输出
 
-输入：`L1Snapshot`、`L2DecisionSet`、维度配置和 EvidencePacket。
+输入为同一版本向量下的 <code>L1FinalProduct</code>、<code>L1BindingSnapshot</code>、current
+<code>WorldModelSnapshot</code> ref、<code>L2DecisionSet</code>、维度配置和
+<code>EvidencePacket</code>。裸 facts、未验证 mention 或 stale binding 不得通过 Entry Gate。
 
 输出：`PlanningProgram`，包含 claims、planning roles、target hints、fact/evidence refs、location hints、grounding requirements、uncertainty 和 pending claims。
 
@@ -29,7 +31,12 @@ L3 的 provider wire contract 刻意保持为粗意图字段。LLM 不产出结�
 
 ## 5. LLM 与验收
 
-每次调用只生成一组小 claim 或判断一类 claim 问题。上下文使用 L1/L2 命名表格。真实验收是 `L1Snapshot + L2DecisionSet → PlanningProgram`，每个 claim 有 lineage，不能通过自然语言猜测补全空间对象。若空间 claim 尚不能形成 typed intervention，必须按 claim 生成 pending grounding item，并携带当前 L1 snapshot 与 source input refs，供后续 GROUND 或人工结构化补录处理。
+每次调用只生成一组小 claim 或判断一类 claim 问题。上下文使用 L1 final、binding、WM 和 L2
+命名表格。真实验收是
+<code>L1FinalProduct + L1BindingSnapshot + WorldModelSnapshot ref + L2DecisionSet → PlanningProgram</code>。
+每个 claim 必须有 lineage，不能通过自然语言猜测补全空间对象。若空间 claim 尚不能形成 typed
+intervention，必须按 claim 生成 pending grounding item，并携带当前 L1/WM/source refs，交给
+Target Projection 的恢复路径；不得直接进入 Planning Ground 或 SELECT。
 
 ## L3 目标目录与迁移出口
 

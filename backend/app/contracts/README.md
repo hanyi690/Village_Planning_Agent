@@ -17,7 +17,7 @@ Protocol。`contracts/` 是底层的“共享语言”，不依赖 API、UI 或 
 | `target_projection/` | PlanningProgram 到 GroundingRequest 的目标、意图、关系、解析和任务图契约 |
 | `ground/` | 空间引用、候选、约束、关系参数、GroundingResult 与 GroundedPlanningProblem 契约 |
 | `select/` | ScenarioSet、solver、readiness、approval 及全局分配契约 |
-| `execute/` | ApprovedExecutionInput、ExecutionPlan/Result、PlannedState、ParcelChangeSet 与执行 staging 契约 |
+| `execute/` | ApprovedExecutionInput、ExecutionPlan/Result、PlannedState（含通用 `ScenarioFeature`）与执行 staging 契约；`ParcelChangeSet` 仅为显式 BSM 兼容类型 |
 | `spatial/` | 仍需跨阶段共享的空间基础契约：`context_contracts`、`query_ast`、`terrain_evidence` |
 | `workflow/` | 工作流控制面契约：human interrupt、repair、resume、review、gate、dispatch；不再承载业务阶段契约 |
 | `evidence/` | EvidenceBundle/EvidenceSource/ExplorationRequest、EvidenceRequirement、RelationEvidence 等跨边界证据契约 |

@@ -1,54 +1,74 @@
 # Document Cleanup Manifest
 
 > Status: CURRENT
-> Authority: Record of removed legacy code, historical execution material, and generated audit/runtime residue.
+>
+> 本清单记录 active design surface 的收敛结果，不把“计划删除”写成“已经删除”。
 
-本清单只记录已经执行的清理结果。清理对象不属于当前运行时、当前设计输入或业务源数据；不得从这些对象恢复实现，也不得把它们作为会话输入。
+## 本轮已移除
 
-## Removed legacy implementation surfaces
+- <code>design/09_MODULE_IMPLEMENTATION_SPEC.md</code>：退役。其内容跨越 Evidence、World
+  Model、GROUND、执行、渲染和迁移状态，形成第二套模块权威。
+- <code>07</code> 中的迁移前基线、provider 采集专项、GROUND 重复设计和外部调研摘要。
+- <code>10</code> 中逐模块重复字段、provider/parcel 实现细节和超出跨模块职责的旧段落。
+- <code>00</code> 中绑定金田村具体文件名的准入白名单式表述；总体设计只保留通用准入规则。
+- <code>05_MIGRATION</code> 中逐 session id、临时 digest 和长运行日志（由当前可重复证据摘要替代）。
+- 原 <code>acceptance/01_data.md</code> 至 <code>13_deliver.md</code>：由带
+  <code>_acceptance</code> 后缀的 P0/P1/P2 卡片替代；旧卡中的设计段落归入模块 owner。
+- 原先合写在 <code>05_PROJECTION_AND_GROUND.md</code> 的两类 Ground：已拆分为独立 owner。
+- <code>design/three-provider-external-evidence-capability-matrix.md</code>：退役。其 provider
+  三态、坐标说明和采集目录与新的 Evidence taxonomy、DATA admission 及 historical plan
+  重复；有效的 provider 状态与 authority 规则已经归入 <code>04_EVIDENCE.md</code>。
 
-以下路径已从工作树移除，当前业务实现归属以 `backend/app/modules/`、`backend/app/infrastructure/`、`backend/app/contracts/` 和 `backend/app/workflow/` 为准：
+## 内容归属
 
-- `backend/app/domain/`
-- `backend/app/evidence/`
-- `backend/app/infrastructure/context/`
-- `backend/app/contracts/domain/`
-- `backend/app/acceptance/`
-- `backend/tests/` 及旧测试配置、旧前端测试树
-- `backend/_e2e_resume.py`
-- `backend/scripts/benchmark_real_evidence.py`
-- `backend/scripts/resume_graph_checkpoint.py`
-- `backend/scripts/low_memory_spatial_acceptance.py`
+| 内容 | 归入 |
+|---|---|
+| assertion/entity/representation/commit/rebase | <code>07</code> |
+| Evidence provider 状态、融合、充分性、gap | <code>04</code> |
+| L1 observation/fact/final product | <code>01</code> |
+| Target Projection | <code>05_PROJECTION_AND_GROUND.md</code> |
+| L1 mention/entity 接地 | <code>L1_GROUND_EXECUTABLE_DESIGN.md</code> |
+| 规划执行接地 | <code>PLANNING_GROUND_EXECUTABLE_DESIGN.md</code> |
+| DATA admission/capability | <code>DATA_EXECUTABLE_DESIGN.md</code> |
+| Gate、写入权、增量协议、HUMAN | <code>10</code> |
+| 当前实现差距和运行验证摘要 | <code>05_MIGRATION</code> |
+| P0/P1/P2 当前判定 | <code>acceptance/</code> |
 
-`modules/evidence/`、`infrastructure/evidence_runtime/`、`infrastructure/context_runtime/` 和 `infrastructure/structured_runtime/` 不在清理范围，它们是当前设计的正式边界。
+## Active design surface
 
-## Removed historical or generated material
+~~~text
+00_SYSTEM_DESIGN.md
+EXECUTABLE_DESIGN_STANDARD.md
+DATA_EXECUTABLE_DESIGN.md
+01_CONTRACTS_AND_INVARIANTS.md
+02_PLANNING_COGNITION.md
+03_PLANNING_INTENT.md
+04_EVIDENCE.md
+05_PROJECTION_AND_GROUND.md
+L1_GROUND_EXECUTABLE_DESIGN.md
+PLANNING_GROUND_EXECUTABLE_DESIGN.md
+06_SELECT_EXECUTE_AND_CODE.md
+07_COGNITIVE_WORLD_MODEL_AND_DYNAMIC_GIS.md
+08_COGNITIVE_WORLD_MODEL_MIGRATION.md
+10_MODULE_LEVEL_EXECUTABLE_DESIGN.md
+05_MIGRATION.md
+DOCUMENTATION_AUTHORITY.md
+README.md
+acceptance/README.md + *_acceptance.md
+~~~
 
-以下内容已删除，不再作为项目上下文保留：
+编号 <code>09</code> 保持空缺，避免旧链接误指向一份新但不同含义的文档。
 
-- `.analysis/`
-- `.graphify-review/`
-- 根目录 `.graphify_*` 分析快照和 `.codex_incremental_probe.json`
-- `.opencode/`
-- `.workbuddy/`
-- `.tmp/`；`.run-tmp/` 中的旧运行内容已清理。当前运行器会为正在验收的
-  session 重新生成被 `.gitignore` 忽略的 CAS/descriptor 临时目录；这些当前
-  artifact 不是设计输入，也不得被其他 session 复用。
-- `docs/_archive/`
-- `docs/superpowers/`
-- `docs/reports-weekly/`
+## Historical/non-authoritative material
 
-## Active documentation only
+<code>docs/audits/</code>、<code>docs/superpowers/</code>、<code>docs/reports-weekly/</code> 和
+临时分析输出即使仍在工作树中，也不属于 active design，不得作为 workflow 输入或完成度
+证明。是否物理删除由单独的仓库清理任务决定；本轮不擅自删除用户未提交的历史材料。
 
-当前文档权威入口是：
+## 维护规则
 
-- `docs/design/00_SYSTEM_DESIGN.md` 至 `docs/design/06_SELECT_EXECUTE_AND_CODE.md`
-- `docs/design/05_MIGRATION.md`
-- `docs/design/DOCUMENTATION_AUTHORITY.md`
-- `docs/architecture/`
-- `docs/adr/`
-- `docs/contracts/`
-- `docs/guides/`
-- `docs/reference/`
-
-历史运行结果只能作为开发者本轮诊断的临时终端输出，不能写回业务 artifact、不能参与新的运行，也不能替代 fresh run。
+1. 删除或移动文档前先更新 authority map；
+2. cleanup manifest 只记录实际动作；
+3. 旧内容若仍有有效规则，先归入唯一 owner，再删除重复副本；
+4. 不从历史计划恢复已退役的实现边界；
+5. 不把一次运行产生的 session id、临时路径或 digest 固化进目标设计。

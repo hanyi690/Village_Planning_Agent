@@ -26,7 +26,15 @@ EXECUTE 只能决定如何物化，不能改变执行什么。需要替换候选
 
 ## 3. 后处理
 
-`VALIDATE` 生成 `ValidationCertificate`；`RECONCILE` 生成 `FinalManifest`；`DELIVER` 生成 `DeliveryManifest`。三者不重新产生上游权威决策，必须诚实表达 complete、partial、diagnostic_only 和 failed。
+<code>VALIDATE</code> 生成 <code>ValidationCertificate</code>；
+<code>DeliveryReadinessReconcile</code> 生成 <code>DeliveryReadinessManifest</code>；
+<code>DELIVER</code> 生成 <code>DeliveryManifest</code>。三者不重新产生上游权威决策，必须诚实
+表达 complete、partial、diagnostic_only 和 failed。
+
+RECONCILE 只是一项交付就绪度 ledger/classifier：它枚举尚存 gap，标注 blocking/deferred、
+真实 owner 与恢复指针，然后重新计算 readiness。它不得调用 Evidence 检索、重做 identity
+binding、补 geometry/CRS、扩充候选、修改 constraint、代替审批或修复 execution output。
+上游新 artifact 到达后，RECONCILE 只能重新分类，不能把“已路由”解释为“已解决”。
 
 ## 4. 目标代码树
 

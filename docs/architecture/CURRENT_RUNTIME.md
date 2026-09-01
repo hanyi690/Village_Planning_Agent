@@ -1,142 +1,238 @@
 # Current Runtime
 
 > Status: CURRENT
-> Authority: Evidence-backed map of behavior present in this worktree. Target architecture belongs in `../design/00_SYSTEM_DESIGN.md` through `05_MIGRATION.md`.
+>
+> 本文件只描述当前工作树中可观察的代码和 contract。目标设计见
+> <code>../design/README.md</code>，完成度判断见 <code>../design/05_MIGRATION.md</code>。
 
-## 1. Runtime composition observed in code
+## 1. 运行入口
 
-FastAPI is created in [`backend/app/main.py`](../../backend/app/main.py), with lifespan wiring in [`backend/app/bootstrap/lifespan.py`](../../backend/app/bootstrap/lifespan.py) and dependency composition in [`backend/app/bootstrap/composition.py`](../../backend/app/bootstrap/composition.py). The API runtime entry is [`PlanningRuntimeService`](../../backend/app/infrastructure/runtime/planning_runtime_service.py).
+- FastAPI：<code>backend/app/main.py</code>；
+- lifespan/composition：<code>backend/app/bootstrap/</code>；
+- runtime service：<code>backend/app/infrastructure/runtime/planning_runtime_service.py</code>；
+- root workflow：<code>backend/app/workflow/graph.py</code>；
+- segments：<code>backend/app/workflow/segments.py</code>。
 
-The root workflow is built in [`backend/app/workflow/graph.py`](../../backend/app/workflow/graph.py) and segmented in [`backend/app/workflow/segments.py`](../../backend/app/workflow/segments.py) into:
+当前图分为：
 
-- `intent_loop`
-- `cognitive`
-- `spatial_chain`
-- `hitl`
+~~~text
+intent_loop
+cognitive
+spatial_chain
+hitl
+~~~
 
-The current spatial sequence compiled into the graph is:
+当前空间链：
 
-```text
-TARGET_PROJECTION → GROUND → SELECT → EXECUTE → VALIDATE → RECONCILE → DELIVER
-```
+~~~text
+TARGET_PROJECTION
+  → GROUND
+  → SELECT
+  → EXECUTE
+  → VALIDATE
+  → RECONCILE
+  → DELIVER
+~~~
 
-Repair routing is also present in code: SELECT can return to GROUND, and VALIDATE can route back toward EXECUTE, SELECT, GROUND, TARGET_PROJECTION, or L3 depending on the failure artifact carried by the state.
+SELECT 可回到 GROUND；VALIDATE 可按 failure artifact 回到责任阶段。
 
-## 2. Current L1, retrieval, and context boundaries
+## 2. DATA 与 current-world admission
 
-Observed implementation anchors:
+当前代码包含：
 
-- [`backend/app/modules/l1/retrieval.py`](../../backend/app/modules/l1/retrieval.py) builds the L1 source index from session-owned `village_data` and explicit uploads.
-- [`backend/app/modules/l1/context.py`](../../backend/app/modules/l1/context.py) runs bounded observe/validate/report passes per L1 dimension.
-- [`backend/app/infrastructure/context_runtime/projection_builder.py`](../../backend/app/infrastructure/context_runtime/projection_builder.py) builds `ProjectCognitionSnapshot` and prompt-safe evidence projections.
-- [`backend/app/infrastructure/evidence_runtime/facade.py`](../../backend/app/infrastructure/evidence_runtime/facade.py) and [`backend/app/infrastructure/evidence_runtime/retriever_router.py`](../../backend/app/infrastructure/evidence_runtime/retriever_router.py) route retrieval across `LOCAL_TEXT`, `REPORT`, `RAG`, `KG`, `BUNDLE`, `ARTIFACT`, `INTEGRITY`, and `EXTERNAL`.
-- [`backend/app/workflow/conversation/edges.py`](../../backend/app/workflow/conversation/edges.py) still contains gate-scoped evidence retrieval wiring, including `retrieve_evidence_for_gate`.
+- <code>DataResourceCatalog</code> 和 <code>SessionDataSnapshot</code>；
+- GIS、文档、表格、栅格描述等 adapter；
+- source role/admission；
+- purpose-specific representation/resource/capability；
+- 无 BSM 的 source feature identity；
+- current/planned/reference/unclassified 的入口隔离；
+- geometry 仍由 DATA resource 加载。
 
-What this proves today:
+主要入口：
 
-- the code has real cognition-digest and bounded-evidence projection hooks;
-- the code has multiple typed requirement producers and a shared retrieval service;
-- dense RAG is optional rather than required for all evidence calls.
+~~~text
+backend/app/data/resource_catalog.py
+backend/app/data/admission.py
+backend/app/data/model/snapshot.py
+backend/app/data/ingestion/
+backend/app/spatial/model/workspace.py
+~~~
 
-What it does not prove:
+代码存在这些边界不等于所有格式、媒体和复杂来源都已完成验收。
 
-- every production evidence call in every stage is already routed through one unified admission path;
-- every prompt in every stage already carries the same named projection contract;
-- every retriever and call site has fresh runtime verification in the current worktree.
+## 3. Cognition / World Model
 
-Those limits remain `PARTIAL` and are tracked only in [`../design/05_MIGRATION.md`](../design/05_MIGRATION.md).
+当前 V2 实现：
 
-### 2.1 Current L1/L2/L3 model-call shape
+~~~text
+backend/app/contracts/cognition/
+backend/app/contracts/ports/world_model.py
+backend/app/modules/cognition/
+backend/app/infrastructure/cognition_runtime/world_model_store.py
+backend/app/infrastructure/kg/adapters/source_catalog_adapter.py
+~~~
 
-The current worktree separates semantic and report calls, but the semantic transaction size differs substantially by layer:
+可观察能力：
 
-| Layer | Current semantic call | Current post-call behavior |
-|---|---|---|
-| L1 | `l1.observe` processes a bounded source page and returns an observation array through `L1ObservationProviderOutput`. | Local code validates source quotes, compiles typed observations/facts, then makes a separate structured `l1.report` call. Observe pages and report share the dimension call cursor/budget. |
-| L2 | One `l2.decision` call returns a complete strict `L2DecisionSet` containing objectives, metrics, strategies, priorities, spatial structures, conflicts, evidence gaps and their cross-references. | Closed-set errors can trigger one complete decision-set reask, followed by a separate structured `l2.report` call. Same-layer decision context accumulates along the four L2 wave dimensions. |
-| L3 | One `l3.claims` call returns a small provider envelope of rough, non-executable intent claims: family, statement, role, closed refs, location hints, grounding requirements and uncertainty. | Local code closes refs against the YAML vocabulary and L1 fact catalog, converts claims deterministically, records an empty/pending evidence state when needed, and builds display text deterministically from validated claims. There is no second provider summary call. Detailed planning remains downstream of `ScenarioSet`. |
+- DATA catalog 投影为 source/entity/part/representation 支持；
+- <code>SessionWorldModelSnapshot</code>；
+- TriG/descriptor artifact 持久化；
+- named <code>world_model</code> ref compare-and-set；
+- bounded entity/representation/relation/identity-binding query；
+- intent/planned/identity commit port；
+- identity commit 的 frozen envelope 和 typed result；
+- legacy KG identity commit 返回 unsupported，而不是部分写入。
 
-The dependency renderer removes raw/report/audit keys and has consumer-specific decision/claim table projections with cross-dependency merge. L3 receives one canonical typed L1 fact table plus a bounded evidence projection; packet candidate/relation rows stay in the retrieval/grounding plane. `context_runtime/manager.py` owns context construction and `context_runtime/table_renderer.py` owns the bounded table wire format. Context trimming is scoped to the current run input; prior session checkpoints are not evidence sources.
+仍未在代码层完整体现的目标：
 
-`LLMManager` admits calls using the initial message character count and records safe call metadata. Explicit schema retry counts now pass through unchanged; worker-level semantic reasks and workflow-level dimension retries remain separate additional retry layers and still need item-level amplification accounting.
+- assertion 全状态机和通用 proposal/decision transaction；
+- merge/split + supersede + affected binding invalidation；
+- typed Current/Intent/Planned query ports；
+- dependency/subgraph digest；
+-通用 stale-parent rebase；
+- 多进程 writer lease/fencing 的生产实现。
 
-### 2.2 Current fresh-run evidence
+这些是 GAP/PARTIAL，不得从 CAS 已存在推断为已经完成。
 
-The current fresh session `explore_kgenrich_28748410` was created from the current
-金田村 input and rebuilt its session KG with 35,511 triples. It completed all 12
-L1 dimensions, persisted and validated `L1Snapshot`, then completed all four L2
-dimensions and persisted `L2Strategy`. Its L2 gate correctly returned `EXPLORE`.
+## 4. Evidence
 
-The first EXPLORE dispatch exposed a facade import error before retrieval ran; the
-run was stopped before repeating provider calls. The public
-`gate_evidence_digest` boundary and the workflow import were then corrected. A
-bounded current-session production retrieval subsequently queried
-`local_text/report/kg/bundle/artifact`, returned two results with
-`source_exhausted`, and preserved unresolved requirements plus the gap-loop trace.
-No prior session checkpoint or history record was used as business input.
+当前入口：
 
-## 3. Current planning and execution artifacts observed in code
+~~~text
+backend/app/contracts/evidence/
+backend/app/modules/evidence/
+backend/app/infrastructure/evidence_runtime/
+~~~
 
-Current typed artifacts are present and wired into workflow state by ref:
+可观察能力：
 
-- `PlanningProgram` / L3 contracts in [`backend/app/contracts/l3/l3_contracts.py`](../../backend/app/contracts/l3/l3_contracts.py)
-- `IntentCompilationResult` in TARGET_PROJECTION under [`backend/app/modules/target_projection/stage.py`](../../backend/app/modules/target_projection/stage.py)
-- [`GroundedPlanningProblem`](../../backend/app/contracts/ground/grounded_problem.py)
-- [`ScenarioSet`](../../backend/app/contracts/select/scenario.py)
-- [`ApprovedExecutionInput`](../../backend/app/contracts/select/approval.py)
-- `ExecutionPlan` and execution result contracts in [`backend/app/contracts/execute/execution_plan_contracts.py`](../../backend/app/contracts/execute/execution_plan_contracts.py)
-- [`ValidationCertificate`](../../backend/app/contracts/validation/validation_certificate_contracts.py)
+- typed <code>EvidenceRequirement</code>；
+- requirement compilation 和 fingerprint；
+- frozen retrieval authority；
+- sufficient/partial/insufficient/human/failed outcome；
+- write-once retrieval artifact 和 receipt；
+- coverage/sufficiency 基础计算；
+- immutable <code>EvidenceGapLedger</code>；
+- gap scheduler row；
+- local text、KG、artifact、cache 等 retriever 路由；
+- external observation 的坐标信任与 advisory evidence boundary。
 
-Observed stage boundaries:
+仍未完整实现：
 
-- GROUND persists typed grounding/problem artifacts and carries unresolved/deferred findings forward.
-- SELECT persists a `ScenarioSet`, can persist an approval-bound `ExecutionPlan`, and derives [`ApprovedExecutionInput`](../../backend/app/contracts/select/approval.py) for executable paths.
-- EXECUTE refuses to proceed when approval, scenario lineage, or plan digest does not match.
-- VALIDATE and RECONCILE read typed artifacts back by ref instead of recomputing authority from free-form state.
-- DELIVER publishes `delivery_status` and `statutory_complete` from the final manifest path.
+- requirement-specific authority/时效/独立来源/conflict policy；
+- retryable/permanent/quota/partial provider attempt contract；
+- 跨 provider conflict/fusion；
+- Evidence→Cognition proposal contract；
+- 统一语义 benchmark。
 
-The current code is stricter than the older compatibility paths, but the end-to-end surface is still only partially verified for all target types and solver backends.
+## 5. L1 与 L1 Identity GROUND
 
-## 4. State and delivery behavior observed in code
+L1 当前包含：
 
-[`backend/app/workflow/state.py`](../../backend/app/workflow/state.py) keeps `WorkflowState` as a control-plane object with stage, routing, diagnostics, lightweight runtime fields, and artifact refs. Typed runtime products such as `scoped_grounding_problem`, `ScenarioSet`, [`ApprovedExecutionInput`](../../backend/app/contracts/select/approval.py), and [`ValidationCertificate`](../../backend/app/contracts/validation/validation_certificate_contracts.py) are persisted separately and referenced from state.
+- bounded source page 和 <code>L1InputContext</code>；
+- per-dimension observe/report pass；
+- typed <code>L1Fact</code>、<code>LocationMention</code>、<code>EvidenceGap</code>；
+- source quote/row validation 逻辑；
+- spatial work-item admission；
+- aggregate <code>L1Snapshot</code> 与 CAS ref。
 
-Current delivery-facing status fields are visible in:
+L1 Identity GROUND 当前包含：
 
-- [`backend/app/api/v1/contracts.py`](../../backend/app/api/v1/contracts.py)
-- [`backend/app/workflow/terminal.py`](../../backend/app/workflow/terminal.py)
-- [`backend/app/workflow/runtime_adapter.py`](../../backend/app/workflow/runtime_adapter.py)
-- [`backend/app/workflow/delivery/aggregate.py`](../../backend/app/workflow/delivery/aggregate.py)
+- L1 location mention → <code>EvidenceObservationSnapshot</code>；
+- source/catalog/WM/evidence 候选召回；
+- closed-set model proposal 与 deterministic check；
+- <code>GroundedEntityBindingSnapshot</code>；
+- exact/feature-set/inferred/name-only/ambiguous/unresolved/not-applicable 兼容状态；
+- <code>IdentityBindingCommitEnvelope</code>；
+- V2 store 的 atomic identity projection；
+- <code>L1WorldProjectionSnapshot</code> receipt。
 
-The runtime currently distinguishes `complete`, `partial`, and `diagnostic_only` delivery outcomes. `statutory_complete` is carried explicitly and is not inferred from stage completion alone.
+当前 orchestration 位于 <code>modules/ground/application.py</code>，它通过
+<code>WorldModelCommitPort</code> 提交。目标设计把“proposal producer”和“Cognition writer”
+进一步显式分层；当前代码尚未具备完整终态 taxonomy、post-commit revalidation 和
+<code>L1ProductManifest</code>。
 
-## 5. Real-run evidence kept as evidence, not as target claims
+## 6. L2/L3、TARGET 与 Planning GROUND
 
-The current fresh-run evidence is intentionally limited to the latest run and its
-bounded runtime follow-up. It proves that L1/L2 artifacts can be produced and
-reloaded through the current architecture, and that an unresolved L2 gate can be
-converted into bounded evidence retrieval. It does not prove L3 or downstream
-completion; those stages remain unverified until the current evidence gaps close.
+当前 typed 产品：
 
-## 6. Explicit current partial boundaries
+~~~text
+L2Strategy / L2DecisionSet
+PlanningProgram / PlanningClaimSet
+IntentCompilationResult / GroundingRequest
+GroundedPlanningProblem
+GroundingBinding / candidate domains / constraint factors
+~~~
 
-The current worktree still has evidence-backed limits:
+当前 TARGET 可以登记 pending grounding work。当前 GROUND gate evaluator 仍有
+<code>passed=True</code> 同时携带 pending request 的兼容表达；路由层会把 pending 作为未闭合
+输入阻止正式下游。目标 contract 已统一为 recovery route 必须 <code>passed=False</code>，
+但代码尚未完成该迁移。
 
-- dense recall depends on configured embedding infrastructure and can be unavailable without disabling the whole workflow;
-- cognition and prompt-boundary hooks exist, but not every retrieval or LLM call path has fresh proof of uniform enforcement;
-- current grounding and solver paths are stronger for parcel-style bounded scenarios than for all road, coverage, topology, and mixed-worker cases;
-- approval-bound execution is enforced in code, but full execution-surface verification remains narrower than the target design;
-- delivery can truthfully emit `partial`, so successful stage progression must not be read as whole-village completion.
+Planning GROUND 已支持 entity/part/representation/resource lineage、无 BSM DATA geometry、
+闭集候选和 typed problem；复杂多表示、关系和语义质量仍为 PARTIAL。
 
-The status words for those limits belong in [`../design/05_MIGRATION.md`](../design/05_MIGRATION.md), not here.
+## 7. SELECT、EXECUTE 与交付
 
-## 7. Compatibility boundaries still visible in code
+当前 typed 产品：
 
-The old single-scenario solver is no longer a production entry point. The active
-execution boundary is the typed `staging ChangeSet`: EXECUTE treats duplicates,
-omissions, and unexpected outputs as commit blockers instead of converting them
-into a partial formal result.
+~~~text
+ScenarioSet
+SolverReadiness
+SelectionDecision / SelectionDecisionSet
+ApprovedExecutionInput
+ExecutionPlan
+SpatialChangeSet / ParcelChangeSet
+PlannedState
+ValidationCertificate
+FinalManifest
+DeliverySpatialSnapshot / DeliveryManifest
+~~~
 
-For target rules and normative boundaries, use the canonical design set in
-`docs/design/`. This file stays limited to current code evidence and current-run
-evidence.
+可观察边界：
+
+- SELECT 检查 grounded problem、solver readiness、feasible scenario、resource binding 和 approval；
+- SelectionDecision 传递 resource/representation/operation lineage；
+- EXECUTE 校验 approval、scenario 和 plan digest；
+- generic point/line/polygon/multipatch 与 parcel compatibility 分流；
+- <code>PlannedState.features</code> 是 non-cadastral 规范输出；
+- VALIDATE/RECONCILE/DELIVER 通过 artifact refs 消费；
+- delivery 可表达 complete/partial/diagnostic-only。
+
+当前仍未证明所有 target、solver、repair、mixed-worker 和真实多层交付均满足生产验收。
+
+## 8. State、API 与 HUMAN
+
+<code>WorkflowState</code> 保存 stage、routing、diagnostics 和 artifact refs；完整业务产品单独
+持久化。API/SSE/resume 的 owner 见 <code>API_AND_STATE.md</code>。
+
+当前有 HUMAN route、pending request、human-review API 和 checkpoint/resume。当前还没有统一
+的不可变 <code>HumanDecisionArtifact</code> 覆盖 admission、identity、representation 和
+approval；因此不能把 HUMAN 状态存在描述成完整人工决策模块。
+
+## 9. 当前最重要的不一致
+
+1. GROUND gate 的 passed/pending 表达不唯一；
+2. World Model query 尚未拆成 typed views；
+3. global WM digest 尚未配套 dependency/subgraph digest；
+4. assertion merge/split/rebase 生命周期未闭合；
+5. Evidence sufficiency 仍未业务化到所有 requirement；
+6. L1 final product 仍由多个 ref 组合，尚无 manifest；
+7. 语义 benchmark 尚未成为 release gate。
+
+这些差距在 <code>../design/05_MIGRATION.md</code> 维护。
+
+## 10. 可重复验证入口
+
+~~~text
+python -m compileall -q backend/app
+python scripts/acceptance/business_stage_boundary_probe.py
+python scripts/acceptance/l1_facade_probe.py --help
+python scripts/acceptance/l1_l2_facade_probe.py --help
+python scripts/acceptance/ground_current_session_probe.py --help
+python -m pytest tests -q
+git diff --check
+~~~
+
+只有本次实际执行成功的命令才能在任务报告中标为 runtime verified；本文件不保留旧 session
+id、临时 digest、test count 或一次性运行叙述。
