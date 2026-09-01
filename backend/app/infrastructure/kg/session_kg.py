@@ -10,6 +10,7 @@
     供 grounding 的 KG 拓扑优先查询消费。
 
 幂等：session KG 已注册则直接返回，不重复构建。
+当没有可用 Bundle 但存在 DATA catalog 时，直接构建通用认知支持图；
 非致命：任何失败仅告警，不阻断规划主流程。
 """
 
@@ -162,6 +163,7 @@ async def ensure_session_kg(
     village_name: str = "",
     force: bool = False,
     bundle_version: int | None = None,
+    data_catalog: Any = None,
 ) -> Optional[Dict[str, Any]]:
     """幂等预建 session KG（L1 前调用）。
 
@@ -169,6 +171,8 @@ async def ensure_session_kg(
         session_id: 会话 ID。
         village_name: 村庄名（为空时从 session 记录解析）。
         force: 强制重建（忽略已有 session KG）。
+        data_catalog: Optional generic DATA catalog used when no usable Bundle
+            exists; this path builds only cognition support nodes.
 
     Returns:
         snapshot dict（cache_hit / triple_count / version）或 None（失败）。
@@ -183,7 +187,54 @@ async def ensure_session_kg(
 
             bundle = await restore_session_bundle(session_id, version=bundle_version)
             if bundle is None:
-                bundle = await build_session_bundle(session_id, village_name)
+                try:
+                    bundle = await build_session_bundle(session_id, village_name)
+                except Exception:
+                    bundle = None
+            if (
+                data_catalog is not None
+                and (
+                    bundle is None
+                    or not str(getattr(bundle, "village_name", "") or "").strip()
+                    or not list((getattr(bundle, "polygons", None) or {}).get("landuse_current") or [])
+                )
+            ):
+                # Bundle-independent DATA/KG bootstrap.  The generic source
+                # projection preserves arbitrary layers/fields and creates
+                # WorldEntity → EntityPart → SpatialRepresentation nodes;
+                # parcel relation builders are deliberately not involved.
+                from app.infrastructure.kg import PlanningKG
+                from app.infrastructure.kg.adapters.source_catalog_adapter import (
+                    project_source_catalog,
+                )
+
+                snapshot = getattr(data_catalog, "snapshot", None)
+                digest = str(getattr(snapshot, "digest", "") or "")
+                kg = PlanningKG(village_name=village_name)
+                projected = project_source_catalog(kg.g, data_catalog)
+                kg.rebuild_spatial_index()
+                cache_key = f"data:{digest}" if digest else "data:unknown"
+                with _SESSION_KG_BUILD_LOCK:
+                    existing = manager.get_session_kg(session_id)
+                    if not force and existing is not None and manager.get_session_cache_key(session_id) == cache_key:
+                        return {
+                            "cache_hit": True,
+                            "session_id": session_id,
+                            "triple_count": existing.get_triple_count(),
+                            "version": manager.get_session_version(session_id),
+                        }
+                    manager.register_session(
+                        session_id,
+                        kg,
+                        layer1_cache_key=cache_key,
+                    )
+                return {
+                    "session_id": session_id,
+                    "cache_hit": False,
+                    "triple_count": kg.get_triple_count(),
+                    "version": manager.get_session_version(session_id),
+                    "data_feature_count": projected,
+                }
             if bundle is None or not getattr(bundle, "village_name", ""):
                 logger.warning(
                     "[SessionKG] No bundle for session %s, skip pre-build", session_id

@@ -17,7 +17,7 @@ from rdflib import Literal, RDF, URIRef
 from rdflib.namespace import XSD
 
 from app.infrastructure.logging import get_logger
-from ..ontology import PLN, EntityTypes, EntityIdPolicy
+from ..ontology import PLN, GEO, EntityTypes, EntityIdPolicy
 from app.contracts.execute.planned_state_contracts import (
     PlannedAxis,
     PlannedFacility,
@@ -162,6 +162,43 @@ def apply_planned_state(kg, planned_state: PlannedState) -> None:
 
     version = planned_state.version or "current"
     count = 0
+
+    # Generic ScenarioFeature outputs are first-class L4 geometry.  They are
+    # deliberately not converted to PlannedParcel/BSM records: identity and
+    # representation lineage remain feature/candidate/entity based.
+    for feature in getattr(planned_state, "features", None) or []:
+        feature_id = str(getattr(feature, "feature_id", "") or "")
+        if not feature_id:
+            continue
+        uri = EntityIdPolicy.uri("planned_feature", feature_id, version)
+        kg.g.add((uri, RDF.type, EntityTypes.PlannedFeature))
+        kg.g.add((uri, PLN.in_version, Literal(version)))
+        for predicate, value in (
+            (PLN.feature_id, feature_id),
+            (PLN.target_id, str(getattr(feature, "target_id", "") or "")),
+            (PLN.candidate_id, str(getattr(feature, "candidate_id", "") or "")),
+            (PLN.geometry_kind, str(getattr(feature, "geometry_kind", "") or "")),
+            (PLN.crs, str(getattr(feature, "crs", "") or "")),
+            (PLN.generation_operation, str(getattr(feature, "generation_operation", "") or "")),
+        ):
+            if value:
+                kg.g.add((uri, predicate, Literal(value)))
+        geometry_wkt = str(getattr(feature, "geometry_wkt", "") or "")
+        if geometry_wkt:
+            geometry_uri = EntityIdPolicy.uri("planned_geometry", feature_id, version)
+            kg.g.add((uri, GEO.hasGeometry, geometry_uri))
+            kg.g.add((geometry_uri, RDF.type, GEO.Geometry))
+            kg.g.add((geometry_uri, GEO.asWKT, Literal(geometry_wkt, datatype=GEO.wktLiteral)))
+        for ref in (
+            list(getattr(feature, "source_refs", None) or [])
+            + list(getattr(feature, "resource_refs", None) or [])
+            + list(getattr(feature, "representation_refs", None) or [])
+            + list(getattr(feature, "entity_refs", None) or [])
+            + list(getattr(feature, "evidence_refs", None) or [])
+        ):
+            if str(ref).strip():
+                kg.g.add((uri, PLN.provenance_ref, Literal(str(ref))))
+        count += 1
 
     # ── PlannedParcel (with bsm_seq dedup) ──
     bsm_seq_pp: dict[str, int] = {}

@@ -157,6 +157,12 @@ class PlanningKG:
         for t in EntityTypes.l1_static():
             for s in self.g.subjects(RDF.type, t):
                 l1_subjects.add(s)
+        # Cognition support nodes (WorldEntity/EntityPart/Representation and
+        # cached external support) are part of the static world model even
+        # though they are not executable business feature classes.
+        for t in EntityTypes.cognition_support_types():
+            for s in self.g.subjects(RDF.type, t):
+                l1_subjects.add(s)
         l1_subjects.add(PLN.village)
 
         clone_predicates = Relations.spatial() | SemanticPredicates.cognition_predicates()

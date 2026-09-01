@@ -174,7 +174,18 @@ class EntityTypes:
     PlannedFacility = PLN.PlannedFacility
     PlannedRoad = PLN.PlannedRoad
     PlannedAxis = PLN.PlannedAxis
+    PlannedFeature = PLN.PlannedFeature
     FunctionalZone = PLN.FunctionalZone  # v6.0: 自定义功能分区 (vocabulary-driven)
+    # World-model migration types. These are deliberately excluded from
+    # ``all()``/``spatial_l1()``: they are identity/representation support
+    # nodes, not legacy business feature classes or executable target types.
+    WorldEntity = PLN.WorldEntity
+    EntityPart = PLN.EntityPart
+    SpatialRepresentation = PLN.SpatialRepresentation
+    ExternalObservationSupport = PLN.ExternalObservationSupport
+    SpatialSupportCluster = PLN.SpatialSupportCluster
+    SourceDataset = PLN.SourceDataset
+    DataCapability = PLN.DataCapability
 
     @classmethod
     def all(cls) -> list:
@@ -187,7 +198,20 @@ class EntityTypes:
             cls.LinearTarget,
             cls.SiteAreaTarget,
             cls.PlannedParcel, cls.PlannedZone, cls.PlannedFacility,
-            cls.PlannedRoad, cls.PlannedAxis, cls.FunctionalZone,
+            cls.PlannedRoad, cls.PlannedAxis, cls.PlannedFeature, cls.FunctionalZone,
+        ]
+
+    @classmethod
+    def cognition_support_types(cls) -> list:
+        """World-model support nodes kept separate from business feature types."""
+        return [
+            cls.WorldEntity,
+            cls.EntityPart,
+            cls.SpatialRepresentation,
+            cls.ExternalObservationSupport,
+            cls.SpatialSupportCluster,
+            cls.SourceDataset,
+            cls.DataCapability,
         ]
 
     @classmethod
@@ -254,6 +278,9 @@ class Relations:
     serves = PLN.serves
     # Active extension predicate (used in layer1.py)
     connects = PLN.connects
+    # Cognition-only support relation.  A support cluster is an indexable
+    # spatial co-location hint, never a WorldEntity or executable geometry.
+    supports_entity = PLN.supports_entity
 
     @classmethod
     def all(cls) -> list:
