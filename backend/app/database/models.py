@@ -211,6 +211,13 @@ class UploadedFile(SQLModel, table=True):
 
     # File classification
     file_category: str = Field(index=True)  # "village_data", "task_description", "constraint"
+    input_role: str = Field(default="unclassified", index=True)
+    admission_status: str = Field(default="quarantined", index=True)
+    admission_reason: str = Field(default="")
+    admission_signals: List[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSON),
+    )
     file_type: str = Field(index=True)       # "document", "geojson", "shapefile", etc.
 
     # File metadata
@@ -218,6 +225,7 @@ class UploadedFile(SQLModel, table=True):
     original_filename: str = Field(max_length=255)
     file_size: int                           # Size in bytes
     content_type: str = Field(max_length=100)  # MIME type
+    source_digest: str = Field(default="")
 
     # Parsed content
     parsed_text: Optional[str] = Field(

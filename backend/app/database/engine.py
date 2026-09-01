@@ -253,6 +253,28 @@ async def _run_migrations(engine) -> None:
             # instruction 列 = 结构化 JSON（observations/claims）
             ("instruction", "ALTER TABLE dimension_reports ADD COLUMN instruction TEXT"),
         ],
+        "uploaded_files": [
+            (
+                "input_role",
+                "ALTER TABLE uploaded_files ADD COLUMN input_role TEXT DEFAULT ''",
+            ),
+            (
+                "admission_status",
+                "ALTER TABLE uploaded_files ADD COLUMN admission_status TEXT DEFAULT 'quarantined'",
+            ),
+            (
+                "admission_reason",
+                "ALTER TABLE uploaded_files ADD COLUMN admission_reason TEXT DEFAULT ''",
+            ),
+            (
+                "admission_signals",
+                "ALTER TABLE uploaded_files ADD COLUMN admission_signals JSON DEFAULT '[]'",
+            ),
+            (
+                "source_digest",
+                "ALTER TABLE uploaded_files ADD COLUMN source_digest TEXT DEFAULT ''",
+            ),
+        ],
         "planning_bundles": [
             # P0-c: CAS blob descriptor reference for the bundle blob
             ("bundle_ref", "ALTER TABLE planning_bundles ADD COLUMN bundle_ref TEXT"),

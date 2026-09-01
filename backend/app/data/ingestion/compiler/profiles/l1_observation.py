@@ -11,6 +11,7 @@ import re
 from typing import Any
 
 from app.contracts.artifacts.classification_ref import ClassificationRef
+from app.contracts.artifacts.contract_meta import StageIssue
 from app.contracts.evidence.evidence_contracts import EvidenceSource
 from app.contracts.l1.l1_contracts import (
     EvidenceGap,
@@ -23,6 +24,10 @@ from app.contracts.target_projection.parsing_contracts import CompilationProfile
 from app.contracts.target_projection.parse_result_contracts import ParseDiagnostic
 from app.modules.l1.facts import make_l1_fact
 from app.modules.l1.observation_draft import observation_to_compiler_payload
+from app.modules.l1.spatial_admission import (
+    evaluate_location_name,
+    evaluate_spatial_entity,
+)
 
 from ..diagnostics import collect_diagnostics
 from ..provenance import build_fragment_provenance
@@ -352,8 +357,44 @@ def _extract_location_mentions_from_observations(
                     mention.get("role"),
                     default=base_role,
                 )
-                mention_relation = str(mention.get("relation") or relation).strip()
+                mention_relation = str(
+                    mention.get("relation")
+                    if "relation" in mention
+                    else relation
+                ).strip()
                 raw_scope_mentions = list(mention.get("scope_mentions") or [])
+                mention_feature_ids = list(dict.fromkeys([
+                    *observation_feature_ids,
+                    *[
+                        str(value).strip()
+                        for value in (mention.get("source_feature_ids") or [])
+                        if str(value).strip()
+                    ],
+                ]))
+                if kind == "spatial_entity":
+                    admission = evaluate_spatial_entity(
+                        name=target_name,
+                        entity_type=entity_type,
+                        role=mention.get("role") or base_role,
+                        relation=mention_relation,
+                        place_names=[
+                            value.get("name") or value.get("normalized_name")
+                            for value in raw_scope_mentions
+                            if isinstance(value, dict)
+                        ],
+                        source_feature_ids=mention_feature_ids,
+                        source_quote=source_quote,
+                    )
+                else:
+                    admission = evaluate_location_name(
+                        target_name,
+                        role=mention.get("role") or base_role,
+                        relation=mention_relation,
+                        source_feature_ids=mention_feature_ids,
+                        source_quote=source_quote,
+                    )
+                if not admission.admitted:
+                    continue
                 if not raw_scope_mentions:
                     # Scope extraction is also provider-owned.  A location
                     # cell without typed scope objects remains a semantic
@@ -425,14 +466,6 @@ def _extract_location_mentions_from_observations(
                     target_name,
                     normalized_name,
                 ]))
-                mention_feature_ids = list(dict.fromkeys([
-                    *observation_feature_ids,
-                    *[
-                        str(value).strip()
-                        for value in (mention.get("source_feature_ids") or [])
-                        if str(value).strip()
-                    ],
-                ]))
                 resolution_state = str(
                     mention.get("resolution_state") or "needs_retrieval"
                 ).strip()
@@ -453,6 +486,16 @@ def _extract_location_mentions_from_observations(
                     ),
                 )
                 scope_names = [scope.name for scope in scope_mentions]
+                related_mentions = list(dict.fromkeys([
+                    *scope_names,
+                    *[
+                        str(value).strip()
+                        for value in (
+                            mention.get("related_mentions") or []
+                        )
+                        if str(value).strip()
+                    ],
+                ]))
                 scope_hint = " ".join(
                     value for value in (
                         "、".join(scope_names),
@@ -460,13 +503,17 @@ def _extract_location_mentions_from_observations(
                     ) if value
                 )
                 mentions.append(LocationMention(
+                    mention_kind=str(
+                        mention.get("mention_kind") or "target"
+                    ).strip(),
                     mention=target_name,
                     normalized_name=normalized_name,
                     target_name=target_name,
                     role=mention_role,
                     aliases=aliases,
+                    relation=mention_relation,
                     spatial_hint=scope_hint,
-                    related_mentions=scope_names,
+                    related_mentions=related_mentions,
                     scopes=scope_mentions,
                     instance_label=str(
                         mention.get("instance_label") or ""
@@ -564,6 +611,39 @@ def _instruction_diagnostics(
             )
         )
     return diagnostics
+
+
+def _semantic_admission_issues(
+    diagnostics: list[ParseDiagnostic],
+    *,
+    dimension_key: str,
+) -> list[StageIssue]:
+    """Turn rejected spatial semantics into an explicit L1 rework item."""
+
+    prefixes = (
+        "l1_spatial_entity_not_admissible:",
+        "l1_spatial_relation_term_not_admissible:",
+        "l1_location_mention_not_admissible:",
+        "observation_spatial_label_not_source_backed:",
+    )
+    messages = list(dict.fromkeys(
+        diagnostic.message
+        for diagnostic in diagnostics
+        if diagnostic.message.startswith(prefixes)
+    ))
+    if not messages:
+        return []
+    return [
+        StageIssue(
+            stage="l1",
+            severity="error",
+            code="spatial_semantic_admission_failed",
+            message=(
+                f"L1 spatial semantics require bounded re-extraction: {dimension_key}"
+            ),
+            detail="; ".join(messages[:16]),
+        )
+    ]
 
 
 def _scope_conflict_diagnostics(
@@ -894,11 +974,14 @@ def compile_l1_observation(
         constraints = list(dict.fromkeys([*structured_constraints, *constraints]))
 
     diagnostics = collect_diagnostics(dimension_key, display, instr)
-    diagnostics.extend(
-        _instruction_diagnostics(
-            instr,
-            dimension_key=dimension_key,
-        )
+    instruction_diagnostics = _instruction_diagnostics(
+        instr,
+        dimension_key=dimension_key,
+    )
+    diagnostics.extend(instruction_diagnostics)
+    admission_issues = _semantic_admission_issues(
+        instruction_diagnostics,
+        dimension_key=dimension_key,
     )
     diagnostics.extend(
         _scope_conflict_diagnostics(
@@ -923,6 +1006,7 @@ def compile_l1_observation(
         facts_by_dimension={dimension_key: list(facts)},
         location_mentions=location_mentions,
         constraints=constraints,
+        issues=admission_issues,
         evidence_gaps=evidence_gaps,
         classification_refs=classification_refs,
         sources=(

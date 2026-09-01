@@ -50,6 +50,9 @@ OPENCODE_GO_MODEL = LLM_CONFIG.opencode_go_model
 LLM_STRUCTURED_MODE = LLM_CONFIG.structured_mode
 LLM_PROVIDER_MAX_RETRIES = LLM_CONFIG.provider_max_retries
 LLM_PROVIDER_REQUEST_TIMEOUT = LLM_CONFIG.request_timeout_seconds()
+DATA_TEMPORAL_ADMISSION_LLM_ENABLED = bool(
+    LLM_CONFIG.data_temporal_admission_llm_enabled
+)
 
 _PROVIDER_CONCURRENCY_DEFAULT = (
     LLM_CONFIG.provider_concurrency()
@@ -103,6 +106,14 @@ EXTERNAL_MAP_CACHE_ROOT = os.getenv(
     "EXTERNAL_MAP_CACHE_ROOT",
     str(PROJECT_ROOT / "output" / "map_validation"),
 )
+# World-model migration mode.  ``off`` preserves the compatibility runtime;
+# ``shadow``/``prefer_v2`` are rollout modes; ``v2_only`` requires callers to
+# provide a normalized DATA catalog and never builds a Bundle/KG fallback.
+COGNITION_WORLD_MODEL_MODE = os.getenv(
+    "COGNITION_WORLD_MODEL_MODE", "off"
+).strip().lower()
+if COGNITION_WORLD_MODEL_MODE not in {"off", "shadow", "prefer_v2", "v2_only"}:
+    COGNITION_WORLD_MODEL_MODE = "off"
 
 def _parse_dimension_timeouts(raw: str) -> dict[str, float]:
     """Parse the per-dimension idle-timeout map from ``DIMENSION_TIMEOUT_S``.

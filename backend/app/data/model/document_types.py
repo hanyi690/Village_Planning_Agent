@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -11,6 +11,10 @@ class Document(BaseModel):
     text: str = ""
     doc_type: str = ""
     source: str = ""
+    content_format: str = "markdown"
+    parser: str = "mineru"
+    media_refs: List[str] = Field(default_factory=list)
+    media_policy: str = "deferred"
 
 
 class ReferencePlanningText(Document):

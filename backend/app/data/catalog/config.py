@@ -85,7 +85,7 @@ class RemoteRasterSourceConfig(BaseSourceConfig):
 class DocumentSourceConfig(BaseSourceConfig):
     driver: str = "document"
     path: str
-    doc_type: str = "text"  # "planning_markdown" | "l3_reports" | "text"
+    doc_type: str = "text"  # "planning_markdown" | "l3_report" | "text" (Markdown only)
 
 
 class CatalogConfig(BaseModel):

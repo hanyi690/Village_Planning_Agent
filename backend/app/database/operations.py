@@ -533,11 +533,16 @@ async def list_ui_sessions_async(
 async def create_uploaded_file_async(
     session_id: str,
     file_category: str,
+    input_role: str,
     file_type: str,
     filename: str,
     original_filename: str,
     file_size: int,
     content_type: str,
+    source_digest: str = "",
+    admission_status: str = "quarantined",
+    admission_reason: str = "",
+    admission_signals: Optional[List[str]] = None,
     parsed_text: Optional[str] = None,
     gis_data: Optional[Dict[str, Any]] = None,
     gis_data_type: Optional[str] = None,
@@ -570,11 +575,16 @@ async def create_uploaded_file_async(
             db_file = UploadedFile(
                 session_id=session_id,
                 file_category=file_category,
+                input_role=input_role,
+                admission_status=admission_status,
+                admission_reason=admission_reason,
+                admission_signals=list(admission_signals or []),
                 file_type=file_type,
                 filename=filename,
                 original_filename=original_filename,
                 file_size=file_size,
                 content_type=content_type,
+                source_digest=source_digest,
                 parsed_text=parsed_text,
                 gis_data=gis_data,
                 gis_data_type=gis_data_type,
@@ -624,11 +634,16 @@ async def get_uploaded_files_by_session_async(
                     "id": f.id,
                     "session_id": f.session_id,
                     "file_category": f.file_category,
+                    "input_role": f.input_role,
+                    "admission_status": f.admission_status,
+                    "admission_reason": f.admission_reason,
+                    "admission_signals": list(f.admission_signals or []),
                     "file_type": f.file_type,
                     "filename": f.filename,
                     "original_filename": f.original_filename,
                     "file_size": f.file_size,
                     "content_type": f.content_type,
+                    "source_digest": f.source_digest,
                     "parsed_text": f.parsed_text,
                     "gis_data": f.gis_data,
                     "gis_data_type": f.gis_data_type,
@@ -671,7 +686,27 @@ async def get_uploaded_geojson_data_async(
             result = await session.execute(query)
             files = result.scalars().all()
 
-            return [f.gis_data for f in files if f.gis_data]
+            from app.data.ingestion.source_admission import assess_source_admission
+
+            admitted: list[Dict[str, Any]] = []
+            for file in files:
+                assessment = assess_source_admission(
+                    input_role=str(file.input_role or ""),
+                    category=str(file.file_category or ""),
+                    source="upload",
+                    filename=str(file.original_filename or file.filename or ""),
+                    parsed_text=str(file.parsed_text or ""),
+                    gis_data=(file.gis_data if isinstance(file.gis_data, dict) else None),
+                    gis_data_type=str(file.gis_data_type or ""),
+                )
+                if (
+                    assessment.status == "admitted"
+                    and assessment.input_role == "current_evidence"
+                    and str(file.admission_status or "").casefold() == assessment.status
+                    and file.gis_data
+                ):
+                    admitted.append(file.gis_data)
+            return admitted
     except Exception as e:
         logger.error(f"[Async DB] Failed to get uploaded geojson data: {e}", exc_info=True)
         return []

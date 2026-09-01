@@ -12,7 +12,7 @@
 
 | 文件/目录 | 职责 |
 |---|---|
-| `upload.py` | `process_uploaded_file`：按文件名推断数据类型，解析文档/GeoJSON/栅格，返回文本与审计 |
+| `upload.py` | `process_uploaded_file`：GIS 文件走空间解析；其他前端文件先经 MinerU，DATA 文本统一为 Markdown，同时保留表格资源与审计 |
 | `ingest.py` | `ingest_current_landuse`/`ingest_planned_landuse`/`ingest_feature`/`ingest_raster`：原始→typed 模型；`result_to_parcels`/`result_to_features`/`result_to_raster` |
 | `gazetteer.py` | 地名词典（地名→编码/坐标），供 L1 事实与 grounding |
 | `semantics.py` | MetricConcept/ValueSemantics（跨维度指标冲突检测） |
@@ -32,7 +32,7 @@
 上传文件 / 外部来源
   → upload / sources / providers / documents
   → adapters / ingest → typed records（canonical/spatial/table/raster models）
-  → SessionDataSnapshot / SpatialWorkspace / VillageBundle
+  → SessionDataSnapshot / DataResourceCatalog / SpatialWorkspace /（兼容）VillageBundle
   → evidence / domain / workflow 消费
 ```
 

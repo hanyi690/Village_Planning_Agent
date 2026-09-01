@@ -1,19 +1,17 @@
-"""Document file driver - markdown, json, txt.
+"""Document file driver - MinerU Markdown only.
 
-Loads non-spatial documents (planning markdown, L3 reports, plain text)
-from local disk. Supports glob patterns for fuzzy file matching (e.g.
-planning text files with variable names). Migrated from
-gis/data/text_loader.py and the L3 report loading in loader.py.
+Loads the canonical Markdown artifact produced by MinerU from local disk.
+Frontend PDF/Office/image uploads are converted before reaching DATA;
+non-GIS binary formats are intentionally rejected here.
 
 Unlike vector/raster drivers, documents have no geometry - bbox is
-always ignored. The driver returns raw text (markdown/txt) or parsed
-dict (json) for downstream parse/consumption.
+always ignored. The driver returns raw Markdown for downstream
+parse/consumption.
 """
 
 from __future__ import annotations
 
 import glob
-import json
 from pathlib import Path
 from typing import Any, Optional
 
@@ -31,15 +29,12 @@ logger = get_logger(__name__)
 class DocumentDriver(DataSourceDriver):
     """Document file driver.
 
-    Supports:
-      - Markdown (.md) - planning text, reports
-      - JSON (.json) - L3 reports, structured data
-      - Text (.txt) - plain text
+    Supports Markdown (.md/.markdown) only.
 
     Config keys:
         path: str          # file path or glob pattern
-        doc_type: str      # "planning_markdown" | "l3_reports" | "text"
-        encoding: str      # default "utf-8"
+        doc_type: str      # "planning_markdown" | "l3_report" | "text"
+        encoding: str      # accepted for legacy config; input is always UTF-8
         layer_type: str    # semantic layer type
     """
 
@@ -48,19 +43,17 @@ class DocumentDriver(DataSourceDriver):
     def __init__(self, config: dict[str, Any]):
         self.path = Path(config["path"])
         self.doc_type = config.get("doc_type", "text")
-        self.encoding = config.get("encoding", "utf-8")
         self.layer_type = config.get("layer_type", "")
 
     def fetch(self, bbox: Optional[BBox] = None, **kwargs: Any) -> DataResult:
-        """Load document file and return text or parsed dict.
+        """Load a MinerU Markdown artifact.
 
         Args:
             bbox: Ignored (documents have no geometry).
             **kwargs: Unused.
 
         Returns:
-            DataResult with data_type="document". For json/l3_reports,
-            data is the parsed dict; for text/markdown, data is the raw string.
+            DataResult with data_type="document" and Markdown text.
         """
         resolved = self._resolve_path()
         if resolved is None:
@@ -71,9 +64,12 @@ class DocumentDriver(DataSourceDriver):
         if not resolved.exists():
             return DataResult.fail(error=f"File not found: {resolved}")
 
+        if resolved.suffix.casefold() not in {".md", ".markdown"}:
+            return DataResult.fail(
+                error="DATA document sources must be MinerU Markdown (.md/.markdown)"
+            )
+
         try:
-            if self.doc_type == "l3_reports":
-                return self._load_l3_reports(resolved)
             return self._load_text(resolved)
         except Exception as e:
             logger.error("[DocumentDriver] Failed to load %s: %s", resolved, e)
@@ -97,26 +93,15 @@ class DocumentDriver(DataSourceDriver):
 
     def _load_text(self, path: Path) -> DataResult:
         """Load a text/markdown file."""
-        text = path.read_text(encoding=self.encoding)
+        text = path.read_text(encoding="utf-8-sig")
         return DataResult.ok(
             data=text,
             data_type="document",
             path=str(path),
             doc_type=self.doc_type,
+            content_format="markdown",
+            parser="mineru",
             size_chars=len(text),
-        )
-
-    def _load_l3_reports(self, path: Path) -> DataResult:
-        """Load L3 reports JSON and return the reports dict."""
-        with open(path, "r", encoding=self.encoding) as f:
-            data = json.load(f)
-        reports = data.get("reports", {}) if isinstance(data, dict) else {}
-        return DataResult.ok(
-            data=reports,
-            data_type="document",
-            path=str(path),
-            doc_type=self.doc_type,
-            report_count=len(reports),
         )
 
     def get_metadata(self) -> DataSourceMetadata:

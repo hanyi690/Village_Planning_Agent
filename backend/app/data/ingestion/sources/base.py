@@ -26,7 +26,7 @@ class DataSourceDriver(ABC):
       - ``vector``:       GeoJSON / Shapefile / GDB / WFS / MapServer REST
       - ``raster_tile``:  WMTS tile batches
       - ``raster_file``:  GeoTIFF / IMG
-      - ``document``:     markdown / json / txt
+      - ``document``:     MinerU Markdown only
     """
 
     @property

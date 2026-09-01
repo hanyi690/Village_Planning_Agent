@@ -55,7 +55,7 @@ class CollectionSnapshot(BaseModel):
 
     key: str
     media_type: str = "application/geo+json"
-    crs: str = "EPSG:4326"
+    crs: str = ""
     feature_count: int = 0
     digest: str
     source: str = ""
@@ -112,6 +112,96 @@ class SessionDataSnapshot(BaseModel):
         )
 
     @classmethod
+    def from_data_catalog(
+        cls,
+        catalog: Any,
+        *,
+        session_id: str,
+        village_name: str = "",
+        source: str = "data_catalog",
+    ) -> "SessionDataSnapshot":
+        """Create a session manifest directly from a generic DATA catalog.
+
+        This is the Bundle-independent bootstrap seam.  It records dataset,
+        layer, feature and CRS lineage without materializing or interpreting
+        the source payload, so callers can start DATA/KG/EVIDENCE work from
+        arbitrary files or adapters.
+        """
+
+        snapshot = getattr(catalog, "snapshot", catalog)
+        datasets = list(getattr(snapshot, "datasets", None) or [])
+        primary = getattr(snapshot, "dataset", None)
+        if primary is not None and not datasets:
+            datasets = [primary]
+        features = list(getattr(snapshot, "features", None) or [])
+        by_dataset: dict[str, list[Any]] = {}
+        for feature in features:
+            by_dataset.setdefault(str(getattr(feature, "dataset_ref", "") or ""), []).append(feature)
+        collections: list[CollectionSnapshot] = []
+        for dataset in datasets:
+            dataset_ref = str(getattr(dataset, "dataset_ref", "") or "")
+            rows = by_dataset.get(dataset_ref, [])
+            layers = sorted({str(getattr(item, "layer_ref", "") or "") for item in rows if str(getattr(item, "layer_ref", "") or "")})
+            feature_ids = [str(getattr(item, "source_feature_ref", "") or "") for item in rows if str(getattr(item, "source_feature_ref", "") or "")]
+            for layer in layers or [""]:
+                layer_rows = [item for item in rows if str(getattr(item, "layer_ref", "") or "") == layer]
+                layer_ids = [str(getattr(item, "source_feature_ref", "") or "") for item in layer_rows if str(getattr(item, "source_feature_ref", "") or "")]
+                key = f"{dataset_ref}:{layer or 'all'}"
+                digest_payload = {
+                    "dataset_ref": dataset_ref,
+                    "layer_ref": layer,
+                    "feature_ids": layer_ids,
+                    "feature_digests": [str(getattr(item, "source_feature_digest", "") or "") for item in layer_rows],
+                }
+                digest = "sha256:" + hashlib.sha256(
+                    json.dumps(digest_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                ).hexdigest()
+                collections.append(CollectionSnapshot(
+                    key=key,
+                    crs=str(getattr(dataset, "crs", "") or ""),
+                    feature_count=len(layer_rows),
+                    digest=digest,
+                    source=source,
+                    source_uris=tuple(str(item) for item in (getattr(dataset, "source_uris", None) or ()) if str(item)),
+                    source_feature_ids=tuple(layer_ids),
+                    source_feature_count=len(layer_ids),
+                    source_feature_digest=digest,
+                ))
+        if not collections:
+            digest = str(getattr(snapshot, "digest", "") or "")
+            collections.append(CollectionSnapshot(
+                key="data_catalog",
+                crs="",
+                feature_count=0,
+                digest=digest or "sha256:" + hashlib.sha256(b"data_catalog").hexdigest(),
+                source=source,
+            ))
+        manifest = [item.model_dump(mode="json") for item in collections]
+        catalog_digest = str(getattr(snapshot, "digest", "") or "")
+        digest = "sha256:" + hashlib.sha256(
+            json.dumps(
+                {
+                    "catalog_digest": catalog_digest,
+                    "collections": manifest,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return cls(
+            snapshot_id=str(getattr(snapshot, "snapshot_id", "") or f"data-{session_id}-{digest.removeprefix('sha256:')[:16]}"),
+            session_id=session_id,
+            village_name=village_name,
+            collections=tuple(collections),
+            source_refs=tuple(dict.fromkeys([
+                source,
+                *(str(item) for dataset in datasets for item in (getattr(dataset, "source_uris", None) or ()) if str(item)),
+            ])),
+            digest=digest,
+        )
+
+    @classmethod
     def from_canonical_payload(
         cls,
         payload: dict[str, Any],
@@ -132,46 +222,52 @@ class SessionDataSnapshot(BaseModel):
         lines = payload.get("lines") or {}
         polygons = payload.get("polygons") or {}
 
-        def _features(group: dict[str, Any], key: str) -> list[dict[str, Any]]:
-            values = group.get(key) or []
-            return [value for value in values if isinstance(value, dict)]
+        from app.data.model.layer_registry import get_planned_output_bundle_keys
 
+        excluded = get_planned_output_bundle_keys()
+
+        def is_planned_output_collection(value: Any) -> bool:
+            key = str(value or "").strip().casefold()
+            return (
+                key in {str(item).casefold() for item in excluded}
+                or "planned" in key
+                or "planning_result" in key
+                or "planning_output" in key
+                or "规划" in key
+            )
+        legacy_names = {
+            ("points", "annotations_current"): "annotation_geojson",
+            ("lines", "roads_current"): "road_geojson",
+            ("lines", "external_roads"): "external_road_geojson",
+            ("lines", "water_lines"): "water_line_geojson",
+            ("polygons", "admin_areas"): "boundary_geojson",
+            ("polygons", "landuse_current"): "landuse_current_geojson",
+            ("polygons", "water_bodies"): "water_geojson",
+        }
         collection_features: dict[str, list[dict[str, Any]]] = {}
-        for key in ("admin_areas", "planning_scope"):
-            values = _features(polygons, key)
-            if values:
-                collection_features["boundary_geojson"] = values[:1]
-                break
-        for key in ("landuse_current", "landuse_planned"):
-            values = _features(polygons, key)
-            if values:
-                collection_features[f"{key}_geojson"] = values
-        for output_key, input_keys in {
-            "road_geojson": ("roads_current",),
-            "planned_road_geojson": ("roads_planned",),
-            "external_road_geojson": ("external_roads",),
-            "water_line_geojson": ("water_lines",),
-            "annotation_geojson": ("annotations_current", "annotations_planned"),
-        }.items():
-            values = [
-                feature
-                for input_key in input_keys
-                for feature in _features(
-                    lines if "road" in output_key or "water_line" in output_key else points,
-                    input_key,
-                )
-            ]
-            if values:
-                collection_features[output_key] = values
-        water = _features(polygons, "water_bodies")
-        if water:
-            collection_features["water_geojson"] = water
-        for key in polygons:
-            if key in {"admin_areas", "planning_scope", "landuse_current", "landuse_planned", "water_bodies"}:
+        for group_name, group in (
+            ("points", points),
+            ("lines", lines),
+            ("polygons", polygons),
+        ):
+            if not isinstance(group, dict):
                 continue
-            values = _features(polygons, key)
-            if values:
-                collection_features[f"{key}_geojson"] = values
+            for raw_key, raw_values in group.items():
+                key = str(raw_key)
+                if is_planned_output_collection(key):
+                    continue
+                values = [
+                    value
+                    for value in (raw_values or [])
+                    if isinstance(value, dict)
+                ]
+                if not values:
+                    continue
+                output_key = legacy_names.get(
+                    (group_name, key),
+                    f"{key}_geojson",
+                )
+                collection_features[output_key] = values
 
         collections: list[CollectionSnapshot] = []
         for key, raw_features in sorted(collection_features.items()):

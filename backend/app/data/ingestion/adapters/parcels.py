@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.data.model.layer_registry import GisLayerTypeEntry
-from app.infrastructure.kg.dlq import DlqCategory, DlqEntry
+from app.contracts.data.dlq import DlqCategory, DlqEntry
 
 from ..ingest import ingest_landuse
 from . import AdapterResult, IngestAdapter

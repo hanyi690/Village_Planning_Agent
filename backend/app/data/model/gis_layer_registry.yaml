@@ -148,6 +148,7 @@ layer_types:
       key: landuse_planned
     spatial:
       is_constraint: false
+      is_planned_output: true
     kg:
       entity_type: LandUseParcel
       uri_policy: "L1:parcel_{bsm}"
@@ -199,6 +200,7 @@ layer_types:
       key: roads_planned
     spatial:
       is_constraint: false
+      is_planned_output: true
     kg:
       entity_type: Road
       uri_policy: "L1:road_{bsm}"
@@ -248,6 +250,7 @@ layer_types:
       key: annotations_planned
     spatial:
       is_constraint: false
+      is_planned_output: true
     kg:
       entity_type: Annotation
       uri_policy: "L1:annotation_{bsm}"
@@ -763,6 +766,7 @@ layer_types:
       key: facilities_planned
     spatial:
       is_constraint: false
+      is_planned_output: true
     kg:
       entity_type: Facility
       uri_policy: "L1:facility_{bsm}"

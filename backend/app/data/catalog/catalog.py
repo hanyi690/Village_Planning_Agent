@@ -43,13 +43,48 @@ logger = get_logger(__name__)
 
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "sources.yaml"
 
-# These are deliverable/baseline layers, not default inputs to a new planning
-# session.  They remain loadable through an explicit ``layer_types`` request.
-_PLANNING_OUTPUT_LAYER_TYPES = frozenset({
-    "landuse_planned",
-    "planned_road",
-    "planned_annotation",
-})
+
+def _is_admitted_current_evidence_upload(item: Any) -> bool:
+    """Return whether an uploaded GIS record is admitted current evidence.
+
+    Session document admission is the authority for every session upload.  In
+    particular, layer/type names (including unknown ``upload_*`` values) must
+    never promote a control, reference, planned-output, or quarantined upload
+    into the spatial bundle.
+    """
+    if not isinstance(item, dict):
+        return False
+
+    from app.data.ingestion.source_admission import (
+        assess_source_admission,
+        is_admitted_current_assessment,
+    )
+
+    assessment = assess_source_admission(
+        input_role=(
+            item.get("input_role")
+            or item.get("document_role")
+            or item.get("source_role")
+            or ""
+        ),
+        source="upload",
+        category=str(item.get("file_category") or ""),
+        filename=str(
+            item.get("original_filename") or item.get("filename") or ""
+        ),
+        parsed_text=str(item.get("parsed_text") or ""),
+        gis_data=(
+            item.get("gis_data")
+            if isinstance(item.get("gis_data"), dict)
+            else None
+        ),
+        gis_data_type=str(item.get("gis_data_type") or ""),
+    )
+    persisted_status = str(item.get("admission_status") or "").strip().casefold()
+    return (
+        persisted_status == assessment.status
+        and is_admitted_current_assessment(assessment)
+    )
 
 
 def _derive_water_bodies_from_landuse(bundle: "VillageBundle") -> int:
@@ -216,6 +251,12 @@ class DataCatalog:
         from app.core.settings import PROJECT_ROOT
 
         for name, cfg in self._sources_cfg.items():
+            if cfg.get("enabled", True) is False:
+                logger.info(
+                    "[DataCatalog] Source disabled by policy: %s",
+                    name,
+                )
+                continue
             driver_name = cfg.get("driver", "")
             if not DriverRegistry.has_driver(driver_name):
                 logger.warning(
@@ -350,7 +391,10 @@ class DataCatalog:
             layer_type
             for layer_type, entry in GIS_LAYER_REGISTRY.items()
             if entry.geometry_kind in {"point", "line", "polygon", "annotation"}
-            and layer_type not in _PLANNING_OUTPUT_LAYER_TYPES
+            and not bool(
+                entry.spatial
+                and entry.spatial.is_planned_output
+            )
             and any(
                 cfg.get("driver") == "file_vector"
                 and (
@@ -374,7 +418,7 @@ class DataCatalog:
         Flow:
           1. Load boundary first (file_vector ignores bbox)
           2. Derive bbox from boundary geometry
-          3. Fallback: geocode village_name if no boundary
+          3. Fail closed when no local boundary can establish a query extent
           4. Load default planning inputs (or the explicitly requested layers)
           5. Return typed VillageBundle with morphology groups populated
 
@@ -410,9 +454,14 @@ class DataCatalog:
                 for a in admin_features:
                     bundle.add(a)
 
-        # Step 2b: Fallback — geocode if no boundary
+        # A provider-derived centre/bbox is not a DATA geometry authority and
+        # must not silently widen a bundle load into a network operation.
         if bbox is None:
-            bbox = self._geocode_village(village_name)
+            logger.warning(
+                "[DataCatalog] No local boundary for %s; provider geocode "
+                "fallback is disabled",
+                village_name,
+            )
 
         # Step 3: Load all layers via query_by_bbox (file_vector ignores bbox)
         results = self.query_by_bbox(bbox, layer_types) if bbox else {}
@@ -454,6 +503,11 @@ class DataCatalog:
             adapter_kwargs = {}
             if adapter_name == "features":
                 adapter_kwargs["source_uri"] = result.metadata.get("path") or result.metadata.get("source_url")
+            elif adapter_name == "document":
+                # Preserve the single DATA text contract at the adapter
+                # boundary.  DocumentDriver emits only MinerU Markdown.
+                adapter_kwargs["source"] = result.metadata.get("path") or result.metadata.get("source_url")
+                adapter_kwargs["content_format"] = result.metadata.get("content_format", "markdown")
             adapter_result = adapter.load(result.data, entry, **adapter_kwargs)
             if adapter_result.warnings:
                 bundle.metadata.crs_warnings.extend(adapter_result.warnings[:5])
@@ -470,38 +524,15 @@ class DataCatalog:
         if bbox:
             bundle.metadata.bbox_wgs84 = bbox
 
-        # Step 5: External Anchor Enrichment (v9.8 pipeline)
-        #   - 自动从 AdminCodeService 填充 12 位 adcode + 行政层级 (同步路径)
-        #   - 5 阶段: collect → normalize (gcj02/bd09→wgs84) → cross-source dedup → local dedup → inject
-        #   - 注入策略: 直接注入现有 sub-key (annotations_current 等), 不引入 _external
-        #   - 通过 _raw["anchor_source"] 字段记录来源
+        # Administrative metadata may be filled from the local code registry,
+        # but provider observations are never injected into a VillageBundle.
+        # Cached map observations enter through DATA/EVIDENCE artifacts and
+        # remain advisory until Cognition/GROUND binds a DATA representation.
         try:
             self._auto_fill_admin_meta(bundle, village_name)
-            from .external_anchors import ExternalAnchorPipeline
-            from app.spatial.model.geometry import village_boundary_geometry
-
-            cfg = {
-                "province": bundle.metadata.province or "",
-                "city": bundle.metadata.city or "",
-                "county": bundle.metadata.county or "",
-                "town": bundle.metadata.township or "",
-                "village": village_name,
-                "adcode": bundle.metadata.adcode_12 or "",
-                "natural_village_names": self._load_village_anchors(village_name),
-            }
-            # 取 village admin boundary (用于 strict point-in-polygon filter)
-            boundary = village_boundary_geometry(bundle)
-            pipeline = ExternalAnchorPipeline()
-            injected = pipeline.run(bundle, bbox, cfg,
-                                     village_boundary=boundary)
-            if injected:
-                logger.info(
-                    "[DataCatalog] external anchors injected: %s (boundary=%s)",
-                    sum(injected.values()), boundary is not None,
-                )
         except Exception as e:
             logger.warning(
-                "[DataCatalog] external anchor pipeline failed: %s", e,
+                "[DataCatalog] local administrative metadata fill failed: %s", e,
             )
 
         logger.info(
@@ -750,7 +781,7 @@ class DataCatalog:
         session context onto the same bundle instance:
           * ``metadata``: session_id / planning_period / admin hierarchy
           * ``documents.document_refs``: source/record/URI/digest metadata for
-            session-owned village_data, task description, constraints and explicit uploads
+            explicitly admitted current-evidence Markdown only
           * ``documents.report_refs``: lightweight L1/L2/L3 report manifest
             used by the unified bundle retrieval boundary
 
@@ -764,7 +795,8 @@ class DataCatalog:
                 uploaded = await get_uploaded_files_by_session_async(session_id)
                 uploaded_gis = [
                     item for item in uploaded
-                    if isinstance(item.get("gis_data"), dict)
+                    if _is_admitted_current_evidence_upload(item)
+                    and isinstance(item.get("gis_data"), dict)
                 ]
             except Exception as e:
                 logger.warning(
@@ -855,6 +887,11 @@ class DataCatalog:
             except Exception as e:
                 logger.warning("[DataCatalog] Uploaded GIS load failed for %s: %s", session_id, e)
                 uploaded_gis = []
+        uploaded_gis = [
+            item for item in uploaded_gis
+            if _is_admitted_current_evidence_upload(item)
+            and isinstance(item.get("gis_data"), dict)
+        ]
         for item in uploaded_gis:
             geojson = item.get("gis_data") or {}
             if not isinstance(geojson, dict) or geojson.get("type") != "FeatureCollection":

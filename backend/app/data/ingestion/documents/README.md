@@ -1,7 +1,8 @@
 # Data Documents — 显式配置的遗留报告 fixture
 
 当前会话的原始输入由 session catalog 解析；本目录不再扫描仓库中的
-`docs/`、MinerU 或其他项目参考文件。L1 是唯一把会话输入结构化为事实、登记
+`docs/`、MinerU 或其他项目参考文件。前端非 GIS 文件必须先经 MinerU，DATA
+只接收其 Markdown 产物（图像引用暂存为未闭合的多模态 evidence gap）。L1 是唯一把会话输入结构化为事实、登记
 和证据定位的维度。
 
 ---

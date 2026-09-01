@@ -270,15 +270,15 @@ sources:
 
   # ── 文档 - 规划文本 + L3 报告 ──
   jintian_planning_text:
+    # Kept as an explicit compatibility declaration for old manifests, but
+    # planning text is not an input source for the current-world MVP.
+    enabled: false
     driver: document
     path: "docs/*规划*文本*.md"
     doc_type: planning_markdown
     layer_type: planning_text
     encoding: utf-8
 
-  l3_reports:
-    driver: document
-    path: "output/experiments/rag/g1/iter0/layer3_reports.json"
-    doc_type: l3_reports
-    layer_type: l3_reports
-    encoding: utf-8
+  # L3 reports are runtime artifacts, not DATA text inputs.  If a report must
+  # be ingested as source material it is first exported by MinerU to Markdown
+  # and registered as an explicit ``document`` source.

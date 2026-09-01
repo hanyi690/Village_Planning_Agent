@@ -12,7 +12,7 @@
 
 | 目录 | 职责 |
 |---|---|
-| `ingestion/` | 上传与摄取：文件解析（documents/）、空间来源（sources/）、地图 provider（providers/amap|tencent|tianditu）、连接（connections/）、适配器（adapters/）、编译器（compiler/，l1/l2 profiles + spec_mapper）、gazetteer/语义/表格/摘要 |
+| `ingestion/` | 上传与摄取：GIS 文件走空间解析；前端非 GIS 文件先经 MinerU，文本入口统一为 UTF-8 Markdown；另含地图 provider（providers/amap|tencent|tianditu）、连接、适配器、编译器、gazetteer/语义/表格/摘要 |
 | `catalog/` | 数据目录：`catalog.DataCatalog`、`collection_registry`、`assembly`、`dedup`、`external_anchors`、`geometry_fallback`、`inference`、`admin_code_loader`、`advisory_crosswalks/`（crosswalks + registry） |
 | `encodings/` | 用地分类编码：`classification`（ClassificationSchema）、`code_lookup`、`code_sets`、`metrics`、`dicts/`（candidate_engine/disambiguation/loader/rule_loader + vocabularies） |
 | `model/` | typed 数据模型：`snapshot.SessionDataSnapshot`/`CollectionSnapshot`、`canonical`、`spatial_types`、`table_types`、`raster_types`、`document_types`、`layer_registry`、`location_parser`、`village_name_registry`、`audit`、`base` |
@@ -26,8 +26,11 @@
 - `ingestion/ingest.py`：`ingest_current_landuse` / `ingest_planned_landuse` /
   `ingest_feature` / `ingest_raster` / `result_to_parcels` 等把原始 GeoJSON/栅格转换为
   typed 模型。
-- `catalog/catalog.py::DataCatalog.load_village_bundle`：组装单村 `VillageBundle`
-  （parcels/roads/constraints/water 等四形态 Group），供 context/KG/evidence 消费。
+- `data/resource_catalog.py::DataResourceCatalog.from_records`：从任意 GeoJSON-like
+  records、对象、表格/栅格描述建立通用 DATA catalog；这是新 World Model/Evidence 的
+  首选入口。
+- `catalog/catalog.py::DataCatalog.load_village_bundle`：仅为旧会话和显式兼容路径组装
+  `VillageBundle`（parcels/roads/constraints/water 等 Group），不得成为 V2 的前置条件。
 - `model/snapshot.py::SessionDataSnapshot`：冻结一次会话的输入资料 manifest（结构、CRS、
   来源、质量）；`spatial/model/workspace.SpatialWorkspace` 由它注入。
 

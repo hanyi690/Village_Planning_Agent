@@ -302,6 +302,13 @@ class LLMRuntimeSettings(BaseSettings):
             "SOURCE_SEMANTIC_LLM_ENABLED", "source_semantic_llm_enabled"
         ),
     )
+    data_temporal_admission_llm_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "DATA_TEMPORAL_ADMISSION_LLM_ENABLED",
+            "data_temporal_admission_llm_enabled",
+        ),
+    )
     ground_llm_enabled: bool = Field(
         default=True,
         validation_alias=AliasChoices("GROUND_LLM_ENABLED", "ground_llm_enabled"),

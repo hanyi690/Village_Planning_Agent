@@ -4,8 +4,9 @@ Folded from the former modules/data package (catalog / sources /
 connections / providers / documents / adapters / ingest) and the parsing
 modules (gazetteer / tables / schemas / semantics / compiler).
 
-All spatial data (vector / raster / tiles) and non-spatial documents
-(planning markdown / L3 reports) enter the system through this package.
+All spatial data (vector / raster / tiles) and non-spatial MinerU Markdown
+(planning text / L3 reports) enter the system through this package. Frontend
+non-GIS files are preprocessed before the DATA text boundary.
 
 Architecture (see README.md):
     Catalog (YAML) -> Source/Driver -> Connection -> Storage & Cache

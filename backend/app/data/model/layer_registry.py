@@ -32,6 +32,7 @@ class EncodingsSpec(BaseModel):
 
 class SpatialSpec(BaseModel):
     is_constraint: bool = False
+    is_planned_output: bool = False
     participates: List[str] = Field(default_factory=list)
 
 
@@ -97,6 +98,19 @@ def get_all_gis_layer_types() -> List[str]:
     return list(GIS_LAYER_REGISTRY.keys())
 
 
+def get_planned_output_bundle_keys() -> frozenset[str]:
+    """Return output groups explicitly declared by the legacy adapter."""
+
+    return frozenset(
+        entry.bundle_target.key
+        for entry in GIS_LAYER_REGISTRY.values()
+        if entry.bundle_target is not None
+        and entry.spatial is not None
+        and entry.spatial.is_planned_output
+        and entry.bundle_target.key
+    )
+
+
 def build_registry_from_yaml(yaml_path: Optional[str] = None) -> None:
     if yaml_path is None:
         yaml_path = str(Path(__file__).parent / "gis_layer_registry.yaml")
@@ -118,5 +132,6 @@ __all__ = [
     "GisLayerTypeEntry", "IngestSpec", "EncodingsSpec", "SpatialSpec",
     "Bundletarget", "KgSpec", "ValidationSpec",
     "GIS_LAYER_REGISTRY", "register_gis_layer_type",
-    "get_gis_layer_entry", "get_all_gis_layer_types", "build_registry_from_yaml",
+    "get_gis_layer_entry", "get_all_gis_layer_types",
+    "get_planned_output_bundle_keys", "build_registry_from_yaml",
 ]

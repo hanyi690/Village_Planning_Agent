@@ -42,6 +42,7 @@ class MinerULoader:
         use_agent_api: Optional[bool] = None,
         token: Optional[str] = None,
         timeout: Optional[int] = None,
+        allow_fallback: bool = True,
     ):
         """初始化 MinerU 加载器
 
@@ -51,10 +52,13 @@ class MinerULoader:
             use_agent_api: 是否使用 Agent 轻量 API（None 时使用全局配置）
             token: MinerU Token（精准 API 需要）
             timeout: 轮询超时时间（秒）
+            allow_fallback: MinerU 失败时是否允许本地替代解析器。生产 DATA
+                文本入口应关闭此开关，避免把非 MinerU 输出误当成 Markdown 事实。
         """
         self.file_path = Path(file_path)
         self.file_type = FileTypeDetector.detect(self.file_path)
         self.category = category
+        self.allow_fallback = bool(allow_fallback)
 
         # 加载全局配置
         try:
@@ -108,6 +112,8 @@ class MinerULoader:
             logger.error(f"[MinerULoader] MinerU API failed: {e}")
             import traceback
             traceback.print_exc()
+            if not self.allow_fallback:
+                raise
             return self._fallback_to_docling()
 
     def _check_agent_api_eligible(self) -> bool:
@@ -210,6 +216,9 @@ class MinerULoader:
     def _parse_with_precise_api(self) -> str:
         """使用精准 API 解析（需 Token）"""
         if not self.token:
+            message = "MinerU precise API requires a token"
+            if not self.allow_fallback:
+                raise RuntimeError(message)
             logger.warning("[MinerULoader] No token for Precise API, falling back to Docling")
             return self._fallback_to_docling()
 

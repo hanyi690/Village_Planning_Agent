@@ -28,7 +28,7 @@
 | `wmts_tile.py` | `WmtsTileDriver` | WMTS 瓦片下载 + 缓存 → 瓦片路径 |
 | `local_raster.py` | `LocalRasterDriver` | 本地 GeoTIFF → 栅格路径 |
 | `remote_raster.py` | `RemoteRasterDriver` | 远程栅格下载指引 |
-| `document.py` | `DocumentDriver` | Markdown / JSON / TXT → 文档内容 |
+| `document.py` | `DocumentDriver` | MinerU Markdown（`.md`/`.markdown`）→ 文档内容 |
 | `registry.py` | `DriverRegistry` | 装饰器注册 + 按名实例化 |
 | `base.py` | `DataSourceDriver` ABC | fetch() 契约 + 注册机制 |
 

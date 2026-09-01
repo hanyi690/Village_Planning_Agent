@@ -14,7 +14,7 @@
 | `features.py` | `FeaturesAdapter` - generic vector features (roads, facilities, annotations, control zones, ...) |
 | `raster.py` | `RasterAdapter` - GeoTIFF/ raster -> `RasterDataset` subclasses (DEM/DOM/slope) |
 | `table.py` | `TableAdapter` - CSV/Excel -> `TableDataset` subclasses |
-| `document.py` | `DocumentAdapter` - Markdown/JSON/TXT -> `Document` subclasses |
+| `document.py` | `DocumentAdapter` - MinerU Markdown -> `Document` subclasses |
 
 ## Built-in adapters (5)
 
@@ -24,7 +24,7 @@
 | `features` | GeoJSON FeatureCollection | `List[SpatialFeature subclass]` | Generic vector (roads, facilities, annotations, zones, ...) |
 | `raster` | GeoTIFF path string | `List[RasterDataset subclass]` | DEM, DOM, slope, aspect rasters |
 | `table` | CSV/Excel path or dict | `List[TableDataset subclass]` | Population, industry, control rules |
-| `document` | Markdown/JSON path | `List[Document subclass]` | Planning text, L3 reports |
+| `document` | MinerU Markdown (`.md`/`.markdown`) | `List[Document subclass]` | Planning text, L3 reports |
 
 > WFS 源不注册 adapter——它由 `data/sources/api_vector.py`（协议 `wfs`）与 `data/providers/tianditu/wfs.py` 处理，直接产出 vector 数据。
 
@@ -73,7 +73,7 @@ See [`docs/guides/how-to-add-layer.md`](../../../../../docs/guides/how-to-add-la
 ## Dependencies
 
 - `app.data.model.layer_registry` (`GisLayerTypeEntry`)
-- `app.infrastructure.kg.dlq` (`DlqEntry` - shared dead-letter queue type)
+- `app.contracts.data.dlq` (`DlqEntry` - shared data-ingestion dead-letter queue type)
 - No deps on `catalog/`, `sources/`, or `connections/` (adapters are pure data transforms)
 
 ## How to extend

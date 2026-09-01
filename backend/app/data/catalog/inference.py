@@ -25,6 +25,31 @@ def _infer_layer_key_from_upload(item: Dict[str, Any]) -> Optional[str]:
     filename = str(
         item.get("original_filename") or item.get("filename") or ""
     ).lower()
+    if (
+        "planned_landuse" in filename
+        or "planning_landuse" in filename
+        or "规划用地" in filename
+        or "目标年用地" in filename
+    ):
+        return "landuse_planned"
+    if (
+        "planned_road" in filename
+        or "planning_road" in filename
+        or "规划道路" in filename
+    ):
+        return "planned_road"
+    if (
+        "planned_annotation" in filename
+        or "planning_annotation" in filename
+        or "规划注记" in filename
+    ):
+        return "planned_annotation"
+    if (
+        "planned_facility" in filename
+        or "planning_facility" in filename
+        or "规划设施" in filename
+    ):
+        return "planned_facility"
     # The administrative boundary *line* is a distinct layer.  Check it
     # before the broader boundary match; otherwise a file named
     # ``admin_boundary_line.geojson`` is routed to ``admin_area`` and every
@@ -60,6 +85,16 @@ def _infer_layer_key_from_upload(item: Dict[str, Any]) -> Optional[str]:
         props = features[0].get("properties") or {}
         name = str(props.get("name", "") or "").lower()
         layer = str(props.get("layer", "") or "").lower()
+        combined = f"{name} {layer}"
+        if "规划" in combined or "planned" in combined:
+            if "道路" in combined or "road" in combined:
+                return "planned_road"
+            if "用地" in combined or "landuse" in combined:
+                return "landuse_planned"
+            if "注记" in combined or "annotation" in combined:
+                return "planned_annotation"
+            if "设施" in combined or "facility" in combined:
+                return "planned_facility"
         if "边界" in name or "boundary" in layer:
             return "boundary"
         if "道路" in name or "road" in layer:

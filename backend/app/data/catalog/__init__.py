@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from .catalog import DataCatalog
 from .collection_registry import CollectionRecord, CollectionRegistry
+from .session_resource_catalog import load_session_data_catalog
 from .config import (
     ApiVectorSourceConfig,
     BaseSourceConfig,
@@ -35,4 +36,5 @@ __all__ = [
     "RemoteRasterSourceConfig",
     "DocumentSourceConfig",
     "CatalogConfig",
+    "load_session_data_catalog",
 ]

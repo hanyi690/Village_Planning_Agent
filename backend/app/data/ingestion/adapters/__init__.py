@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from app.data.model.layer_registry import GisLayerTypeEntry
-from app.infrastructure.kg.dlq import DlqEntry
+from app.contracts.data.dlq import DlqEntry
 
 
 @dataclass
@@ -52,6 +52,7 @@ class IngestAdapter(Protocol):
         entry: GisLayerTypeEntry,
         *,
         strict: bool = False,
+        **metadata: Any,
     ) -> AdapterResult:
         ...
 

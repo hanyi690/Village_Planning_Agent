@@ -22,7 +22,7 @@ class DataResult:
 
     Attributes:
         success: whether the operation succeeded.
-        data: payload - GeoJSON dict | tile path list | raster path | document text.
+        data: payload - GeoJSON dict | tile path list | raster path | MinerU Markdown.
         data_type: payload category - "geojson" | "tiles" | "mosaic" | "raster" | "url" | "document".
         metadata: provenance and stats (feature_count, source, crs, etc).
         error: human-readable failure reason when success is False.

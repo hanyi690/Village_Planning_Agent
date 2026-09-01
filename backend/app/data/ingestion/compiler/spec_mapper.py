@@ -10,15 +10,14 @@ authority for entity uniqueness and geometry.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import hashlib
+import json
 
-from app.infrastructure.evidence_runtime.identity.source_feature_binding import (
-    build_existing_facility_source_binding,
-    build_existing_road_source_binding,
-)
 from app.contracts.l3.l3_contracts import PlanningIntervention
 from app.contracts.evidence.identity_contracts import (
     EvidenceObservation,
     GroundedEntityBinding,
+    SourceFeatureSetBinding,
 )
 from app.contracts.target_projection.parse_result_contracts import ParseDiagnostic
 from app.contracts.ground.spatial_reference_contracts import (
@@ -34,6 +33,233 @@ _GENERIC_VILLAGE_WORDS = frozenset({
     "全村", "村庄", "村域", "村内", "村组", "各村", "该村", "本村",
     "村中", "村级", "村委会", "村民小组", "自然村",
 })
+
+
+def _binding_requirements(intervention: PlanningIntervention) -> dict[str, object]:
+    return dict(getattr(intervention, "spatial_requirements", {}) or {})
+
+
+def _binding_operation(intervention: PlanningIntervention) -> str:
+    params = getattr(intervention, "facility_parameters", None)
+    if getattr(intervention, "category", "") in {"road", "axis"}:
+        params = (
+            getattr(intervention, "road_parameters", None)
+            or getattr(intervention, "axis_parameters", None)
+            or getattr(intervention, "linear_parameters", None)
+        )
+    action = str(
+        getattr(intervention, "intervention_action", "")
+        or getattr(params, "action", "")
+        or ""
+    ).strip().lower()
+    if action in {"preserve", "upgrade", "repair", "widen", "harden"}:
+        return "harden" if action == "upgrade" else action
+    if (
+        action == "new"
+        and getattr(intervention, "category", "") == "facility"
+        and _binding_requirements(intervention).get("source_fact_refs")
+    ):
+        return "reference"
+    return "reference" if action == "reference" else ""
+
+
+def _binding_feature_identity(feature: object) -> tuple[str, str, str]:
+    raw = getattr(feature, "_raw", {}) or {}
+    source_id = str(raw.get("source_feature_id") or "").strip()
+    snapshot = str(
+        raw.get("source_snapshot_ref")
+        or raw.get("source_content_digest")
+        or ""
+    ).strip()
+    geometry = getattr(feature, "geometry", None)
+    geometry_type = (
+        str(geometry.get("type") or "")
+        if isinstance(geometry, dict)
+        else ""
+    )
+    return source_id, snapshot, geometry_type
+
+
+def _build_existing_source_binding(
+    intervention: PlanningIntervention,
+    source_features: Sequence[object],
+    *,
+    collection_key: str,
+    expected_geometry: set[str],
+    semantic_group: str = "",
+    semantic_decisions: Mapping[str, object] | None = None,
+) -> SourceFeatureSetBinding | None:
+    operation = _binding_operation(intervention)
+    if not operation:
+        return None
+    requirements = _binding_requirements(intervention)
+    valid: dict[str, tuple[object, str]] = {}
+    for feature in source_features:
+        source_id, snapshot, geometry_type = _binding_feature_identity(feature)
+        if not source_id or not snapshot or geometry_type not in expected_geometry:
+            continue
+        raw = getattr(feature, "_raw", {}) or {}
+        if semantic_group:
+            semantic_value = str(
+                raw.get("source_label")
+                or raw.get("text")
+                or getattr(feature, "text", "")
+                or ""
+            ).strip()
+            decision = (semantic_decisions or {}).get(source_id)
+            decision_status = str(
+                getattr(decision, "status", "")
+                or (
+                    decision.get("status", "")
+                    if isinstance(decision, Mapping)
+                    else ""
+                )
+            ).strip()
+            if decision_status == "accepted":
+                semantic_value = str(
+                    getattr(decision, "semantic_type", "")
+                    or (
+                        decision.get("semantic_type", "")
+                        if isinstance(decision, Mapping)
+                        else ""
+                    )
+                    or semantic_value
+                ).strip()
+            if semantic_value != semantic_group:
+                continue
+        valid.setdefault(source_id, (feature, snapshot))
+    if not valid:
+        return None
+    requested = (
+        requirements.get("source_feature_ids")
+        or requirements.get("existing_road_feature_ids")
+        or requirements.get("road_feature_ids")
+    )
+    if requested is not None:
+        requested_ids = (
+            list(
+                dict.fromkeys(
+                    str(item).strip()
+                    for item in requested
+                    if str(item).strip()
+                )
+            )
+            if isinstance(requested, (list, tuple, set))
+            else []
+        )
+        if not requested_ids or any(item not in valid for item in requested_ids):
+            return None
+        member_ids = requested_ids
+        binding_mode = "explicit_subset"
+    else:
+        declared_collection = str(
+            requirements.get("source_collection_key") or ""
+        ).strip()
+        required_facts = [
+            str(item).strip()
+            for item in (requirements.get("source_fact_refs") or [])
+            if str(item).strip()
+        ]
+        if declared_collection != collection_key and not required_facts:
+            return None
+        member_ids = sorted(valid)
+        binding_mode = "semantic_fact_subset" if required_facts else "all_in_scope"
+    snapshots = {valid[item][1] for item in member_ids}
+    if len(snapshots) != 1:
+        return None
+    snapshot = next(iter(snapshots))
+    membership = str(requirements.get("membership") or "required").strip()
+    if membership not in {"required", "alternative", "eligible_subset"}:
+        return None
+    source_feature_digest = hashlib.sha256(
+        "|".join([collection_key, snapshot, *sorted(member_ids)]).encode("utf-8")
+    ).hexdigest()
+    seed = {
+        "target_id": str(getattr(intervention, "target_id", "") or ""),
+        "collection": collection_key,
+        "snapshot": snapshot,
+        "ids": sorted(member_ids),
+        "operation": operation,
+    }
+    binding_id = "source-binding:" + hashlib.sha256(
+        json.dumps(seed, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:24]
+    fact_refs = [
+        str(item).strip()
+        for item in (requirements.get("source_fact_refs") or [])
+        if str(item).strip()
+    ]
+    if not fact_refs:
+        fact_refs = [f"bundle:collection:{collection_key}:{snapshot}"]
+    semantic_refs = requirements.get("source_semantic_decision_refs") or []
+    return SourceFeatureSetBinding(
+        binding_id=binding_id,
+        target_id=str(getattr(intervention, "target_id", "") or ""),
+        source_collection_key=collection_key,
+        source_snapshot_ref=snapshot,
+        source_feature_digest=source_feature_digest,
+        source_feature_ids=member_ids,
+        binding_mode=binding_mode,
+        membership=membership,
+        operation=operation,
+        source_fact_refs=fact_refs,
+        source_semantic_decision_refs=(
+            [str(item) for item in semantic_refs]
+            if isinstance(semantic_refs, (list, tuple, set))
+            else []
+        ),
+    )
+
+
+def build_existing_facility_source_binding(
+    intervention: PlanningIntervention,
+    source_features: Sequence[object] = (),
+    semantic_decisions: Mapping[str, object] | None = None,
+) -> SourceFeatureSetBinding | None:
+    if getattr(intervention, "category", "") != "facility":
+        return None
+    params = getattr(intervention, "facility_parameters", None)
+    target_type = str(getattr(params, "facility_type", "") or "").strip()
+    groups = {
+        "公交站": "公交站",
+        "公交站点": "公交站",
+        "公交站亭": "公交站",
+        "文化展示设施": "祠堂",
+        "文化活动中心": "祠堂",
+        "祠堂": "祠堂",
+    }
+    requirements = _binding_requirements(intervention)
+    if target_type not in groups and not requirements.get("source_fact_refs"):
+        return None
+    return _build_existing_source_binding(
+        intervention,
+        source_features,
+        collection_key=str(
+            requirements.get("source_collection_key") or "current_facility"
+        ),
+        expected_geometry={"Point", "MultiPoint"},
+        semantic_group=groups.get(target_type, ""),
+        semantic_decisions=semantic_decisions,
+    )
+
+
+def build_existing_road_source_binding(
+    intervention: PlanningIntervention,
+    source_features: Sequence[object] = (),
+    semantic_decisions: Mapping[str, object] | None = None,
+) -> SourceFeatureSetBinding | None:
+    if getattr(intervention, "category", "") not in {"road", "axis"}:
+        return None
+    requirements = _binding_requirements(intervention)
+    return _build_existing_source_binding(
+        intervention,
+        source_features,
+        collection_key=str(
+            requirements.get("source_collection_key") or "current_road"
+        ),
+        expected_geometry={"LineString", "MultiLineString"},
+        semantic_decisions=semantic_decisions,
+    )
 
 
 def _attach_source_binding(

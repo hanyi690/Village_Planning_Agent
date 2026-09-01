@@ -58,15 +58,19 @@ def classify_file_type(filename: str) -> str:
         filename: File name string
 
     Returns:
-        File type: "document" | "geojson" | "shapefile" | "kml" | "gis_file"
+        File type: "document" | "geojson" | "shapefile" | "kml" | "gis_file" | "raster" | "table"
     """
     name_lower = filename.lower()
-    if name_lower.endswith('.geojson'):
+    if name_lower.endswith(('.geojson', '.json')):
         return 'geojson'
     if name_lower.endswith('.zip') or name_lower.endswith('.shp'):
         return 'shapefile'
     if name_lower.endswith('.kml') or name_lower.endswith('.kmz'):
         return 'kml'
+    if any(name_lower.endswith(ext) for ext in ('.tif', '.tiff', '.img', '.asc')):
+        return 'raster'
+    if any(name_lower.endswith(ext) for ext in ('.csv', '.tsv', '.xlsx', '.xls')):
+        return 'table'
     if any(name_lower.endswith(ext) for ext in ['.gpkg', '.gpx', '.gml']):
         return 'gis_file'
     return 'document'
@@ -92,7 +96,7 @@ class FileTypeDetector:
 
         if ext in ('.zip', '.shp'):
             return 'shapefile'
-        if ext in ('.geojson',):
+        if ext in ('.geojson', '.json'):
             return 'geojson'
         if ext in ('.kml', '.kmz'):
             return 'kml'
@@ -105,7 +109,7 @@ class FileTypeDetector:
 # ==========================================
 
 class MarkdownCleaner:
-    """Clean Markdown content: remove excess blank lines, fix encoding"""
+    """Clean Markdown content without guessing a source encoding."""
 
     @staticmethod
     def clean(content: str) -> str:
@@ -287,7 +291,7 @@ class MarkItDownLoader:
     def _try_html_fallback(self) -> str:
         try:
             from bs4 import BeautifulSoup
-            html = self.file_path.read_text(encoding='utf-8', errors='replace')
+            html = self.file_path.read_text(encoding='utf-8-sig')
             soup = BeautifulSoup(html, 'html.parser')
             for tag in soup(['script', 'style', 'nav', 'footer', 'header']):
                 tag.decompose()
@@ -299,12 +303,14 @@ class MarkItDownLoader:
         return self._try_plain_text()
 
     def _try_plain_text(self) -> str:
-        for encoding in ['utf-8', 'gbk', 'gb18030', 'latin-1']:
-            try:
-                return self.file_path.read_text(encoding=encoding)
-            except UnicodeDecodeError:
-                continue
-        return self.file_path.read_text(encoding='utf-8', errors='replace')
+        """Read an already-normalized UTF-8 text source.
+
+        Encoding detection belongs to the client/MinerU ingestion boundary.
+        Silently trying legacy encodings or replacing undecodable bytes would
+        create facts that cannot be reproduced from the DATA artifact.
+        """
+
+        return self.file_path.read_text(encoding='utf-8-sig')
 
 
 # ==========================================
@@ -334,6 +340,12 @@ def _create_loader(
     supported = {'pdf', 'docx', 'doc', 'pptx', 'xlsx', 'epub', 'html', 'txt', 'md'}
     if real_type not in supported:
         return None
+
+    # Markdown is already the normalized document contract produced at the
+    # client/MinerU boundary.  Re-uploading it to MinerU adds latency, can
+    # detach embedded media references, and makes parsing network-dependent.
+    if real_type == 'md':
+        return MarkItDownLoader(file_path, category=category)
 
     # 确定使用的解析器
     use_parser = parser or DOCUMENT_PARSER
