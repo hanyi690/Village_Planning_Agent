@@ -46,16 +46,16 @@ Markdown、表格或把正文塞进 observations；report_body 只由后续 repo
 独立的 report-synthesis pass 生成，因此不能在本 pass 中用正文替代结构化观察。
 
 每条 observation 必须先选择一个 fact_type，并且只能填写该类型的字段：
-- spatial_entity：entity_type、name、locator（place_names/relation）、scale
+- spatial_entity：entity_type、name、place_names、location_relation、scale
 - spatial_relation：subject_ref、predicate、object_ref
 - scoped_metric：metric、scope、value、unit、counting_basis
-- demand：demand_type、scope、beneficiary、spatial_requirement、locator
-- constraint：constraint_type、applies_to_scope、strength、locator
-- risk 或 opportunity：subject、scope、locator
+- demand：demand_type、scope、beneficiary、spatial_requirement、place_names、location_relation
+- constraint：constraint_type、applies_to_scope、strength、place_names、location_relation
+- risk 或 opportunity：subject、scope、place_names、location_relation
 - document_observation：subject、scope
 
-所有类型都可填写 semantic_type、description、target_name、aliases、
-spatial_mentions（其中 scope_mentions 的 role 必须来自来源语义）、attributes、value、unit、counting_basis、source_segment_ids、
+所有类型都可填写 semantic_type、description、target_name、aliases、place_names、
+location_role、location_relation、location_source_feature_ids、value、unit、counting_basis、source_segment_ids、
 source_quote、source_refs、confidence、status。
 空间 locator 只记录来源明确支持的粗粒度地点/关系线索，不填写坐标或几何；指标、全村
 需求和政策事实不需要为了格式强行添加点位。每条事实必须可回指 source_segment_ids
@@ -65,11 +65,11 @@ source_quote、source_refs、confidence、status。
 
 约束：
 - 只可摘录来源已出现的事实，不得新增对象、数量、地点或关系
-- 空间实体有明确地点时填写 locator；没有地点时保留为空并说明证据缺口
+- 空间实体有明确地点时填写扁平 place_names/location_relation；没有地点时保留为空并说明证据缺口
 - 只要事实、表格、描述或需求中明确出现了本维度相关的地点/对象，就在
-  spatial_mentions 中逐项记录 target_name、role、scope_mentions 和来源；
+  place_names 中逐项记录地点，并填写 location_role/location_relation 和来源；
   这只是后续 grounding 的工作项，不是已经定位的几何
-- 证据不足时仍保留 spatial_mentions，并将 resolution_state 设为 needs_retrieval；
+- 证据不足时仍保留 place_names；本地确定性投影会将其标记为 needs_retrieval；
   不要为了避免未定位而删除地点，也不要填写坐标、WKT、BSM 或推测的行政边界
 - 同名对象按 scope 或 instance_label 分开；数量事实与地点工作项同时保留，不能用一个
   scale/description 字段代替多个地点工作项
@@ -472,11 +472,10 @@ def render_l1_spatial_coverage_contract(
         f"【L1 空间覆盖契约；dimension_key={dimension_key}】\n"
         f"本维度只关注：{focus}。\n"
         "对原始资料、表格行、事实 description 和 demand 中明确出现的相关地点/对象，"
-        "在对应 observation 中输出 spatial_mentions；每项填写 target_name、role、"
-        "scope_mentions（name、role、relation_to_target、source_quote、confidence）、"
-        "instance_label/instance_count（若来源有）和来源字段。\n"
-        "spatial_mentions 是待 grounding 的语义工作项，不是坐标或几何。证据不足时保留该项，"
-        "resolution_state=needs_retrieval；禁止猜坐标、BSM、WKT、边界或把附近对象直接改名。\n"
+        "在对应 observation 的扁平 place_names 列逐项记录地点，并填写 location_role、"
+        "location_relation、location_source_feature_ids 和来源字段。\n"
+        "这些地点列会由本地代码投影为待 grounding 的语义工作项，不是坐标或几何。"
+        "禁止猜坐标、BSM、WKT、边界或把附近对象直接改名。\n"
         "同一目标在不同村庄必须分开；数量事实必须保留，不能用 scale 代替按地点展开。"
     )
 

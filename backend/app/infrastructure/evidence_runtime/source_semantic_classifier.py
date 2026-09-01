@@ -326,7 +326,15 @@ def _candidate_allowed(
     item: SourceFeatureDescriptor,
 ) -> bool:
     if candidate.compatible_layers and item.layer_key not in candidate.compatible_layers:
-        return False
+        # Generic DATA layers are intentionally open-ended.  Their geometry
+        # kind is still checked below, so an arbitrary ``transport`` or
+        # ``source_17`` layer cannot match a point candidate by accident.
+        known_compatibility_layers = {
+            "annotations_current", "facilities_current", "roads_current",
+            "current_road", "water_bodies", "water_current", "water",
+        }
+        if item.layer_key in known_compatibility_layers:
+            return False
     if candidate.compatible_geometry_kinds and item.geometry_kind not in candidate.compatible_geometry_kinds:
         return False
     return True
@@ -452,14 +460,14 @@ def _proposal_context(batch: Sequence[SourceFeatureDescriptor], candidates: Sequ
     _, source_table = build_bounded_table(
         ("source_feature_id", "layer", "geometry", "raw_label", "attributes"),
         source_rows,
-        max_rows=max(1, len(source_rows)),
-        max_chars=12000,
+        max_rows=min(32, max(1, len(source_rows))),
+        max_chars=6200,
     )
     _, candidate_table = build_bounded_table(
         ("candidate_ref", "phrase", "origin", "layers", "geometry", "fact_refs", "attributes"),
         candidate_rows,
-        max_rows=max(1, len(candidate_rows)),
-        max_chars=18000,
+        max_rows=min(32, max(1, len(candidate_rows))),
+        max_chars=6200,
     )
     return (
         "以下是本批次的结构化上下文表。\n\n"

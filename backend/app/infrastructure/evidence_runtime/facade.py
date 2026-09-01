@@ -324,6 +324,12 @@ def _enrich_local_spatial_graph(
     the ordinary retrievers returned no source rows, keeping sufficiency
     fail-closed while allowing identity questions to terminate locally.
     """
+    if str(getattr(context, "world_model_mode", "off") or "off").strip().lower() in {"prefer_v2", "v2_only"}:
+        # V2-only contexts expose catalog/world-model ports instead of the V1
+        # EvidenceGraph.  The caller can still use ordinary retriever rows;
+        # spatial candidate enrichment is handled by GROUND's V2 adapter.
+        return result
+
     from app.infrastructure.evidence_runtime.evidence_graph import (
         append_feature_identity_facts,
         enrich_evidence_packet_with_spatial_graph,
@@ -415,6 +421,20 @@ async def retrieve_evidence(
 
     Returns ExplorationResult with evidence_bundle and spatial_cognition.
     """
+    # Annotate every entry point (including dimension-runtime callers that do
+    # not use EvidenceApplication.retrieve) with the earliest actionable
+    # stage.  This is metadata-only: the router still owns source access and
+    # no provider call is made by the scheduler.
+    if request.requirements:
+        from app.infrastructure.evidence_runtime.gap_scheduler import schedule_requirements
+
+        scheduled_requirements, schedule_trace = schedule_requirements(
+            request.requirements,
+            current_stage=request.stage or "L1",
+        )
+        request = request.model_copy(update={"requirements": list(scheduled_requirements)})
+    else:
+        schedule_trace = None
     requested_entity_scopes = list(request.entity_scope)
     structured_entity_scopes = (
         spatial_spec.all_retrieval_scopes()
@@ -503,6 +523,8 @@ async def retrieve_evidence(
     plan = build_query_plan(request)
     failed_sources: list[str] = []
     retrieval_status: list[dict[str, Any]] = []
+    if schedule_trace is not None:
+        retrieval_status.append(schedule_trace)
     retrieval_status.append({
         "step": "semantic_candidate_scope",
         "status": (
@@ -917,7 +939,11 @@ async def retrieve_evidence(
         )
 
         context = cached_context or get_cached_context(session_id)
-        if context is not None and _needs_spatial_graph(request, spatial_spec):
+        if (
+            context is not None
+            and str(getattr(context, "world_model_mode", "off") or "off").strip().lower() not in {"prefer_v2", "v2_only"}
+            and _needs_spatial_graph(request, spatial_spec)
+        ):
             result.evidence_packet = enrich_evidence_packet_with_spatial_graph(
                 result.evidence_packet,
                 context,
@@ -1089,8 +1115,8 @@ def render_evidence_prompt_section(
         "## EXPLORE 证据",
         "**证据使用规则**:",
         "- report/L1-L2-L3 正文、专业 RAG 和外源文本只提供规划背景或待核实线索，不产生空间位置。",
-        "- typed L1 spatial fact 只提供语义到地点的可审计绑定；KG 提供实体身份与拓扑；bundle feature ref 才是权威几何入口。",
-        "- 只能使用下方已经返回的候选和 opaque bundle ref；禁止从名称、数量、道路宽度或报告文字自行生成 BSM、坐标、WKT、地块或关系。",
+        "- typed L1 spatial fact 只提供语义到地点的可审计绑定；KG/World Model 提供实体身份与拓扑；DATA resource/representation ref 才是当前几何入口（兼容模式才使用 Bundle feature ref）。",
+        "- 只能使用下方已经返回的候选和 opaque DATA ref；禁止从名称、数量、道路宽度或报告文字自行生成 BSM、坐标、WKT、地块或关系。",
     "- ambiguity=multiple 或 unresolved 时不得写成唯一选址；必须保留候选/缺口并把定位交给 GROUND。",
     ]
 

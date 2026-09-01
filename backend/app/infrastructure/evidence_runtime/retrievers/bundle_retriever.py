@@ -20,14 +20,97 @@ _SCOPE_TO_GROUPS = {
     "hazards": ["geological_hazard_points", "hazards", "disaster"],
     "roads": ["roads_current", "current_road", "external_roads", "transport"],
     "waters": ["water_current", "water", "water_bodies", "water_lines"],
-    "annotations": ["annotations_current", "annotations_planned"],
+    "annotations": ["annotations_current"],
 }
 
 _FEATURE_LIMIT = 12
 
 
+def _generic_query_match(feature: object, query: str) -> bool:
+    text = str(query or "").strip().casefold()
+    if not text:
+        return True
+    attrs = getattr(feature, "raw_attributes", {}) or {}
+    values = [getattr(feature, "source_feature_ref", ""), getattr(feature, "layer_ref", "")]
+    values.extend(str(value) for value in attrs.values() if value not in (None, "", [], {}))
+    haystack = " ".join(str(value).casefold() for value in values)
+    return not text or text in haystack
+
+
+def _generic_feature_facts(catalog: object, query: str) -> tuple[list[EvidenceFact], list[EvidenceSource]]:
+    snapshot = getattr(catalog, "snapshot", None)
+    if snapshot is None:
+        return [], []
+    from app.data.admission import assert_current_world_catalog
+
+    assert_current_world_catalog(snapshot)
+    facts: list[EvidenceFact] = []
+    sources: list[EvidenceSource] = []
+    for feature in list(getattr(snapshot, "features", ()) or ()):
+        if not _generic_query_match(feature, query):
+            continue
+        resource_ref = f"resource:{feature.dataset_ref}:{feature.source_feature_ref}"
+        attrs = getattr(feature, "raw_attributes", {}) or {}
+        label = next(
+            (
+                str(value).strip()
+                for key, value in attrs.items()
+                if str(key).casefold() in {"name", "label", "title", "road_name", "facility_name"}
+                and str(value).strip()
+            ),
+            str(feature.layer_ref or feature.source_feature_ref),
+        )
+        fact = EvidenceFact(
+            statement=f"{label} 的通用源要素引用为 {feature.source_feature_ref}",
+            confidence=0.8 if feature.validity_status == "valid" else 0.55,
+            source_refs=[f"data:{feature.dataset_ref}:{feature.source_feature_ref}"],
+            spatial_refs=[resource_ref] if feature.geometry is not None else [],
+            fact_type="data_source_feature",
+            fields={
+                "source_feature_ref": feature.source_feature_ref,
+                "dataset_ref": feature.dataset_ref,
+                "layer_ref": feature.layer_ref,
+                "geometry_kind": feature.geometry_kind,
+                "source_crs": feature.source_crs,
+                "source_collection_key": feature.layer_ref or feature.dataset_ref,
+                "source_snapshot_ref": str(getattr(snapshot, "snapshot_id", "") or ""),
+                "source_feature_ids": feature.source_feature_ref,
+                "source_feature_digest": feature.source_feature_digest,
+                "attribute_keys": ",".join(sorted(str(key) for key in attrs)),
+                "validity_status": feature.validity_status,
+                "geometry_authority": "data_resource_catalog",
+            },
+            evidence_span=f"{label} | {feature.source_feature_ref}",
+            source_locator=resource_ref,
+            support_relation="data_source_identity",
+            status="verified" if feature.validity_status == "valid" else "ambiguous",
+            evidence_role="location_binding",
+            source_kind="data_resource_catalog",
+            spatial_granularity="feature" if feature.geometry is not None else "none",
+            planning_use="grounding",
+        )
+        facts.append(fact)
+        sources.append(EvidenceSource(
+            source_type="gis_layer",
+            reference=fact.source_refs[0],
+            confidence=fact.confidence,
+            evidence_role="location_binding",
+            authority="authoritative",
+            snapshot_ref=str(getattr(snapshot, "snapshot_id", "") or ""),
+        ))
+        if len(facts) >= _FEATURE_LIMIT:
+            break
+    return facts, sources
+
+
 def _is_external_group(group_name: str) -> bool:
     return str(group_name or "").startswith("external_") or group_name == "water_lines"
+
+
+def _is_planned_output_group(group_name: str) -> bool:
+    from app.data.model.layer_registry import get_planned_output_bundle_keys
+
+    return str(group_name or "") in get_planned_output_bundle_keys()
 
 
 def _feature_labels(feature: object) -> list[str]:
@@ -167,6 +250,8 @@ def _feature_facts(bundle: object, scopes: List[str], query: str) -> tuple[list[
     if scopes:
         for scope in scopes:
             for group_name in _SCOPE_TO_GROUPS.get(scope, []):
+                if _is_planned_output_group(group_name):
+                    continue
                 if group_name in {name for name, _, _ in groups}:
                     continue
                 if group_name in {"facility", "transport", "water", "current_landuse"}:
@@ -185,7 +270,7 @@ def _feature_facts(bundle: object, scopes: List[str], query: str) -> tuple[list[
             if container is None or not hasattr(container, "items"):
                 continue
             for group_name, features in container.items():
-                if features:
+                if features and not _is_planned_output_group(str(group_name)):
                     groups.append((str(group_name), container_name, features))
 
     facts: list[EvidenceFact] = []
@@ -231,8 +316,21 @@ async def retrieve_from_bundle(
     Returns (facts, sources). Deterministic; reads bundle snapshot only.
     """
     bundle = await resolve_bundle(session_id)
+    context = None
+    catalog = None
+    try:
+        from app.infrastructure.context_runtime.manager import get_cached_context
+
+        context = get_cached_context(session_id)
+        catalog = getattr(context, "data_resource_catalog", None)
+    except Exception as exc:
+        logger.debug("[bundle retriever] generic data catalog unavailable: %s", type(exc).__name__)
+
+    # DATA-only sessions have no compatibility Bundle.  The BUNDLE retriever
+    # name is retained for router compatibility, but the authoritative source
+    # is the normalized catalog and must still be queryable.
     if bundle is None:
-        return [], []
+        return _generic_feature_facts(catalog, query)
 
     stats = group_stats(bundle)
     facts: List[EvidenceFact] = []
@@ -241,6 +339,12 @@ async def retrieve_from_bundle(
     feature_facts, feature_sources = _feature_facts(bundle, entity_scope, query)
     facts.extend(feature_facts)
     sources.extend(feature_sources)
+    try:
+        generic_facts, generic_sources = _generic_feature_facts(catalog, query)
+        facts = generic_facts + facts
+        sources = generic_sources + sources
+    except Exception as exc:
+        logger.debug("[bundle retriever] generic data catalog unavailable: %s", type(exc).__name__)
 
     target_groups = set()
     for scope in entity_scope:
@@ -250,6 +354,8 @@ async def retrieve_from_bundle(
     # geometry type (points/lines/polygons); flatten over each geometry type.
     for geom_type, groups in (stats or {}).items():
         for group_name, stat in (groups or {}).items():
+            if _is_planned_output_group(str(group_name)):
+                continue
             if target_groups and group_name not in target_groups:
                 continue
             count = stat.get("count", 0)

@@ -84,10 +84,24 @@ async def query_evidence_graph_impl(
         if result.spatial_cognition is not None
         else None
     )
-    payload["geometry_policy"] = (
-        "geometry is bundle-authoritative; call bundle_geometry_by_feature_ref "
-        "only with a returned geometry_ref"
-    )
+    context = await _context_for_session(session_id, village_name)
+    mode = str(getattr(context, "world_model_mode", "off") or "off").strip().lower()
+    if mode in {"prefer_v2", "v2_only"}:
+        payload["geometry_policy"] = (
+            "geometry is DATA-catalog-authoritative; use only returned opaque "
+            "resource_ref/representation_ref/geometry_ref values and let GROUND "
+            "resolve the selected representation"
+        )
+    elif mode == "shadow":
+        payload["geometry_policy"] = (
+            "shadow mode: legacy Bundle geometry is returned for comparison only; "
+            "new decisions must carry DATA resource/representation refs"
+        )
+    else:
+        payload["geometry_policy"] = (
+            "legacy compatibility mode: geometry may be read from a returned "
+            "Bundle feature ref; new code should prefer DATA refs"
+        )
     payload["pagination"] = _pagination_metadata(
         result.evidence_packet,
         tool_name="query_evidence_graph",
@@ -322,6 +336,14 @@ async def bundle_geometry_by_feature_ref_impl(
             indexed = None
     if indexed is not None:
         group_name, layer_name, feature = indexed
+        from app.data.model.layer_registry import get_planned_output_bundle_keys
+
+        if str(layer_name) in get_planned_output_bundle_keys():
+            return {
+                "success": False,
+                "error": "planned output cannot be read as current bundle evidence",
+                "feature_ref": feature_ref,
+            }
         return budget_check(
             {
                 "success": True,
@@ -341,6 +363,10 @@ async def bundle_geometry_by_feature_ref_impl(
         ("polygons", bundle.polygons),
     ):
         for layer_name in group.keys():
+            from app.data.model.layer_registry import get_planned_output_bundle_keys
+
+            if str(layer_name) in get_planned_output_bundle_keys():
+                continue
             for feature in list(group.get(layer_name) or []):
                 if str(getattr(feature, "bsm", "") or "") != bsm:
                     continue
@@ -366,6 +392,105 @@ async def bundle_geometry_by_feature_ref_impl(
     }
 
 
+async def data_geometry_by_ref_impl(
+    session_id: str,
+    geometry_ref: str,
+) -> dict[str, Any]:
+    """Resolve one opaque DATA geometry ref for V2 LLM inspection.
+
+    The model cannot submit a new coordinate or field selector.  The ref must
+    already occur in the normalized catalog snapshot (source, resource,
+    representation, or geometry identity); GROUND remains the execution
+    authority and re-resolves it before producing a planned layer.
+    """
+    context = await _context_for_session(session_id)
+    catalog = getattr(context, "data_resource_catalog", None) if context else None
+    ref = str(geometry_ref or "").strip()
+    if catalog is None or not ref:
+        return {"success": False, "error": "DATA catalog or geometry_ref unavailable"}
+    snapshot = getattr(catalog, "snapshot", None)
+    try:
+        from app.data.admission import (
+            assert_current_world_catalog,
+            build_admission_index,
+        )
+
+        assert_current_world_catalog(snapshot)
+        admission_index = build_admission_index(snapshot)
+    except (TypeError, ValueError):
+        return {
+            "success": False,
+            "error": "DATA catalog current-world admission is not valid",
+        }
+    features = list(getattr(snapshot, "features", ()) or ())
+    representations = list(getattr(snapshot, "representations", ()) or ())
+    allowed = set()
+    bare_counts: dict[str, int] = {}
+    for feature in features:
+        source_ref = str(getattr(feature, "source_feature_ref", "") or "")
+        bare_counts[source_ref] = bare_counts.get(source_ref, 0) + 1
+    for feature in features:
+        feature_key = (
+            str(getattr(feature, "dataset_ref", "") or ""),
+            str(getattr(feature, "source_feature_ref", "") or ""),
+        )
+        if feature_key not in admission_index.feature_keys:
+            continue
+        resource_ref = (
+            f"resource:{feature_key[0]}:{feature_key[1]}"
+        )
+        allowed.update(
+            str(value).strip()
+            for value in (
+                feature_key[1] if bare_counts.get(feature_key[1]) == 1 else "",
+                resource_ref,
+            )
+            if str(value or "").strip()
+        )
+    for representation in representations:
+        if str(getattr(representation, "representation_ref", "") or "") not in admission_index.representation_refs:
+            continue
+        allowed.update(
+            str(value).strip()
+            for value in (
+                getattr(representation, "representation_ref", ""),
+                getattr(representation, "resource_ref", ""),
+                getattr(representation, "geometry_ref", ""),
+            )
+            if str(value or "").strip()
+        )
+    if ref not in allowed:
+        return {"success": False, "error": "geometry_ref is not present in DATA catalog", "geometry_ref": ref}
+    geometry = catalog.resolve_geometry(
+        resource_ref=ref,
+        geometry_ref=ref,
+        representation_ref=ref,
+    )
+    if geometry is None:
+        return {"success": False, "error": "DATA ref has no executable geometry", "geometry_ref": ref}
+    return budget_check(
+        {
+            "success": True,
+            "geometry_ref": ref,
+            "geometry_authority": "data_resource_catalog",
+            "geometry": geometry,
+        },
+        hard_limit=6000,
+    )
+
+
+@tool
+async def data_geometry_by_ref(
+    session_id: str = "",
+    geometry_ref: str = "",
+    state: Annotated[Optional[dict[str, Any]], InjectedState()] = None,
+) -> str:
+    """仅按 EvidencePacket 已返回的 DATA opaque ref 读取几何。"""
+    if not session_id and state:
+        session_id = str(state.get("session_id", "") or "")
+    return tool_reply(await data_geometry_by_ref_impl(session_id, geometry_ref))
+
+
 @tool
 async def bundle_geometry_by_feature_ref(
     session_id: str = "",
@@ -385,4 +510,6 @@ __all__ = [
     "query_facility_bsms_impl",
     "bundle_geometry_by_feature_ref",
     "bundle_geometry_by_feature_ref_impl",
+    "data_geometry_by_ref",
+    "data_geometry_by_ref_impl",
 ]

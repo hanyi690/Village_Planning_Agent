@@ -482,35 +482,115 @@ def _gap_text(gap: Any) -> str:
     ).strip()
 
 
+def _location_scope_rows(location: Any) -> list[tuple[str, str, str]]:
+    return sorted({
+        (
+            str(
+                getattr(scope, "normalized_name", "")
+                or getattr(scope, "name", "")
+                or ""
+            ).strip(),
+            str(getattr(scope, "role", "") or "").strip(),
+            str(
+                getattr(scope, "relation_to_target", "") or ""
+            ).strip(),
+        )
+        for scope in (getattr(location, "scopes", None) or ())
+        if str(
+            getattr(scope, "normalized_name", "")
+            or getattr(scope, "name", "")
+            or ""
+        ).strip()
+    })
+
+
+def l1_location_work_item_key(location: Any) -> str:
+    """Stable identity-retrieval key independent of dimension/source rows."""
+
+    existing = str(getattr(location, "work_item_ref", "") or "").strip()
+    if existing.startswith("l1-location-work-item:"):
+        return existing
+    mention = str(
+        getattr(location, "normalized_name", "")
+        or getattr(location, "mention", "")
+        or ""
+    ).strip()
+    role = str(getattr(location, "role", "") or "").strip()
+    work_material = json.dumps(
+        {
+            "mention": "".join(mention.casefold().split()),
+            "role": role.casefold(),
+            "scopes": _location_scope_rows(location),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return (
+        "l1-location-work-item:"
+        + hashlib.sha256(work_material.encode("utf-8")).hexdigest()[:20]
+    )
+
+
 def requirements_from_l1(snapshot: Any) -> tuple[EvidenceRequirement, ...]:
     """Produce requirements for unresolved L1 observations and evidence gaps."""
 
     output: list[EvidenceRequirement] = []
     for index, gap in enumerate(getattr(snapshot, "evidence_gaps", None) or []):
+        if (
+            str(getattr(gap, "subject_ref", "") or "").startswith(
+                "l1-location-work-item:"
+            )
+            and str(getattr(gap, "requirement_id", "") or "")
+            and str(getattr(gap, "outcome_status", "") or "") != "open"
+        ):
+            # This is the persisted outcome of the location work item's own
+            # identity requirement.  Regenerate that one identity request
+            # below; do not create a second generic gap request for it.
+            continue
         statement = _gap_text(gap)
         if not statement:
             continue
         dimension = str(getattr(gap, "dimension", "") or "").strip()
+        is_spatial_gap = dimension.casefold() in {"spatial", "location", "gis"}
+        gap_kind = _kind_for_statement(statement, spatial=is_spatial_gap)
         output.append(
             _artifact_requirement(
                 stage="L1",
                 artifact=snapshot,
                 index=index,
                 statement=statement,
-                kind=_kind_for_statement(statement, spatial=dimension.casefold() in {"spatial", "location", "gis"}),
-                source_families=("report", "artifact", "kg", "bundle"),
+                kind=gap_kind,
+                source_families=(
+                    "report",
+                    "artifact",
+                    "kg",
+                    "data",
+                    "gis",
+                    *(("external_map_cache",) if is_spatial_gap else ()),
+                ),
                 scope=(dimension,),
-                spatial_granularity="feature" if dimension.casefold() in {"spatial", "location", "gis"} else "document",
+                spatial_granularity="feature" if is_spatial_gap else "document",
                 allowed_inference="exact",
                 evidence_role="l1_gap",
                 success_condition="source-backed claim with locator and snapshot context",
                 source_artifact_refs=(str(getattr(gap, "gap_id", "") or ""),),
-                metadata={"gap_id": str(getattr(gap, "gap_id", "") or "")},
+                metadata={
+                    "gap_id": str(getattr(gap, "gap_id", "") or ""),
+                    "recovery_generation": int(
+                        getattr(gap, "recovery_generation", 0) or 0
+                    ),
+                },
             )
         )
-    for offset, location in enumerate(
+    # The same observed place commonly appears in several L1 dimensions.
+    # Retrieve one Evidence candidate set per semantic work item, then let the
+    # L1 aggregate attach the immutable receipt to every source mention.  The
+    # key includes role and source-declared scopes so same-name places in
+    # different areas are never collapsed merely to save requests.
+    location_groups: dict[str, dict[str, Any]] = {}
+    for location_index, location in enumerate(
         getattr(snapshot, "location_mentions", None) or [],
-        start=len(output),
     ):
         # A report/source reference proves where the mention was observed; it
         # does not prove that the named object has been spatially resolved.
@@ -520,19 +600,74 @@ def requirements_from_l1(snapshot: Any) -> tuple[EvidenceRequirement, ...]:
         mention = str(getattr(location, "normalized_name", "") or getattr(location, "mention", "") or "").strip()
         if not mention:
             continue
+        role = str(getattr(location, "role", "") or "").strip()
+        scope_rows = _location_scope_rows(location)
+        work_key = l1_location_work_item_key(location)
+        group = location_groups.setdefault(work_key, {
+            "mention": mention,
+            "role": role,
+            "scope_rows": scope_rows,
+            "indexes": [],
+            "dimension_keys": [],
+            "source_report_refs": [],
+        })
+        group["indexes"].append(location_index)
+        dimension_key = str(
+            getattr(location, "dimension_key", "") or ""
+        ).strip()
+        source_report_ref = str(
+            getattr(location, "source_report_ref", "") or ""
+        ).strip()
+        if dimension_key:
+            group["dimension_keys"].append(dimension_key)
+        if source_report_ref:
+            group["source_report_refs"].append(source_report_ref)
+
+    location_requirement_offset = len(output)
+    for group_index, work_key in enumerate(sorted(location_groups)):
+        group = location_groups[work_key]
+        mention = str(group["mention"])
+        scope_names = [str(row[0]) for row in group["scope_rows"]]
         output.append(
             _artifact_requirement(
                 stage="L1",
                 artifact=snapshot,
-                index=offset,
-                statement=f"Resolve authoritative identity and geometry for {mention}",
-                kind="spatial",
-                source_families=("bundle", "kg", "artifact"),
-                scope=(mention,),
+                index=location_requirement_offset + group_index,
+                statement=f"Retrieve bounded identity candidates for {mention}",
+                kind="identity",
+                source_families=(
+                    "data",
+                    "gis",
+                    "kg",
+                    "artifact",
+                    "external_map_cache",
+                ),
+                scope=(mention, *scope_names),
                 spatial_granularity="feature",
                 evidence_role="l1_location_identity",
-                success_condition="canonical entity and geometry reference are bound",
-                metadata={"mention": mention, "role": str(getattr(location, "role", "") or "")},
+                success_condition=(
+                    "one bounded local DATA/KG candidate is supported by exact "
+                    "provenance; final entity and representation remain for GROUND"
+                ),
+                source_artifact_refs=tuple(dict.fromkeys(
+                    group["source_report_refs"]
+                )),
+                metadata={
+                    "mention": mention,
+                    "normalized_name": mention,
+                    "role": group["role"],
+                    "location_work_item_key": work_key,
+                    "location_mention_indexes": group["indexes"],
+                    "dimension_keys": list(dict.fromkeys(
+                        group["dimension_keys"]
+                    )),
+                    "source_report_refs": list(dict.fromkeys(
+                        group["source_report_refs"]
+                    )),
+                    "scope_names": scope_names,
+                    "selection_cardinality": "one",
+                    "external_geometry_authority": "advisory_only",
+                },
             )
         )
     return _canonical_requirements(output)
@@ -807,6 +942,9 @@ def requirements_from_target_projection(result: Any) -> tuple[EvidenceRequiremen
         metadata = {
             "target_id": target_id,
             "spec_id": str(getattr(spec, "spec_id", "") or ""),
+            "mention": label,
+            "semantic_terms": [str(item) for item in terms if str(item)],
+            "selection_cardinality": "one",
             "pending_grounding": pending,
             "claim_id": target_id if pending else "",
             "source_artifact_key": "planning_program" if pending else "target_projection",
@@ -841,7 +979,7 @@ def requirements_from_target_projection(result: Any) -> tuple[EvidenceRequiremen
                 index=index,
                 statement=statement,
                 kind="spatial",
-                source_families=("bundle", "kg", "artifact"),
+                source_families=("data", "gis", "kg", "artifact"),
                 scope=(*scopes, label),
                 spatial_granularity="feature",
                 evidence_role=(
@@ -1023,6 +1161,7 @@ def requirement_set_fingerprint(requirements: tuple[EvidenceRequirement, ...]) -
 
 __all__ = [
     "compile_requirements",
+    "l1_location_work_item_key",
     "requirement_set_fingerprint",
     "requirements_from_l1",
     "requirements_from_l2",

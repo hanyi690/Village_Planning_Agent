@@ -239,7 +239,15 @@ def _stage_defaults(stage: str, call_type: LLMCallType) -> dict[str, Any]:
             "transient_retry_backoff_s": 0.0,
             "semaphore_scope": "ground",
         }
-    if normalized in {"select", "execute", "rag", "summary", "conversation"}:
+    if normalized in {
+        "cognition",
+        "evidence",
+        "select",
+        "execute",
+        "rag",
+        "summary",
+        "conversation",
+    }:
         return {
             "timeout_s": settings.request_timeout_seconds(),
             "max_tokens": 800 if call_type == "report" else 2048,
@@ -370,6 +378,11 @@ class LLMManager:
             )
             if not isinstance(result, spec.response_model):
                 result = spec.response_model.model_validate(result)
+            from app.infrastructure.structured_runtime.validator import (
+                validate_provider_page,
+            )
+
+            result = validate_provider_page(spec.contract_key, result)
         except Exception as exc:
             from app.infrastructure.structured_runtime.parser import structured_failure_code
 

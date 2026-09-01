@@ -18,7 +18,7 @@ class SpatialRelationEvidence(BaseModel):
     metric_value: float | None = None
     metric_unit: str | None = None
     tolerance: float | None = None
-    crs: str = "EPSG:4326"
+    crs: str = ""
     computation_method: str = ""
     provenance_refs: list[str] = Field(default_factory=list)
 
@@ -29,11 +29,28 @@ class EvidencePacket(ContractMeta):
     request: str
     query_fingerprint: str = ""
     bundle_snapshot_digest: str = ""
+    # DATA/World-Model lineage is explicit in V2; legacy packets may leave
+    # these empty while their compatibility Bundle digest remains populated.
+    data_snapshot_ref: str = ""
+    data_snapshot_digest: str = ""
+    world_model_snapshot_ref: str = ""
+    world_model_snapshot_digest: str = ""
     kg_version: str = ""
     l1_snapshot_ref: str = ""
     l1_scope_refs: list[str] = Field(default_factory=list)
     candidate_refs: list[FeatureEvidenceRef] = Field(default_factory=list)
     candidate_total: int = Field(default=0, ge=0)
+    # ``candidate_total`` counts source features/representations.  Identity
+    # cardinality is separate because one WorldEntity may legitimately own a
+    # point, several polygons, or many continuous road segments.
+    candidate_identity_total: int = Field(default=0, ge=0)
+    candidate_entity_refs: list[str] = Field(default_factory=list)
+    identity_grouping: Literal[
+        "world_entity",
+        "mixed",
+        "source_feature",
+        "none",
+    ] = "none"
     candidate_offset: int = Field(default=0, ge=0)
     candidate_limit: int = Field(default=12, ge=1)
     candidates_truncated: bool = False

@@ -52,6 +52,21 @@ class EvidenceRequirement(BaseModel):
     allowed_inference: Literal["exact", "derived", "inferred", "text_only"] = "exact"
     evidence_role: str = "planning_background"
     success_condition: str = ""
+    # Gap scheduling metadata.  Evidence may resolve a requirement as soon
+    # as the current stage has enough subject/capability information; a later
+    # stage is recorded only when the missing decision depends on downstream
+    # semantics (for example representation purpose).
+    earliest_resolution_stage: str = ""
+    deferred_until: str = ""
+    retrieval_capability: str = ""
+    gap_status: Literal[
+        "open",
+        "ready_for_retrieval",
+        "retrieving",
+        "resolved",
+        "not_available",
+        "requires_human_confirmation",
+    ] = "open"
     source_artifact_refs: tuple[str, ...] = Field(default_factory=tuple)
     metadata: dict[str, Any] = Field(default_factory=dict)
 

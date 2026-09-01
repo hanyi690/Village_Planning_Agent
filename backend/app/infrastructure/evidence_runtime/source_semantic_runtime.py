@@ -44,9 +44,11 @@ _NON_SEMANTIC_PROPERTY_TOKENS = (
     "geometry", "coordinate", "longitude", "latitude", "经度", "纬度",
     "wkt", "shape", "source_feature_id", "source_uri", "source_path",
     "feature_bsm", "source_bsm", "snapshot_digest", "source_dataset",
+    "source_dataset_ref", "source_feature_ref", "source_feature_digest",
     "source_content_digest", "source_label", "source_feature_index",
-    "content_digest", "feature_index", "objectid", "fid", "layer_type",
-    "source_layer", "source_crs", "crs", "bsm",
+    "content_digest", "feature_index", "validity_status", "diagnostics",
+    "objectid", "fid", "layer_type",
+    "source_layer", "source_crs", "crs", "geometry_field", "bsm",
 )
 
 
@@ -88,6 +90,8 @@ def _feature_property_sources(feature: object) -> list[tuple[str, dict[str, Any]
     for prefix, value in (
         ("gis", getattr(feature, "properties", None)),
         ("raw", getattr(feature, "_raw", None)),
+        ("data", getattr(feature, "raw_attributes", None)),
+        ("normalized", getattr(feature, "normalized_claims", None)),
     ):
         if isinstance(value, dict):
             sources.append((prefix, value))
@@ -111,6 +115,10 @@ def _feature_source_id(feature: object) -> str:
     for source in (raw, properties):
         if isinstance(source, dict) and str(source.get("source_feature_id") or "").strip():
             return str(source["source_feature_id"]).strip()
+    for key in ("source_feature_ref", "source_feature_id"):
+        value = str(getattr(feature, key, "") or "").strip()
+        if value:
+            return value
     return str(getattr(feature, "source_feature_id", "") or "").strip()
 
 
@@ -142,7 +150,12 @@ def _semantic_properties(feature: object) -> tuple[str, dict[str, str]]:
 
 
 def collect_authoritative_source_features(context: Any) -> dict[str, list[object]]:
-    """Collect current facility/road/water source features with bounded identity."""
+    """Collect source features with bounded identity.
+
+    Compatibility layer groups are retained, then generic DATA features are
+    added by geometry kind.  No configured layer name is required; arbitrary
+    point/line/polygon resources therefore participate in semantic binding.
+    """
     workspace = getattr(context, "workspace", None)
     point_layers = getattr(workspace, "points", None)
     line_layers = getattr(workspace, "lines", None)
@@ -165,7 +178,7 @@ def collect_authoritative_source_features(context: Any) -> dict[str, list[object
                 result.append(feature)
         return result
 
-    return {
+    result = {
         "facility": collect(
             point_layers,
             ("annotations_current", "facilities_current"),
@@ -173,6 +186,45 @@ def collect_authoritative_source_features(context: Any) -> dict[str, list[object
         "road": collect(line_layers, ("roads_current",)),
         "water": collect(polygon_layers, ("water_bodies", "water_current", "water")),
     }
+    catalog = getattr(context, "data_resource_catalog", None)
+    snapshot = getattr(catalog, "snapshot", None)
+    if snapshot is not None:
+        from app.data.admission import assert_current_world_catalog
+
+        assert_current_world_catalog(snapshot)
+    for feature in list(getattr(snapshot, "features", ()) or ()):
+        kind = str(getattr(feature, "geometry_kind", "") or "").casefold()
+        if kind in {"", "unknown"}:
+            geometry = getattr(feature, "geometry", None) or {}
+            geometry_type = str(
+                geometry.get("type", "") if isinstance(geometry, dict) else ""
+            ).casefold()
+            kind = {
+                "point": "point",
+                "multipoint": "point",
+                "linestring": "line",
+                "multilinestring": "line",
+                "polygon": "polygon",
+                "multipolygon": "polygon",
+            }.get(geometry_type, kind)
+        if kind == "point":
+            group_key = "facility"
+        elif kind == "line":
+            group_key = "road"
+        elif kind == "polygon":
+            # The descriptor bucket is only a transport shape. Semantic
+            # classification still decides whether an area is water, parcel,
+            # hazard, or another domain object.
+            group_key = "water"
+        else:
+            continue
+        source_id = _feature_source_id(feature)
+        if not source_id:
+            continue
+        existing_ids = {_feature_source_id(item) for item in result[group_key]}
+        if source_id not in existing_ids:
+            result[group_key].append(feature)
+    return result
 
 
 def source_feature_descriptor(
@@ -193,8 +245,15 @@ def source_feature_descriptor(
     label, semantic_properties = _semantic_properties(feature)
     geometry = getattr(feature, "geometry", {}) or {}
     geometry_kind = str(geometry.get("type") or "") if isinstance(geometry, dict) else ""
+    if not geometry_kind:
+        geometry_kind = {
+            "point": "Point",
+            "line": "LineString",
+            "polygon": "Polygon",
+            "multipatch": "MultiPolygon",
+        }.get(str(getattr(feature, "geometry_kind", "") or "").casefold(), "")
     properties = semantic_properties
-    descriptor_layer_key = {
+    descriptor_layer_key = str(getattr(feature, "layer_ref", "") or "").strip() or {
         "facility": "annotations_current",
         "road": "roads_current",
         "water": "water_bodies",
@@ -225,17 +284,32 @@ def source_descriptors(
 
 
 def _kg_entity_attributes(entity: Any) -> dict[str, str]:
+    def value(name: str, default: Any = "") -> Any:
+        if isinstance(entity, dict):
+            return entity.get(name, default)
+        return getattr(entity, name, default)
+
     values: dict[str, str] = {}
     for key in ("canonical_name", "entity_type"):
-        value = str(getattr(entity, key, "") or "").strip()
-        if value:
-            values[key] = value
-    aliases = [str(value).strip() for value in (getattr(entity, "aliases", None) or []) if str(value).strip()]
+        item = str(value(key) or "").strip()
+        if item:
+            values[key] = item
+    concept_types = [
+        str(item).strip()
+        for item in (value("concept_types", None) or [])
+        if str(item).strip()
+    ]
+    if concept_types and "entity_type" not in values:
+        values["entity_type"] = concept_types[0]
+    aliases = [str(item).strip() for item in (value("aliases", None) or []) if str(item).strip()]
     if aliases:
         values["aliases"] = ", ".join(dict.fromkeys(aliases))
-    for key, value in (getattr(entity, "properties", None) or ()):
+    properties = value("properties", None) or ()
+    if isinstance(properties, dict):
+        properties = properties.items()
+    for key, item in properties:
         key_text = str(key).strip()
-        value_text = str(value).strip()
+        value_text = str(item).strip()
         if key_text and value_text and _is_semantic_property(key_text):
             values.setdefault(key_text, value_text)
     return values
@@ -253,7 +327,13 @@ def kg_semantic_candidates(
     each L1 phrase keeps the vocabulary small even when the bundle contains
     hundreds of roads or parcels.
     """
-    kg = getattr(context, "kg", None)
+    mode = str(getattr(context, "world_model_mode", "") or "").strip().casefold()
+    if mode == "shadow":
+        kg = getattr(context, "world_model_shadow", None)
+    else:
+        kg = getattr(getattr(context, "ports", None), "world_model", None)
+        kg = kg or getattr(context, "kg", None)
+    kg = getattr(kg, "read_port", kg)
     finder = getattr(kg, "find_entities", None)
     if not callable(finder):
         return []
@@ -295,10 +375,18 @@ def kg_semantic_candidates(
             except Exception:
                 query_cache[query_key] = []
         entities = query_cache[query_key]
+        def entity_ref(entity: Any) -> str:
+            raw = (
+                entity.get("entity_ref", "")
+                if isinstance(entity, dict)
+                else getattr(entity, "entity_ref", "")
+            )
+            return str(raw or "").strip()
+
         entity_refs = sorted({
-            str(getattr(entity, "entity_ref", "") or "").strip()
+            entity_ref(entity)
             for entity in entities
-            if str(getattr(entity, "entity_ref", "") or "").strip()
+            if entity_ref(entity)
         })
         if not entity_refs:
             continue

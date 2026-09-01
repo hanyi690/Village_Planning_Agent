@@ -196,6 +196,15 @@ class PlaceEvidenceIndex:
         self._by_alias: Dict[str, List[PlaceEvidenceEntry]] = {}
         self._name_ngrams: Dict[str, set[tuple[str, str]]] = {}
         self._short_name_keys: set[tuple[str, str]] = set()
+        self._identity_index: Dict[
+            tuple[str, str], PlaceEvidenceEntry
+        ] = {}
+        self._coordinate_index: Dict[
+            tuple[str, int, int], List[tuple[float, float, PlaceEvidenceEntry]]
+        ] = {}
+        self._coordinate_cache: Dict[
+            str, tuple[float, float] | None
+        ] = {}
         self.semantic_scopes: list[Any] = []
         self.source_semantic_decisions: dict[str, Any] = {}
         # ``None`` means that the injected context does not expose an L1
@@ -307,6 +316,7 @@ class PlaceEvidenceIndex:
                 parcels=parcels,
                 spatial_index=index._parcel_spatial_index,
             )
+        index._register_data_catalog_features()
 
         return index
 
@@ -323,6 +333,61 @@ class PlaceEvidenceIndex:
         return [value for value in refs if value in self._allowed_l1_fact_ids]
 
     # ── Registration ─────────────────────────────────────────────────
+
+    def _register_data_catalog_features(self) -> None:
+        """Index generic DATA features for name/alias recall.
+
+        The catalog entry is deliberately an evidence candidate, not a
+        business entity classification.  Geometry stays behind ``resource_ref``
+        and is loaded later by GROUND; unknown roles remain ``unknown``.
+        """
+
+        catalog = getattr(self.context, "data_resource_catalog", None)
+        snapshot = getattr(catalog, "snapshot", None)
+        if snapshot is None:
+            return
+        from app.data.admission import assert_current_world_catalog
+
+        assert_current_world_catalog(snapshot)
+        for feature in list(getattr(snapshot, "features", ()) or ())[:10000]:
+            attrs = getattr(feature, "raw_attributes", {}) or {}
+            labels = [
+                str(value).strip()
+                for key, value in attrs.items()
+                if str(key).casefold() in {
+                    "name", "label", "title", "alias", "road_name", "facility_name",
+                    "water_name", "text",
+                }
+                and str(value).strip()
+            ]
+            canonical = labels[0] if labels else str(feature.layer_ref or feature.source_feature_ref).strip()
+            if not canonical:
+                continue
+            role = str(
+                attrs.get("role")
+                or attrs.get("entity_role")
+                or attrs.get("entity_type")
+                or "unknown"
+            ).strip().casefold() or "unknown"
+            resource_ref = f"resource:{feature.dataset_ref}:{feature.source_feature_ref}"
+            self._add_entry(
+                PlaceEvidenceEntry(
+                    canonical_name=canonical,
+                    aliases=list(dict.fromkeys(labels[1:])),
+                    entity_refs=[],
+                    entity_types=[role] if role != "unknown" else [],
+                    role=role,
+                    source_feature_id=str(feature.source_feature_ref),
+                    source_layer=str(feature.layer_ref or ""),
+                    geometry_ref=resource_ref,
+                    provenance=[
+                        f"data:{feature.dataset_ref}",
+                        f"data_snapshot:{getattr(snapshot, 'snapshot_id', '')}",
+                    ],
+                    confidence=0.65 if labels else 0.45,
+                    bundle_snapshot_digest=str(getattr(snapshot, "digest", "") or ""),
+                )
+            )
 
     def _register_named_bundle_features(
         self,
@@ -793,6 +858,9 @@ class PlaceEvidenceIndex:
         workspace = getattr(self.context, "workspace", None)
         matches: list[tuple[str, str, str, list[str]]] = []
         if workspace is not None:
+            from app.data.model.layer_registry import get_planned_output_bundle_keys
+
+            planned_output_layers = get_planned_output_bundle_keys()
             for group_name in ("points", "lines", "polygons"):
                 group = getattr(workspace, group_name, None)
                 if group is None or not callable(getattr(group, "get", None)):
@@ -822,6 +890,8 @@ class PlaceEvidenceIndex:
                     }[group_name]
                 )
                 for layer_name in layer_names:
+                    if str(layer_name) in planned_output_layers:
+                        continue
                     for feature in list(group.get(layer_name) or []):
                         raw = getattr(feature, "_raw", {}) or {}
                         raw_id = str(
@@ -1696,6 +1766,10 @@ class PlaceEvidenceIndex:
                     if indexed not in aliases:
                         aliases.append(indexed)
                     self._index_name_key("alias", alias_key)
+            identity = self._source_identity_key(indexed)
+            if identity:
+                self._identity_index[(indexed.role, identity)] = indexed
+            self._index_coordinate(indexed)
 
         # A shared feature BSM/source_feature_id is the strongest identity
         # signal.  Semantic overlays are allowed to rename an entity, so this
@@ -1760,12 +1834,7 @@ class PlaceEvidenceIndex:
         identity = self._source_identity_key(entry)
         if not identity:
             return None
-        for existing in self.entries:
-            if existing.role != entry.role:
-                continue
-            if self._source_identity_key(existing) == identity:
-                return existing
-        return None
+        return self._identity_index.get((entry.role, identity))
 
     @classmethod
     def _canonical_merge_target(
@@ -1861,8 +1930,19 @@ class PlaceEvidenceIndex:
         if not keys:
             return None
         entry_geometry = self._authoritative_geometry_key(entry)
+        candidate_entries: List[PlaceEvidenceEntry] = []
+        seen_candidates: set[int] = set()
+        for key in keys:
+            for existing in (
+                *self._by_canonical.get(key, ()),
+                *self._by_alias.get(key, ()),
+            ):
+                marker = id(existing)
+                if marker not in seen_candidates:
+                    seen_candidates.add(marker)
+                    candidate_entries.append(existing)
         matching: List[PlaceEvidenceEntry] = []
-        for existing in self.entries:
+        for existing in candidate_entries:
             if existing.role != entry.role:
                 continue
             existing_keys = {
@@ -1911,29 +1991,100 @@ class PlaceEvidenceIndex:
                     return None
         return matching[0] if matching else None
 
+    def _coordinate_xy(
+        self,
+        entry: PlaceEvidenceEntry,
+    ) -> tuple[float, float] | None:
+        reference = str(entry.geometry_ref or "").strip()
+        if not reference:
+            return None
+        if reference in self._coordinate_cache:
+            return self._coordinate_cache[reference]
+        coordinate: tuple[float, float] | None = None
+        if reference.startswith("resource:"):
+            catalog = getattr(self.context, "data_resource_catalog", None)
+            if catalog is not None:
+                try:
+                    payload = catalog.resolve_geometry(resource_ref=reference)
+                    if payload:
+                        from shapely.geometry import shape
+
+                        geometry = shape(payload)
+                        if not geometry.is_empty and geometry.is_valid:
+                            point = geometry.representative_point()
+                            coordinate = (float(point.x), float(point.y))
+                except Exception:
+                    coordinate = None
+        else:
+            try:
+                from app.spatial.grounding.coordinate_identity import point_xy
+
+                coordinate = point_xy(reference)
+            except Exception:
+                coordinate = None
+        self._coordinate_cache[reference] = coordinate
+        return coordinate
+
+    @staticmethod
+    def _coordinate_cell(
+        coordinate: tuple[float, float],
+        *,
+        tolerance: float = 1e-5,
+    ) -> tuple[int, int]:
+        from math import floor
+
+        return (
+            floor(coordinate[0] / tolerance),
+            floor(coordinate[1] / tolerance),
+        )
+
+    def _index_coordinate(self, entry: PlaceEvidenceEntry) -> None:
+        coordinate = self._coordinate_xy(entry)
+        if coordinate is None:
+            return
+        cell_x, cell_y = self._coordinate_cell(coordinate)
+        bucket = self._coordinate_index.setdefault(
+            (entry.role, cell_x, cell_y),
+            [],
+        )
+        if all(existing is not entry for _x, _y, existing in bucket):
+            bucket.append((coordinate[0], coordinate[1], entry))
+
     def _coordinate_merge_target(
         self, entry: PlaceEvidenceEntry
     ) -> Optional[PlaceEvidenceEntry]:
         """同坐标 + 同角色 的既有条目视为同一真实实体（ER 原则）。"""
-        if not entry.geometry_ref:
+        coordinate = self._coordinate_xy(entry)
+        if coordinate is None:
             return None
-        try:
-            from app.spatial.grounding.coordinate_identity import same_coordinate
-        except Exception:  # noqa: BLE001
-            return None
-        for existing in self.entries:
-            if existing.role != entry.role:
-                continue
-            if existing.geometry_ref and same_coordinate(
-                existing.geometry_ref, entry.geometry_ref, tol=1e-5
-            ):
-                return existing
+        tolerance = 1e-5
+        cell_x, cell_y = self._coordinate_cell(
+            coordinate,
+            tolerance=tolerance,
+        )
+        for delta_x in (-1, 0, 1):
+            for delta_y in (-1, 0, 1):
+                for x, y, existing in self._coordinate_index.get(
+                    (entry.role, cell_x + delta_x, cell_y + delta_y),
+                    (),
+                ):
+                    if (
+                        abs(x - coordinate[0]) < tolerance
+                        and abs(y - coordinate[1]) < tolerance
+                    ):
+                        return existing
         return None
 
     @staticmethod
     def _merge_into(target: PlaceEvidenceEntry, source: PlaceEvidenceEntry) -> None:
         """Merge ``source`` into ``target``, accumulating evidence (ER merge)."""
         target.aliases = list(dict.fromkeys([*target.aliases, *source.aliases]))
+        source_name = str(source.canonical_name or "").strip()
+        target_name = str(target.canonical_name or "").strip()
+        if source_name and source_name != target_name:
+            target.aliases = list(dict.fromkeys([*target.aliases, source_name]))
+        if not target_name and source_name:
+            target.canonical_name = source_name
         target.entity_refs = list(dict.fromkeys([*target.entity_refs, *source.entity_refs]))
         target.entity_types = list(dict.fromkeys([*target.entity_types, *source.entity_types]))
         target.feature_bsm = target.feature_bsm or source.feature_bsm

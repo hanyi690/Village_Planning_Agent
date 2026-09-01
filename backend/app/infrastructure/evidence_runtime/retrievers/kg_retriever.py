@@ -136,6 +136,43 @@ async def retrieve_from_kg(
     except Exception as e:
         logger.warning("[kg_retriever] cognition failed: %s", e)
 
+    # Generic cognition support is queried through the injected world-model
+    # adapter.  It contributes identity/representation lineage only; source
+    # geometry remains a DATA resource and is never copied into this fact.
+    try:
+        from app.infrastructure.context_runtime.manager import get_cached_context
+
+        context = get_cached_context(session_id)
+        world_model = getattr(getattr(context, "ports", None), "world_model", None)
+        if world_model is not None:
+            text = str(query or "").strip().casefold()
+            for entity in world_model.find_entities(limit=12):
+                identity = str(entity.get("entity_identity") or "")
+                if text and text not in identity.casefold() and text not in str(entity).casefold():
+                    continue
+                parts = entity.get("parts") or []
+                statement = (
+                    f"认知世界实体 {identity or entity.get('entity_ref', '')} "
+                    f"包含 {len(parts)} 个源部件"
+                )
+                facts.append(EvidenceFact(
+                    statement=statement,
+                    confidence=0.65,
+                    source_refs=[f"{_source_root(session_id)}#world:{entity.get('entity_ref', '')}"],
+                    fact_type="kg_world_entity",
+                    fields={
+                        "evidence_role": "entity_identity",
+                        "source_kind": "kg",
+                        "entity_ref": str(entity.get("entity_ref") or ""),
+                        "entity_identity": identity,
+                        "part_count": str(len(parts)),
+                        "status": str(entity.get("status") or "unresolved"),
+                    },
+                    support_relation="kg_world_model",
+                ))
+    except Exception as exc:
+        logger.debug("[kg_retriever] world model support unavailable: %s", type(exc).__name__)
+
     topology_facts: List[str] = []
     stage_value = str(stage or "").strip().upper()
     stage_layer = {

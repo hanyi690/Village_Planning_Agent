@@ -20,7 +20,7 @@ from langgraph.prebuilt import InjectedState
 
 from .shared import budget_check, resolve_bundle, tool_reply
 
-_SESSION_SOURCES = {"village_data", "task_description", "constraints", "upload"}
+_SESSION_SOURCES = {"village_data", "upload"}
 
 
 def _rag_service():
@@ -42,7 +42,10 @@ def _query_chars(query: str) -> List[str]:
 
 
 async def _bundle_documents(session_id: str, bundle: Any) -> List[Dict[str, Any]]:
-    from app.data.catalog.session_documents import load_session_documents
+    from app.data.catalog.session_documents import (
+        evidence_documents,
+        load_session_documents,
+    )
 
     refs = list(getattr(bundle.documents, "document_refs", []) or [])
     allowed = {
@@ -53,8 +56,11 @@ async def _bundle_documents(session_id: str, bundle: Any) -> List[Dict[str, Any]
         )
         for ref in refs
     }
-    documents = await load_session_documents(
-        session_id, str(getattr(bundle, "village_name", "") or "")
+    documents = evidence_documents(
+        await load_session_documents(
+            session_id,
+            str(getattr(bundle, "village_name", "") or ""),
+        )
     )
     return [
         document for document in documents
@@ -183,7 +189,8 @@ async def rag_search(
 ) -> str:
     """在会话文本清单内检索相关内容。
 
-    ``source`` 限定来源（village_data/task_description/constraints/upload），
+    ``source`` 仅限定已准入现状证据（village_data/upload）；规划任务与
+    约束属于控制通道，规划产物不得作为 RAG 事实源。
     ``name`` 限定文档名（子串）。未过滤时综合向量库语义检索
     与清单关键词兜底。返回带来源与摘要片段的结果列表。
     """

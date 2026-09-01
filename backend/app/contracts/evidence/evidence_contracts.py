@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.contracts.artifacts.contract_meta import ContractMeta
 from app.contracts.artifacts.provenance import Provenance
 from app.contracts.evidence.evidence_packet_contracts import EvidencePacket
 from app.contracts.evidence.requirement_contracts import EvidenceCoverage, EvidenceRequirement
+from app.contracts.evidence.retrieval_contracts import (
+    EvidenceRetrievalOutcome,
+    EvidenceRetrievalReceipt,
+)
 
 
 class ExplorationRequest(BaseModel):
@@ -54,6 +61,7 @@ class EvidenceSource(BaseModel):
 
 
 class EvidenceFact(BaseModel):
+    fact_id: str = ""
     statement: str
     confidence: float = 1.0
     source_refs: list[str] = []
@@ -72,6 +80,58 @@ class EvidenceFact(BaseModel):
     source_kind: str = ""
     spatial_granularity: str = "none"
     planning_use: str = "context"
+
+    @model_validator(mode="after")
+    def _stable_fact_id(self) -> "EvidenceFact":
+        if self.fact_id:
+            return self
+        material = {
+            "statement": self.statement,
+            "source_refs": sorted(set(self.source_refs)),
+            "spatial_refs": sorted(set(self.spatial_refs)),
+            "fact_type": self.fact_type,
+            "fields": self.fields,
+            "feature_bsm": self.feature_bsm,
+            "related_parcel_bsms": sorted(set(self.related_parcel_bsms)),
+            "evidence_span": self.evidence_span,
+            "source_locator": self.source_locator,
+            "support_relation": self.support_relation,
+            "support_relations": sorted(set(self.support_relations)),
+            "related_fact_refs": sorted(set(self.related_fact_refs)),
+            "evidence_role": self.evidence_role,
+            "source_kind": self.source_kind,
+            "spatial_granularity": self.spatial_granularity,
+            "planning_use": self.planning_use,
+        }
+        digest = hashlib.sha256(
+            json.dumps(
+                material,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()[:24]
+        token = re.sub(
+            r"[^a-z0-9_]+",
+            "_",
+            str(self.fact_type or "statement").casefold(),
+        ).strip("_") or "statement"
+        if self.fact_type == "external_map_observation":
+            provider = re.sub(
+                r"[^a-z0-9_]+",
+                "_",
+                str(self.fields.get("provider") or "provider").casefold(),
+            ).strip("_") or "provider"
+            stage = re.sub(
+                r"[^a-z0-9_]+",
+                "_",
+                str(self.fields.get("stage") or "stage").casefold(),
+            ).strip("_") or "stage"
+            self.fact_id = f"evidence.observation.{provider}.{stage}.{digest}"
+        else:
+            self.fact_id = f"evidence.fact.{token}.{digest}"
+        return self
 
 
 class EvidenceConflict(BaseModel):
@@ -119,6 +179,8 @@ class ExplorationResult(BaseModel):
     spatial_cognition: "SpatialCognitionEvidence | None" = None
     evidence_packet: EvidencePacket | None = None
     coverage: EvidenceCoverage | None = None
+    outcome: EvidenceRetrievalOutcome | None = None
+    receipt: EvidenceRetrievalReceipt | None = None
 
 
 __all__ = [

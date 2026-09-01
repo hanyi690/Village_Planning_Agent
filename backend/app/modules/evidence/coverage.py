@@ -151,7 +151,12 @@ def _claims(result: ExplorationResult) -> tuple[EvidenceClaim, ...]:
                         )
                     ),
                     spatial_refs=(bsm,),
-                    authority="authoritative_geometry" if candidate.geometry_authority == "bundle" else "advisory",
+                    authority=(
+                        "authoritative_geometry"
+                        if candidate.geometry_authority
+                        in {"bundle", "data_resource_catalog"}
+                        else "advisory"
+                    ),
                     snapshot_refs=(packet.bundle_snapshot_digest,) if packet.bundle_snapshot_digest else (),
                     confidence=max(
                         0.0,

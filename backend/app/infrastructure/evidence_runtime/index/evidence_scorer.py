@@ -66,7 +66,15 @@ def score_candidate(
         entry, hints=hints, context=context
     )
 
-    evidence["within_bundle"] = 0.5 if entry.source_bsms else 0.0
+    # Keep the historical dimension name for compatibility, but treat a
+    # DATA-catalog resource/feature as equally source-backed.  Generic GIS
+    # inputs must not be down-scored merely because they have no BSM.
+    generic_source_backed = bool(
+        getattr(entry, "source_feature_id", None)
+        or str(getattr(entry, "geometry_ref", "") or "").startswith("resource:")
+        or "data_resource_catalog" in (getattr(entry, "provenance", None) or [])
+    )
+    evidence["within_bundle"] = 0.5 if entry.source_bsms or generic_source_backed else 0.0
 
     evidence["geometry_near_anchor"] = _geometry_near_anchor_score(
         entry,

@@ -10,11 +10,44 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from app.infrastructure.context_runtime.table_renderer import build_bounded_table
+from app.infrastructure.context_runtime.table_renderer import render_table
 
 DEFAULT_MAX_ROWS = 32
 DEFAULT_MAX_COLUMNS = 12
 DEFAULT_MAX_CHARS = 6200
+DEFAULT_MAX_CELL_CHARS = 600
+DEFAULT_MAX_LIST_ITEMS = 16
+
+
+def _bounded_cell(value: Any) -> Any:
+    if value is None or isinstance(value, (int, float, bool)):
+        return value
+    if isinstance(value, str):
+        if len(value) <= DEFAULT_MAX_CELL_CHARS:
+            return value
+        omitted = len(value) - DEFAULT_MAX_CELL_CHARS
+        return value[:DEFAULT_MAX_CELL_CHARS] + f"…[{omitted} chars omitted]"
+    if isinstance(value, Mapping):
+        raise ValueError(
+            "LLM table cells cannot contain mappings; project explicit columns"
+        )
+    if isinstance(value, (list, tuple, set, frozenset)):
+        values = list(value)
+        if any(
+            isinstance(item, (Mapping, list, tuple, set, frozenset))
+            for item in values
+        ):
+            raise ValueError("LLM table cells must be scalar or flat scalar lists")
+        bounded = [
+            _bounded_cell(item)
+            for item in values[:DEFAULT_MAX_LIST_ITEMS]
+        ]
+        if len(values) > DEFAULT_MAX_LIST_ITEMS:
+            bounded.append(
+                f"…[{len(values) - DEFAULT_MAX_LIST_ITEMS} items omitted]"
+            )
+        return bounded
+    return _bounded_cell(str(value))
 
 
 def build_llm_table(
@@ -28,14 +61,32 @@ def build_llm_table(
     """Validate columns and return a bounded prompt table."""
 
     names = [str(column).strip() for column in columns]
-    if not names or len(names) > max_columns or len(set(names)) != len(names):
+    hard_columns = min(DEFAULT_MAX_COLUMNS, max(1, int(max_columns)))
+    hard_rows = min(DEFAULT_MAX_ROWS, max(1, int(max_rows)))
+    hard_chars = min(DEFAULT_MAX_CHARS, max(128, int(max_chars)))
+    if not names or len(names) > hard_columns or len(set(names)) != len(names):
         raise ValueError("LLM table columns must be unique and within the column budget")
-    bounded, rendered = build_bounded_table(
-        names,
-        rows,
-        max_rows=max_rows,
-        max_chars=max_chars,
-    )
+    normalized: list[dict[str, Any]] = []
+    for raw_row in rows[:hard_rows]:
+        if not isinstance(raw_row, Mapping):
+            raise ValueError("LLM table rows must be mappings")
+        normalized.append({
+            name: _bounded_cell(raw_row.get(name))
+            for name in names
+        })
+    bounded: list[dict[str, Any]] = []
+    rendered = render_table(names, bounded)
+    for row in normalized:
+        candidate = [*bounded, row]
+        candidate_table = render_table(names, candidate)
+        if len(candidate_table) > hard_chars:
+            break
+        bounded = candidate
+        rendered = candidate_table
+    if normalized and not bounded:
+        raise ValueError(
+            "one LLM table row exceeds the global rendered character budget"
+        )
     return bounded, rendered
 
 
@@ -75,6 +126,7 @@ __all__ = [
     "DEFAULT_MAX_ROWS",
     "DEFAULT_MAX_COLUMNS",
     "DEFAULT_MAX_CHARS",
+    "DEFAULT_MAX_CELL_CHARS",
     "build_llm_table",
     "validate_flat_llm_rows",
 ]

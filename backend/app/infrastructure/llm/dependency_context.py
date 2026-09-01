@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from collections.abc import Collection
 import json
-from typing import Any
+from typing import Any, Mapping
 
 from app.infrastructure.context_runtime.table_renderer import build_bounded_table
 from app.infrastructure.reports.report_store import ReportStore
@@ -53,8 +53,8 @@ class DependencyContext:
             _, decision_table = build_bounded_table(
                 decision_columns,
                 _decision_rows(selected_artifacts),
-                max_rows=48,
-                max_chars=12000,
+                max_rows=32,
+                max_chars=6200,
             )
             lines = [
                 "【跨依赖去重后的 L2 abstract decisions】",
@@ -79,8 +79,8 @@ class DependencyContext:
             _, claim_table = build_bounded_table(
                 claim_columns,
                 _claim_rows(selected_artifacts),
-                max_rows=48,
-                max_chars=12000,
+                max_rows=32,
+                max_chars=6200,
             )
             lines = [
                 "【跨依赖去重后的 L3 rough claims】",
@@ -125,7 +125,7 @@ class DependencyContext:
             ),
             allowed_dependencies,
             max_rows=32,
-            max_chars=12000,
+            max_chars=6200,
         )
         lines = [
             f"消费维度：{self.dimension_key}（L{self.layer}）",
@@ -235,14 +235,22 @@ def _decision_rows(artifacts: list[DependencyArtifact]) -> list[dict[str, Any]]:
     for artifact in artifacts:
         projected = _decision_projection(artifact.instruction)
         if not isinstance(projected, dict):
-            continue
+            raise ValueError(
+                f"typed L2 dependency is not a row collection: {artifact.dimension_key}"
+            )
         for collection, id_field in _DECISION_ID_FIELDS.items():
             items = projected.get(collection)
             if not isinstance(items, list):
-                continue
+                raise ValueError(
+                    f"typed L2 dependency collection is not a list: "
+                    f"{artifact.dimension_key}.{collection}"
+                )
             for item in items:
                 if not isinstance(item, dict):
-                    continue
+                    raise ValueError(
+                        f"typed L2 dependency row is not an object: "
+                        f"{artifact.dimension_key}.{collection}"
+                    )
                 item_id = str(item.get(id_field) or "").strip()
                 marker = item_id or json.dumps(
                     item,
@@ -301,19 +309,20 @@ def _claim_projection(value: Any) -> list[dict[str, Any]]:
     """Keep only rough claim semantics from same-layer L3 artifacts."""
 
     if not isinstance(value, dict):
-        return []
+        raise ValueError("typed L3 dependency is not an object")
     raw_claims = value.get("claims")
     if not isinstance(raw_claims, list):
-        return []
-    return [
-        {
+        raise ValueError("typed L3 dependency claims is not a row list")
+    result: list[dict[str, Any]] = []
+    for claim in raw_claims:
+        if not isinstance(claim, dict):
+            raise ValueError("typed L3 dependency claim row is not an object")
+        result.append({
             str(key): item
             for key, item in claim.items()
             if str(key) in _CLAIM_FIELDS
-        }
-        for claim in raw_claims
-        if isinstance(claim, dict)
-    ]
+        })
+    return result
 
 
 def _claim_rows(artifacts: list[DependencyArtifact]) -> list[dict[str, Any]]:
@@ -415,8 +424,63 @@ def _semantic_instruction(value: dict[str, Any] | list[Any]) -> dict[str, Any] |
     }
 
 
-async def load_dependency_context(session_id: str, dimension_key: str, config: Any, layer: int) -> DependencyContext:
+async def load_dependency_context(
+    session_id: str,
+    dimension_key: str,
+    config: Any,
+    layer: int,
+    *,
+    state: Mapping[str, Any] | None = None,
+) -> DependencyContext:
     keys = direct_dependency_keys(config)
+    if state is not None:
+        from app.config import get_dimension_layer
+        from app.contracts.artifacts.ref import ArtifactRef
+        from app.contracts.workflow.dimension_product_contracts import (
+            dimension_product_key,
+        )
+        from app.infrastructure.artifacts.dimension_runtime import (
+            load_dimension_product,
+        )
+
+        artifacts: list[DependencyArtifact] = []
+        missing: list[str] = []
+        refs = dict(state.get("artifact_refs") or {})
+        for key in keys:
+            dependency_layer = get_dimension_layer(key)
+            if dependency_layer not in {1, 2, 3}:
+                missing.append(key)
+                continue
+            artifact_key = dimension_product_key(dependency_layer, key)
+            product = load_dimension_product(
+                state,
+                layer=dependency_layer,
+                dimension_key=key,
+            )
+            if product is None or product.status != "completed":
+                missing.append(key)
+                continue
+            descriptor = ArtifactRef.model_validate(refs.get(artifact_key))
+            artifacts.append(DependencyArtifact(
+                dimension_key=key,
+                layer=dependency_layer,
+                version=1,
+                report_id=descriptor.digest,
+                summary="",
+                instruction=_semantic_instruction(product.product),
+                instruction_status=product.status,
+            ))
+        return DependencyContext(
+            dimension_key,
+            layer,
+            keys,
+            tuple(artifacts),
+            tuple(missing),
+        )
+
+    # Compatibility-only query path for callers that are not workflow
+    # producers. Production L1/L2/L3 workers always provide ``state`` and
+    # therefore consume exact CAS refs rather than ReportStore latest.
     records = await ReportStore.get_instance().get_latest_dependency_records(session_id, keys)
     artifacts: list[DependencyArtifact] = []
     missing: list[str] = []

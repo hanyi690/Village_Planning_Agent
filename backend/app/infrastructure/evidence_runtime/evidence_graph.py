@@ -2732,12 +2732,11 @@ def _identity_for_candidate(
         bsm = source_bsm
         bsm_kind = "source" if _is_bsm(source_bsm) else "unknown"
     else:
-        raw = str(
-            getattr(candidate, "entity_ref", "")
-            or getattr(candidate, "canonical_name", "")
-        ).encode("utf-8")
-        bsm = f"synthetic:{hashlib.sha256(raw).hexdigest()[:16]}"
-        bsm_kind = "synthetic"
+        # A generic DATA feature has no cadastral identity.  Do not manufacture
+        # a ``synthetic:<hash>`` BSM: entity/resource/source-feature refs are
+        # the identity in this path and the empty BSM is intentional.
+        bsm = ""
+        bsm_kind = "unknown"
 
     admin_code = bsm[:12] if _is_bsm(bsm) else ""
     sequence_code = bsm[12:] if _is_bsm(bsm) else ""
@@ -2768,11 +2767,16 @@ def feature_ref_from_candidate(
 ) -> FeatureEvidenceRef:
     """Convert a resolver candidate to a non-geometric evidence reference."""
     identity = _identity_for_candidate(candidate, bundle_digest=bundle_digest)
-    geometry_ref = (
-        f"bundle://feature/{identity.bundle_feature_bsm}"
-        if getattr(candidate, "geometry_ref", None) and identity.bundle_feature_bsm
-        else None
-    )
+    candidate_geometry_ref = str(getattr(candidate, "geometry_ref", "") or "").strip()
+    if candidate_geometry_ref.startswith("resource:"):
+        geometry_ref = candidate_geometry_ref
+        geometry_authority = "data_resource_catalog"
+    elif candidate_geometry_ref and identity.bundle_feature_bsm:
+        geometry_ref = f"bundle://feature/{identity.bundle_feature_bsm}"
+        geometry_authority = "bundle"
+    else:
+        geometry_ref = None
+        geometry_authority = "none"
     raw_score = float(getattr(candidate, "score", 0.0) or 0.0)
     evidence_dimensions = {
         str(key): float(value)
@@ -2826,7 +2830,7 @@ def feature_ref_from_candidate(
         identity=identity,
         entity_refs=[getattr(candidate, "entity_ref", "")] if getattr(candidate, "entity_ref", "") else [],
         geometry_ref=geometry_ref,
-        geometry_authority="bundle" if geometry_ref else "none",
+        geometry_authority=geometry_authority,
         relation_refs=list(dict.fromkeys(getattr(candidate, "relation_refs", [])))[:12],
         related_parcel_bsms=list(
             dict.fromkeys(
@@ -2854,6 +2858,9 @@ def _bundle_feature_records(context: Any):
     workspace = getattr(context, "workspace", None)
     if workspace is None:
         return
+    from app.data.model.layer_registry import get_planned_output_bundle_keys
+
+    planned_output_layers = get_planned_output_bundle_keys()
     for group_name in ("points", "lines", "polygons"):
         group = getattr(workspace, group_name, None)
         if group is None:
@@ -2868,6 +2875,8 @@ def _bundle_feature_records(context: Any):
                 "landuse_current",
             ]
         for layer_name in layer_names:
+            if str(layer_name) in planned_output_layers:
+                continue
             for feature in list(group.get(layer_name) or []):
                 yield group_name, str(layer_name), feature
 
@@ -2905,6 +2914,10 @@ def _geometry_ref_for_bundle_feature(
         if str(getattr(record[2], "bsm", "") or "").strip() == bsm
     )
     for group_name, layer_name, feature in records:
+        from app.data.model.layer_registry import get_planned_output_bundle_keys
+
+        if str(layer_name) in get_planned_output_bundle_keys():
+            continue
         raw_geometry = getattr(feature, "geometry", None)
         try:
             from shapely.geometry import shape
@@ -2960,13 +2973,142 @@ def _geometry_ref_for_bundle_feature(
     return None
 
 
+def _geometry_ref_for_data_resource(
+    context: Any,
+    feature_ref: FeatureEvidenceRef,
+) -> GeometryRef | None:
+    """Resolve a generic DATA resource reference at the GROUND boundary."""
+
+    resource_ref = str(
+        getattr(feature_ref, "resource_ref", "")
+        or getattr(feature_ref, "geometry_ref", "")
+        or ""
+    ).strip()
+    if not resource_ref.startswith("resource:"):
+        return None
+    catalog = getattr(context, "data_resource_catalog", None)
+    if catalog is None:
+        return None
+    snapshot = getattr(catalog, "snapshot", None)
+    if snapshot is None:
+        return None
+    try:
+        from app.data.admission import (
+            assert_current_world_catalog,
+            build_admission_index,
+        )
+
+        assert_current_world_catalog(snapshot)
+        admission_index = build_admission_index(snapshot)
+    except (TypeError, ValueError):
+        return None
+    if resource_ref not in admission_index.resource_refs:
+        return None
+    try:
+        geometry_payload = catalog.resolve_geometry(resource_ref=resource_ref)
+    except Exception:
+        geometry_payload = None
+    if not geometry_payload:
+        return None
+    try:
+        from shapely.geometry import shape
+
+        geometry = shape(geometry_payload)
+        if geometry.is_empty or not geometry.is_valid:
+            return None
+    except Exception:
+        return None
+    feature = None
+    identity = getattr(feature_ref, "identity", None)
+    source_feature_id_value = str(
+        getattr(identity, "source_feature_id", "") or ""
+    )
+    source_dataset_ref_value = str(
+        getattr(identity, "source_dataset_ref", "") or ""
+    )
+    try:
+        feature = catalog.get_feature(
+            source_feature_id_value,
+            dataset_ref=source_dataset_ref_value,
+        )
+    except Exception:
+        feature = None
+    if feature is None:
+        return None
+    source_feature_id = str(
+        getattr(getattr(feature_ref, "identity", None), "source_feature_id", "")
+        or getattr(feature, "source_feature_ref", "")
+        or ""
+    )
+    source_layer = str(getattr(feature, "layer_ref", "") or "")
+    geometry_kind = str(getattr(feature, "geometry_kind", "unknown") or "unknown")
+    source_crs = str(getattr(feature, "source_crs", "EPSG:4326") or "EPSG:4326")
+    source_digest = str(getattr(feature, "source_feature_digest", "") or "")
+    representations = []
+    try:
+        requested_reps = {
+            str(value).strip()
+            for value in (getattr(feature_ref, "representation_refs", None) or [])
+            if str(value).strip()
+        }
+        representations = [
+            item
+            for item in list(catalog.representations_for_feature(
+                source_feature_id,
+                dataset_ref=source_dataset_ref_value,
+            ) or [])
+            if not requested_reps
+            or str(getattr(item, "representation_ref", "") or "") in requested_reps
+        ]
+    except Exception:
+        representations = []
+    representation = representations[0] if representations else None
+    snapshot_id = str(getattr(snapshot, "snapshot_id", "") or "")
+    snapshot_digest = str(getattr(snapshot, "digest", "") or "")
+    source_refs = list(
+        dict.fromkeys(
+            value
+            for value in (
+                resource_ref,
+                f"data:{source_feature_id}" if source_feature_id else "",
+                f"data_snapshot:{snapshot_id}" if snapshot_id else "",
+                *(getattr(feature_ref, "provenance_refs", None) or []),
+                *(getattr(feature_ref, "l1_fact_refs", None) or []),
+            )
+            if str(value).strip()
+        )
+    )
+    return GeometryRef(
+        wkt=geometry.wkt,
+        crs=str(getattr(representation, "normalized_crs", "") or getattr(feature, "normalized_crs", "") or source_crs),
+        source_crs=source_crs,
+        normalized_crs=str(getattr(representation, "normalized_crs", "") or getattr(feature, "normalized_crs", "") or source_crs),
+        source_snapshot_ref=str(getattr(representation, "source_snapshot_ref", "") or snapshot_id),
+        content_digest=str(getattr(representation, "content_digest", "") or source_digest),
+        bbox=tuple(float(value) for value in geometry.bounds),
+        source_feature_id=source_feature_id,
+        representation_ref=str(getattr(representation, "representation_ref", "") or ""),
+        resource_ref=resource_ref,
+        l1_fact_refs=list(
+            dict.fromkeys(
+                str(value)
+                for value in (getattr(feature_ref, "l1_fact_refs", None) or [])
+                if str(value).strip()
+            )
+        ),
+        source_ref=resource_ref,
+        source_refs=source_refs,
+        feature_kind=f"{geometry_kind}:{source_layer}" if source_layer else geometry_kind,
+    )
+
+
 def geometry_refs_from_evidence_packet(
     context: Any,
     packet: EvidencePacket | None,
     *,
     max_refs: int = _MAX_CANDIDATES,
 ) -> list[GeometryRef]:
-    """Resolve bounded packet refs to independent bundle-owned geometries."""
+    """Resolve bounded packet refs to independent source-owned geometries."""
     if packet is None:
         return []
     refs: list[GeometryRef] = []
@@ -2974,12 +3116,17 @@ def geometry_refs_from_evidence_packet(
     for feature_ref in list(getattr(packet, "candidate_refs", None) or [])[:max_refs]:
         identity = getattr(feature_ref, "identity", None)
         bsm = str(getattr(identity, "bundle_feature_bsm", "") or "").strip()
-        if not bsm or bsm in seen:
+        geometry_ref = str(getattr(feature_ref, "geometry_ref", "") or "").strip()
+        dedupe_key = geometry_ref or bsm
+        if not dedupe_key or dedupe_key in seen:
             continue
-        resolved = _geometry_ref_for_bundle_feature(context, feature_ref)
+        if getattr(feature_ref, "geometry_authority", "bundle") == "data_resource_catalog":
+            resolved = _geometry_ref_for_data_resource(context, feature_ref)
+        else:
+            resolved = _geometry_ref_for_bundle_feature(context, feature_ref)
         if resolved is None:
             continue
-        seen.add(bsm)
+        seen.add(dedupe_key)
         refs.append(resolved)
     return refs
 
@@ -3507,9 +3654,11 @@ def _feature_ref_from_kg_entity(
         admin_code = bsm[:12]
         sequence_code = bsm[12:]
     else:
-        raw = str(entity.entity_ref).encode("utf-8")
-        bsm = f"synthetic:{hashlib.sha256(raw).hexdigest()[:16]}"
-        bsm_kind = "synthetic"
+        # KG-only entities are not cadastral features.  Their stable identity
+        # remains ``entity_ref``; never turn it into a synthetic BSM merely to
+        # satisfy the legacy BundleFeatureIdentity shape.
+        bsm = ""
+        bsm_kind = "unknown"
         admin_code = ""
         sequence_code = ""
     return FeatureEvidenceRef(
@@ -3734,25 +3883,46 @@ def append_feature_identity_facts(
 
     ``EvidencePacket`` is the detailed graph view, while ``EvidenceBundle`` is
     the answer-facing fact view.  Keeping the identity in both views avoids a
-    caller having to understand packet internals just to answer ``某村祠堂的
-    BSM``.  The fact carries only bundle refs and identity fields; coordinates
-    remain behind ``geometry_ref`` and the bundle authority boundary.
+    caller having to understand packet internals just to answer a place query.
+    Bundle facts carry BSM refs when a real BSM exists; generic DATA facts carry
+    source/entity/resource refs instead. Coordinates remain behind
+    ``geometry_ref`` and the source authority boundary.
     """
     facts = list(bundle.facts)
-    seen = {
-        (fact.fact_type, str(fact.fields.get("bundle_feature_bsm", "")))
-        for fact in facts
-    }
+
+    def _fact_identity_key(fact: Any) -> tuple[str, str]:
+        fields = dict(getattr(fact, "fields", None) or {})
+        bsm = str(fields.get("bundle_feature_bsm", "") or "").strip()
+        if bsm:
+            return ("bundle_feature_identity", bsm)
+        generic = str(
+            fields.get("entity_ref")
+            or fields.get("source_feature_id")
+            or getattr(fact, "source_locator", "")
+            or ""
+        ).strip()
+        return ("source_feature_identity", generic)
+
+    seen = {_fact_identity_key(fact) for fact in facts}
     existing_indexes = {
-        (fact.fact_type, str(fact.fields.get("bundle_feature_bsm", ""))): index
-        for index, fact in enumerate(facts)
+        _fact_identity_key(fact): index for index, fact in enumerate(facts)
     }
     for ref in packet.candidate_refs[:_MAX_CANDIDATES]:
         identity = ref.identity
         bsm = str(identity.bundle_feature_bsm or "").strip()
-        if not bsm:
+        source_feature_id = str(identity.source_feature_id or "").strip()
+        entity_ref = next(
+            (str(value).strip() for value in (ref.entity_refs or []) if str(value).strip()),
+            "",
+        )
+        generic_identity = entity_ref or source_feature_id or str(ref.geometry_ref or "").strip()
+        is_generic = not bsm
+        if not bsm and not generic_identity:
             continue
-        key = ("bundle_feature_identity", bsm)
+        key = (
+            "source_feature_identity" if is_generic else "bundle_feature_identity",
+            generic_identity if is_generic else bsm,
+        )
         if key in seen:
             index = existing_indexes.get(key)
             existing = facts[index] if index is not None else None
@@ -3791,19 +3961,34 @@ def append_feature_identity_facts(
         descriptor = semantic_name or feature_kind
         if role and role not in descriptor:
             descriptor = f"{descriptor}（{role}）"
-        statement = f"{descriptor} BSM 为 {bsm}"
+        statement = (
+            f"{descriptor} 来源要素为 {generic_identity}"
+            if is_generic
+            else f"{descriptor} BSM 为 {bsm}"
+        )
         if related_parcels:
             statement += "；关联地块 BSM 为 " + ", ".join(related_parcels)
         source_refs = list(
             dict.fromkeys(
                 [
                     *ref.provenance_refs,
+                    *([str(ref.geometry_ref)] if ref.geometry_ref else []),
                     *( [f"bundle:snapshot:{identity.bundle_snapshot_digest}"]
                        if identity.bundle_snapshot_digest else [] ),
                 ]
             )
         )
         spatial_refs = [ref.geometry_ref] if ref.geometry_ref else []
+        fact_fields = {
+            "bundle_feature_bsm": bsm,
+            "canonical_name": semantic_name,
+            "entity_type": str(identity.entity_type or ""),
+            "role": role,
+            "source_feature_id": source_feature_id,
+            "entity_ref": entity_ref,
+            "source_layer": str(identity.source_layer or ""),
+            "geometry_authority": str(ref.geometry_authority or "bundle"),
+        }
         facts.append(
             EvidenceFact(
                 statement=statement,
@@ -3813,24 +3998,16 @@ def append_feature_identity_facts(
                 ),
                 source_refs=source_refs,
                 spatial_refs=spatial_refs,
-                fact_type="bundle_feature_identity",
+                fact_type=("source_feature_identity" if is_generic else "bundle_feature_identity"),
                 feature_bsm=bsm,
                 related_parcel_bsms=related_parcels,
-                fields={
-                    "bundle_feature_bsm": bsm,
-                    "canonical_name": semantic_name,
-                    "entity_type": str(identity.entity_type or ""),
-                    "role": role,
-                    "source_feature_id": str(identity.source_feature_id or ""),
-                    "source_layer": str(identity.source_layer or ""),
-                    "geometry_authority": str(ref.geometry_authority or "bundle"),
-                },
+                fields=fact_fields,
                 evidence_span=statement,
                 source_locator=ref.geometry_ref or "",
-                support_relation="bundle_identity",
-                status="verified" if identity.bsm_kind == "source" else "needs_review",
+                support_relation=("data_identity" if is_generic else "bundle_identity"),
+                status=("verified" if identity.bsm_kind == "source" else "observed"),
                 evidence_role="location_binding",
-                source_kind="bundle_feature",
+                source_kind=("data_resource" if is_generic else "bundle_feature"),
                 spatial_granularity="feature",
                 planning_use="grounding",
             )
@@ -3846,6 +4023,34 @@ def append_feature_identity_facts(
         )
     else:
         sources = list(bundle.sources)
+
+    # Generic resource references are first-class evidence sources.  Keep them
+    # visible in the bounded source table instead of leaving them only inside a
+    # fact's lineage list.
+    source_keys = {
+        str(source.reference or "").strip()
+        for source in sources
+        if str(source.reference or "").strip()
+    }
+    for fact in facts:
+        if fact.fact_type != "source_feature_identity":
+            continue
+        for source_ref in fact.source_refs:
+            source_ref = str(source_ref or "").strip()
+            if not source_ref or source_ref in source_keys:
+                continue
+            sources.append(EvidenceSource(
+                source_type=(
+                    "gis_layer"
+                    if source_ref.startswith(("resource:", "data:"))
+                    else "context"
+                ),
+                reference=source_ref,
+                confidence=float(fact.confidence or 0.0),
+                evidence_role="location_binding",
+                authority="source",
+            ))
+            source_keys.add(source_ref)
 
     existing_relations = {
         str(fact.fields.get("relation_id", ""))
