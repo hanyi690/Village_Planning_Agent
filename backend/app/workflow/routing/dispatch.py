@@ -36,6 +36,7 @@ class DispatchDiagnosticCode(StrEnum):
     BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
     INVALID_ATTEMPT = "INVALID_ATTEMPT"
     INVALID_BUDGET = "INVALID_BUDGET"
+    UPSTREAM_GATE_BLOCKED = "UPSTREAM_GATE_BLOCKED"
 
 
 class DispatchProposal(BaseModel):
@@ -193,6 +194,26 @@ class DispatchPolicy(BaseModel):
         ),
         "deliver": ("execution_result", "validation_certificate", "final_manifest", "execution_plan"),
     }
+    # A stage artifact is not consumable merely because its immediate parent
+    # ref exists.  These durable gate refs form the dependency tree that
+    # protects both normal routing and stale-checkpoint replay.
+    REQUIRED_UPSTREAM_GATES: ClassVar[dict[str, tuple[str, ...]]] = {
+        "l1_worker": ("data", "kg", "evidence"),
+        "l2_worker": ("data", "kg", "evidence", "l1"),
+        "l3_worker": ("data", "kg", "evidence", "l1", "l2"),
+        "target_projection": ("data", "kg", "evidence", "l1", "l2", "l3"),
+        "ground": ("data", "kg", "evidence", "l1", "l2", "l3", "target_projection"),
+        "select": ("data", "kg", "evidence", "l1", "l2", "l3", "target_projection", "ground"),
+        "execute": ("data", "kg", "evidence", "l1", "l2", "l3", "target_projection", "ground", "select"),
+        "validate": ("data", "kg", "evidence", "l1", "l2", "l3", "target_projection", "ground", "select"),
+        "reconcile": (
+            "data", "kg", "evidence", "l1", "l2", "l3", "target_projection", "ground", "select", "validate",
+        ),
+        "deliver": (
+            "data", "kg", "evidence", "l1", "l2", "l3", "target_projection", "ground", "select",
+            "validate", "reconcile",
+        ),
+    }
 
     def authorize(
         self,
@@ -270,6 +291,67 @@ class DispatchPolicy(BaseModel):
         for descriptor in resolved.values():
             if descriptor.digest not in parent_digests:
                 parent_digests.append(descriptor.digest)
+
+        required_gate_stages = self.REQUIRED_UPSTREAM_GATES.get(target, ())
+        if required_gate_stages:
+            try:
+                from app.workflow.stages.support import require_upstream_gates
+
+                require_upstream_gates(dict(state), required_gate_stages)
+            except Exception as exc:
+                return _reject(
+                    DispatchDiagnosticCode.UPSTREAM_GATE_BLOCKED,
+                    source,
+                    target,
+                    "required upstream gate chain is not consumable",
+                    details={"error": str(exc), "target_stage": target},
+                )
+
+        # Gate checks happen after ordinary parent resolution so diagnostics
+        # still identify a missing business artifact first.  Gate payloads
+        # are loaded from CAS; inline checkpoint values are deliberately not
+        # trusted here.
+        for upstream_stage in required_gate_stages:
+            gate_key = f"{upstream_stage}_gate"
+            gate_ref = refs.get(gate_key)
+            if gate_ref is None:
+                return _reject(
+                    DispatchDiagnosticCode.UPSTREAM_GATE_BLOCKED,
+                    source,
+                    target,
+                    f"required upstream gate {gate_key!r} is missing",
+                    details={"upstream_stage": upstream_stage, "gate_status": "missing"},
+                )
+            resolved.setdefault(gate_key, gate_ref)
+            try:
+                from app.workflow.state import load_root_gate
+
+                gate = load_root_gate(dict(state), upstream_stage)
+            except Exception as exc:
+                return _reject(
+                    DispatchDiagnosticCode.UPSTREAM_GATE_BLOCKED,
+                    source,
+                    target,
+                    f"required upstream gate {gate_key!r} cannot be loaded",
+                    details={"upstream_stage": upstream_stage, "gate_status": "invalid", "error": str(exc)},
+                )
+            pending = list(getattr(gate, "pending_requests", None) or [])
+            evidence = list(getattr(gate, "evidence_requests", None) or [])
+            route = str(getattr(gate, "feedback_route", None) or ("PASS" if gate.passed else "BLOCK"))
+            if not gate.passed or route not in {"", "PASS"} or pending or evidence:
+                return _reject(
+                    DispatchDiagnosticCode.UPSTREAM_GATE_BLOCKED,
+                    source,
+                    target,
+                    f"upstream gate {gate_key!r} is not consumable",
+                    details={
+                        "upstream_stage": upstream_stage,
+                        "gate_status": "pending" if (pending or evidence) else "failed",
+                        "gate_route": route,
+                        "pending_count": str(len(pending)),
+                        "evidence_count": str(len(evidence)),
+                    },
+                )
 
         attempt = proposal.attempt or (_retry_count(state, target) + 1)
         configured_attempts = state.get("max_attempts")

@@ -27,7 +27,14 @@ def _jsonable(value: Any) -> Any:
         value = value.model_dump(mode="json")
     if isinstance(value, dict):
         is_contract = "created_at" in value and any(
-            key in value for key in ("schema_version", "context_version", "artifact_id")
+            key in value
+            for key in (
+                "schema_version",
+                "context_version",
+                "artifact_id",
+                "dataset_ref",
+                "snapshot_id",
+            )
         )
         is_provenance = all(
             key in value for key in ("source", "run_id", "module", "timestamp")

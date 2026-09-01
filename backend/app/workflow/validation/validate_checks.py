@@ -94,6 +94,7 @@ def _wkt_is_valid(wkt: str) -> bool:
 
 def _target_lineage(entry: Any) -> list[str]:
     values = (
+        getattr(entry, "target_id", ""),
         getattr(entry, "derived_from_zone_target", ""),
         getattr(entry, "derived_from_target", ""),
         getattr(entry, "project_ref", ""),
@@ -175,8 +176,11 @@ def _evidence_digest(*parts: Any) -> str:
 
 
 def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[ValidationCheck]:
-    """Check no planned parcel overlaps a prohibited constraint polygon."""
-    if not (getattr(planned_state, "parcels", None) or []):
+    """Check planned spatial outputs against prohibited constraints."""
+    planned_entries = list(getattr(planned_state, "parcels", None) or []) + list(
+        getattr(planned_state, "features", None) or []
+    )
+    if not planned_entries:
         return [
             _check(
                 "hard_constraints",
@@ -202,7 +206,7 @@ def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[Va
             )
         ]
     findings: list[ValidationCheck] = []
-    for parcel in planned_state.parcels or []:
+    for parcel in planned_entries:
         # A split remainder keeps the existing land use.  It is emitted so
         # the parcel partition remains complete, but it is not a new planning
         # decision and must not be rejected merely because the source parcel
@@ -231,7 +235,11 @@ def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[Va
             if candidate_id
             else "planned-parcel:unbound"
         )
-        wkt = (parcel.geometry or "").strip()
+        wkt = str(
+            getattr(parcel, "geometry", "")
+            or getattr(parcel, "geometry_wkt", "")
+            or ""
+        ).strip()
         if not wkt:
             findings.append(
                 _check(
@@ -655,11 +663,16 @@ def _planned_geoms(planned_state: Any) -> tuple[List[tuple], List[tuple]]:
     items: List[tuple] = []
     errors: List[tuple] = []
     for entry in (
-        (getattr(planned_state, "parcels", None) or [])
+        (getattr(planned_state, "features", None) or [])
+        + (getattr(planned_state, "parcels", None) or [])
         + (getattr(planned_state, "zones", None) or [])
         + (getattr(planned_state, "overlays", None) or [])
     ):
-        wkt = (getattr(entry, "geometry", "") or "").strip()
+        wkt = (
+            getattr(entry, "geometry", "")
+            or getattr(entry, "geometry_wkt", "")
+            or ""
+        ).strip()
         name = _entry_identity(entry)
         if not wkt:
             errors.append((name, "empty geometry"))
@@ -692,7 +705,8 @@ def check_topology(planned_state: Any) -> List[ValidationCheck]:
     validity_passed = not invalid and not empty and not parse_errors
     identity_by_name: dict[str, tuple[list[str], list[str], list[str]]] = {}
     for entry in (
-        (getattr(planned_state, "parcels", None) or [])
+        (getattr(planned_state, "features", None) or [])
+        + (getattr(planned_state, "parcels", None) or [])
         + (getattr(planned_state, "zones", None) or [])
         + (getattr(planned_state, "overlays", None) or [])
     ):
@@ -834,13 +848,18 @@ def check_topology(planned_state: Any) -> List[ValidationCheck]:
 def _planned_polygon_records(planned_state: Any) -> dict[str, list[SimpleNamespace]]:
     from shapely import wkt as _wkt
 
-    groups: dict[str, list[SimpleNamespace]] = {"parcel": [], "zone": []}
+    groups: dict[str, list[SimpleNamespace]] = {"parcel": [], "zone": [], "feature": []}
     for layer, entries in (
+        ("feature", getattr(planned_state, "features", None) or []),
         ("parcel", getattr(planned_state, "parcels", None) or []),
         ("zone", getattr(planned_state, "zones", None) or []),
     ):
         for index, entry in enumerate(entries):
-            text = str(getattr(entry, "geometry", "") or "").strip()
+            text = str(
+                getattr(entry, "geometry", "")
+                or getattr(entry, "geometry_wkt", "")
+                or ""
+            ).strip()
             if not text:
                 continue
             try:
@@ -852,6 +871,10 @@ def _planned_polygon_records(planned_state: Any) -> dict[str, list[SimpleNamespa
             bsm = str(getattr(entry, "bsm", "") or "")
             candidate_id = str(getattr(entry, "candidate_id", "") or "")
             targets = _target_lineage(entry)
+            if layer == "feature":
+                target = str(getattr(entry, "target_id", "") or "")
+                if target:
+                    targets = sorted(set(targets + [target]))
             feature_id = (
                 bsm
                 or candidate_id
@@ -1168,7 +1191,17 @@ def check_contract_completeness(
         else:
             need_parcels = False
             spatial_target_ids = []
-    parcels_present = (not need_parcels) or bool(planned_state.parcels)
+    generic_features = list(getattr(planned_state, "features", None) or [])
+    generic_target_ids = {
+        str(getattr(feature, "target_id", "") or "")
+        for feature in generic_features
+        if str(getattr(feature, "target_id", "") or "")
+    }
+    parcels_present = (
+        (not need_parcels)
+        or bool(planned_state.parcels)
+        or bool(generic_target_ids.intersection(spatial_target_ids))
+    )
     candidate_entries = [
         parcel for parcel in planned_state.parcels if _candidate_backed(parcel)
     ]
@@ -1206,13 +1239,25 @@ def check_contract_completeness(
         and not missing_target
         and not missing_geom
     )
+    generic_geometry_ok = all(
+        bool(str(getattr(feature, "geometry_wkt", "") or "").strip())
+        and _wkt_is_valid(getattr(feature, "geometry_wkt", ""))
+        for feature in generic_features
+    )
+    # Generic ScenarioFeature outputs do not have BSM/classification fields;
+    # their identity, geometry and relation lineage are validated by the
+    # ScenarioFeature contract and final relation checks instead.
+    if generic_features:
+        parcel_fields_ok = parcel_fields_ok or generic_geometry_ok
     has_changes = bool(changeset and (getattr(changeset, "changes", None) or []))
     candidate_backed = any(
         str(getattr(parcel, "candidate_id", "") or "").strip()
         or str(getattr(parcel, "bsm", "") or "").startswith("candidate:")
         for parcel in planned_state.parcels
     )
-    if candidate_entries and not has_changes:
+    if generic_features and generic_geometry_ok and not has_changes:
+        flags_ok = True
+    elif candidate_entries and not has_changes:
         # Candidate-backed execution is a direct geometry materialization, not
         # a cadastral ParcelChangeSet.  Require parseable output geometry, but
         # do not manufacture a false area-conservation claim for a non-BSM

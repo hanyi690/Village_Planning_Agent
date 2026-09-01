@@ -806,64 +806,79 @@ class PlanningRuntimeService:
 
             paused_stage = str(current.get("paused_stage") or "").lower()
             if paused_stage in {"l1", "l2", "l3", "ground", "select"}:
-                from app.infrastructure.kg.session_kg import ensure_session_kg
+                from app.core.settings import COGNITION_WORLD_MODEL_MODE
 
-                context_ref = current.get("context_ref") or {}
-                raw_version = context_ref.get("version") or current.get("context_version")
-                try:
-                    bundle_version = int(raw_version) if raw_version is not None else None
-                except (TypeError, ValueError):
-                    bundle_version = None
-                # A checkpoint's context version identifies the persisted GIS
-                # snapshot to restore; it is not a rebuild request.  Forcing
-                # here rebuilt Layer 1 on every resume and made a stable
-                # session look like a new GIS import.  ``ensure_session_kg``
-                # already checks the live session binding, then falls back to
-                # the CAS snapshot when the process-local graph is absent.
-                restored = await ensure_session_kg(
-                    session_id,
-                    force=False,
-                    bundle_version=bundle_version,
-                )
-                if restored is None:
-                    # A text-only session legitimately has no
-                    # ``landuse_current`` parcels.  GROUND/SELECT must still
-                    # be resumable so the run can record an explicit partial
-                    # or deferred delivery; requiring an empty KG here made
-                    # an approved unresolved-spatial review fail with 500.
-                    # Rebuild the typed context and let the spatial stages
-                    # preserve the missing-geometry evidence themselves.
-                    if paused_stage in {"ground", "select"}:
-                        from app.workflow.layers.context_bootstrap import bootstrap_context_node
-                        from app.infrastructure.context_runtime.manager import get_cached_context
+                world_model_mode = str(
+                    current.get("world_model_mode")
+                    or COGNITION_WORLD_MODEL_MODE
+                    or "off"
+                ).strip().lower()
+                if world_model_mode in {"prefer_v2", "v2_only"}:
+                    from app.infrastructure.context_runtime.manager import get_cached_context
+                    from app.workflow.layers.context_bootstrap import bootstrap_context_node
 
-                        try:
-                            await bootstrap_context_node(current)
-                        except Exception as exc:  # noqa: BLE001 - report below
-                            logger.warning(
-                                "[PlanningRuntimeService] [%s] context-only resume bootstrap failed: %s",
-                                session_id,
-                                exc,
-                            )
-                        if get_cached_context(session_id) is None:
-                            raise RuntimeError(
-                                f"cannot resume {paused_stage}: planning context restoration failed"
-                            )
-                        logger.warning(
-                            "[PlanningRuntimeService] [%s] continuing %s without a KG parcel index; unresolved spatial references remain deferred",
-                            session_id,
-                            paused_stage,
-                        )
-                    else:
+                    if get_cached_context(session_id) is None:
+                        await bootstrap_context_node(current)
+                    if get_cached_context(session_id) is None:
                         raise RuntimeError(
-                            f"cannot resume {paused_stage}: session data/KG restoration failed"
+                            f"cannot resume {paused_stage}: V2 World Model restoration failed"
                         )
+                    logger.info(
+                        "[PlanningRuntimeService] [%s] restored %s from the V2 World Model; legacy SessionKG skipped",
+                        session_id,
+                        paused_stage,
+                    )
+                else:
+                    from app.infrastructure.kg.session_kg import ensure_session_kg
+
+                    context_ref = current.get("context_ref") or {}
+                    raw_version = context_ref.get("version") or current.get("context_version")
+                    try:
+                        bundle_version = int(raw_version) if raw_version is not None else None
+                    except (TypeError, ValueError):
+                        bundle_version = None
+                    # A checkpoint's context version identifies the persisted
+                    # GIS snapshot to restore; it is not a rebuild request.
+                    # ``ensure_session_kg`` checks the live binding, then CAS.
+                    restored = await ensure_session_kg(
+                        session_id,
+                        force=False,
+                        bundle_version=bundle_version,
+                    )
+                    if restored is None:
+                        # A text-only session legitimately has no parcels.
+                        # Restore typed context for spatial deferral semantics.
+                        if paused_stage in {"ground", "select"}:
+                            from app.workflow.layers.context_bootstrap import bootstrap_context_node
+                            from app.infrastructure.context_runtime.manager import get_cached_context
+
+                            try:
+                                await bootstrap_context_node(current)
+                            except Exception as exc:  # noqa: BLE001 - report below
+                                logger.warning(
+                                    "[PlanningRuntimeService] [%s] context-only resume bootstrap failed: %s",
+                                    session_id,
+                                    exc,
+                                )
+                            if get_cached_context(session_id) is None:
+                                raise RuntimeError(
+                                    f"cannot resume {paused_stage}: planning context restoration failed"
+                                )
+                            logger.warning(
+                                "[PlanningRuntimeService] [%s] continuing %s without a KG parcel index; unresolved spatial references remain deferred",
+                                session_id,
+                                paused_stage,
+                            )
+                        else:
+                            raise RuntimeError(
+                                f"cannot resume {paused_stage}: session data/KG restoration failed"
+                            )
 
             # A provider failure opens a session-scoped circuit breaker so a
             # parallel wave stops spending requests.  An explicit HUMAN
             # resume is the operator's bounded permission to try the failed
             # dimension again; reset it only after the token is accepted.
-                        from app.infrastructure.evidence_runtime.dimension_runtime import reset_provider_failure
+            from app.infrastructure.evidence_runtime.dimension_runtime import reset_provider_failure
             reset_provider_failure(session_id)
 
             initial_state = await cls.aget_state_values(session_id) or {}
@@ -1363,11 +1378,12 @@ class PlanningRuntimeService:
         if not subscriber_ready:
             logger.debug(f"[PlanningRuntimeService] [{session_id}] No SSE subscriber (script mode), proceeding immediately")
 
-        # 0. Pre-build session KG BEFORE L1 dimension analysis (idempotent).
-        #    KG is built from the session bundle with parcel topology relations,
-        #    so L1/L2/L3 dimension analysis receives real KG spatial cognition.
-        #    Non-fatal: any failure logs a warning and the pipeline continues.
-        if initial_state:
+        # 0. Legacy mode may pre-build SessionKG before L1.  V2-authoritative
+        #    modes bootstrap only the generic World Model from DATA artifacts.
+        from app.core.settings import COGNITION_WORLD_MODEL_MODE
+
+        world_model_mode = str(COGNITION_WORLD_MODEL_MODE or "off").strip().lower()
+        if initial_state and world_model_mode not in {"prefer_v2", "v2_only"}:
             try:
                 from app.infrastructure.kg.session_kg import ensure_session_kg
 
@@ -1396,6 +1412,12 @@ class PlanningRuntimeService:
                     "[PlanningRuntimeService] [%s] Session KG pre-build failed: %s",
                     session_id, e,
                 )
+        elif initial_state:
+            logger.info(
+                "[PlanningRuntimeService] [%s] legacy SessionKG pre-build skipped (world_model_mode=%s)",
+                session_id,
+                world_model_mode,
+            )
 
         # 1. For initial_state, write all state + optional synthetic message
         #    in a single aupdate_state call with as_node="__start__".
@@ -1682,7 +1704,17 @@ class PlanningRuntimeService:
                 continue
             deepest_config = cfg
         if deepest_config is None:
-            return {"resumed": False, "reason": "no_subgraph_checkpoint"}
+            logger.info(
+                "[PlanningRuntimeService] [%s] crash resume from parent checkpoint; "
+                "pending task has no materialized subgraph checkpoint",
+                session_id,
+            )
+            await cls.trigger_planning_execution(session_id)
+            return {
+                "resumed": True,
+                "checkpoint_ns": "",
+                "recovery_scope": "parent",
+            }
 
         # Resolve the latest checkpoint in that namespace (the deepest one,
         # carrying any pending writes from the crashed super-step).  The task

@@ -131,8 +131,8 @@ def _human_artifact_detail(key: str, payload: Any) -> Dict[str, Any]:
     elif key == "execution_result":
         for name in ("task_results", "action_results", "diagnostics"):
             take(name, 20)
-    elif key in {"parcel_changeset", "planned_state"}:
-        for name in ("changes", "parcels", "zones", "facilities", "roads", "axes", "provenance"):
+    elif key in {"parcel_changeset", "spatial_changeset", "planned_state"}:
+        for name in ("changes", "features", "parcels", "zones", "facilities", "roads", "axes", "operations", "provenance"):
             take(name, 12)
     elif key == "validation_report":
         for name in ("checks", "violations", "diagnostics", "overall_passed"):

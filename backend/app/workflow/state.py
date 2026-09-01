@@ -17,6 +17,9 @@ from app.contracts.workflow.workflow_contracts import GateDecision
 # 产出 gate artifact，其路由只看 fatal_error（见 graph.route_after_execute）。
 GATE_STAGES = frozenset(
     {
+        "data",
+        "kg",
+        "evidence",
         "l1",
         "l2",
         "l3",
@@ -66,9 +69,17 @@ def load_root_gate(state: dict[str, Any], stage: str) -> GateDecision:
             f"artifact ref {key} has schema {descriptor.schema_id!r}",
         )
 
-    from app.infrastructure.artifacts.runtime import load_artifact
+    from app.infrastructure.artifacts.runtime import (
+        load_artifact,
+        validate_artifact_context_with_l1_transition,
+    )
 
     try:
+        validate_artifact_context_with_l1_transition(
+            state,
+            key,
+            descriptor,
+        )
         gate = load_artifact(state, key, GateDecision)
     except Exception as exc:
         raise RootGateResolutionError(normalized_stage, f"artifact load failed: {key}") from exc
@@ -79,6 +90,29 @@ def load_root_gate(state: dict[str, Any], stage: str) -> GateDecision:
             normalized_stage,
             f"artifact payload stage is {gate.stage!r}",
         )
+    from app.workflow.stage_adapter import STAGE_AUTHORITY_OUTPUT_KEYS
+
+    refs = dict(state.get("artifact_refs") or {})
+    for output_key in STAGE_AUTHORITY_OUTPUT_KEYS.get(normalized_stage, ()):
+        raw_output_ref = refs.get(output_key)
+        if not raw_output_ref:
+            raise RootGateResolutionError(
+                normalized_stage,
+                f"gate authority output is absent: {output_key}",
+            )
+        try:
+            output_ref = ArtifactRef.model_validate(raw_output_ref)
+        except Exception as exc:
+            raise RootGateResolutionError(
+                normalized_stage,
+                f"invalid gate authority output ref: {output_key}",
+            ) from exc
+        bound_digest = str(descriptor.parent_digests.get(output_key) or "")
+        if bound_digest != output_ref.digest:
+            raise RootGateResolutionError(
+                normalized_stage,
+                f"gate/output digest mismatch: {output_key}",
+            )
     return gate
 
 
@@ -308,6 +342,16 @@ class WorkflowState(TypedDict, total=False):
     status: Annotated[str, _merge_control]
     delivery_status: Annotated[str, _merge_control]
     context_ref: Annotated[dict[str, Any], _merge_artifact_refs]
+    # DATA catalog is an explicit bootstrap input for prefer_v2/v2_only. It
+    # is never sent to the LLM; checkpoints should persist only its digest/ref
+    # when the host runtime provides a durable catalog registry.
+    data_catalog: Annotated[Any, _merge_control]
+    # Cognition authority carried with every checkpoint so downstream stages
+    # can prove which DATA/World-Model snapshot they consumed.
+    world_model_mode: Annotated[str, _merge_control]
+    world_model_snapshot_ref: Annotated[str, _merge_control]
+    world_model_snapshot_digest: Annotated[str, _merge_control]
+    world_model_shadow_diff_ref: Annotated[str, _merge_control]
     context_fingerprint: Annotated[str, _merge_control]
     artifact_root: Annotated[str, _merge_identity]
     artifact_refs: Annotated[dict[str, ArtifactRef], _merge_artifact_refs]
@@ -505,6 +549,9 @@ def _latest_gate(state: dict[str, Any]) -> Any:
         "l3_gate",
         "l2_gate",
         "l1_gate",
+        "evidence_gate",
+        "kg_gate",
+        "data_gate",
     ):
         ref = (state.get("artifact_refs") or {}).get(key)
         if ref:

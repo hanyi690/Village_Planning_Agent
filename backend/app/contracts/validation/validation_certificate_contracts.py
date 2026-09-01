@@ -24,6 +24,8 @@ class ValidationCertificate(ContractMeta):
     execution_result_ref: str = Field(min_length=1)
     planned_state_ref: str = ""
     parcel_changeset_ref: str = ""
+    spatial_changeset_ref: str = ""
+    delivery_spatial_snapshot_ref: str = ""
     scenario_id: str = ""
     scenario_fingerprint: str = ""
     scenario_set_fingerprint: str = ""
@@ -71,6 +73,10 @@ class ValidationCertificate(ContractMeta):
                 and self.materialized_target_count != self.selected_target_count
             )
             or missing_target_ids
+            or (
+                self.materialized_target_count
+                and not self.delivery_spatial_snapshot_ref
+            )
         ):
             raise ValueError("passed validation certificate contains blocking findings")
         if not self.fingerprint:

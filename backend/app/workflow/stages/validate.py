@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from app.workflow.stage_adapter import persist_stage_artifact
+from app.infrastructure.artifacts.fingerprint import semantic_checksum
 from app.workflow.stages.support import (
     _adopt_context,
     _evaluate_progress_gate,
@@ -13,6 +14,7 @@ from app.workflow.stages.support import (
     _require_context,
     _retry_patch,
     _run_id,
+    require_upstream_gates,
     stage_completion_patch,
 )
 
@@ -124,22 +126,43 @@ def _l3_revision_patch(program: Any, target_ids: list[str]) -> Dict[str, Any] | 
 
 async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Validate the immutable EXECUTE outputs and emit a typed gate + next_action."""
+    # VALIDATE is the first post-execution consumer.  It may inspect a failed
+    # EXECUTE result, but it must never run against an unclosed spatial chain.
+    require_upstream_gates(
+        dict(state),
+        (
+            "data", "kg", "evidence", "l1", "l2", "l3",
+            "target_projection", "ground", "select",
+        ),
+    )
     from app.workflow.validation.validate import validate_aggregate
     from app.workflow.validation.validate_gate import evaluate_validate_gate
     from app.contracts.target_projection.parse_contracts import SpatialPlanningIntent
     from app.contracts.execute.planned_state_contracts import PlannedState
     from app.contracts.execute.parcel_change_contracts import ParcelChangeSet
+    from app.contracts.execute.spatial_change_contracts import SpatialChangeSet
+    from app.contracts.execute.spatial_change_contracts import (
+        ExecutionTrace,
+        PlannedEntitySet,
+        PlannedRepresentationSet,
+    )
     from app.contracts.target_projection.parse_result_contracts import IntentCompilationResult
     from app.contracts.execute.execution_plan_contracts import ExecutionPlan, ExecutionResult
     from app.contracts.select.scenario import PlanningScenario, ScenarioSet
     from app.contracts.validation.validation_certificate_contracts import ValidationCertificate
     from app.contracts.ground.grounding_contracts import GroundingResult
     from app.contracts.ground.grounded_problem import GroundedPlanningProblem
+    from app.contracts.delivery.spatial_delivery_contracts import DeliverySpatialSnapshot
 
     retry_patch = _retry_patch(state, "validate")
     context = await _require_context(state)
     planned_state = None
     changeset = None
+    spatial_changeset = None
+    planned_entity_set = None
+    planned_representation_set = None
+    execution_trace = None
+    delivery_spatial_snapshot = None
     intent = _load_ref_artifact(state, "target_projection", IntentCompilationResult)
     plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)
     execution_plan = _load_ref_artifact(state, "execution_plan", ExecutionPlan)
@@ -157,18 +180,40 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         or context_ref.get("bundle_snapshot_digest")
         or ""
     )
-    workspace = getattr(context, "workspace", None)
-    bundle = getattr(workspace, "_bundle", None)
-    if not bundle_snapshot_digest and bundle is not None and hasattr(bundle, "spatial_snapshot_digest"):
-        try:
-            bundle_snapshot_digest = str(bundle.spatial_snapshot_digest() or "")
-        except Exception:
-            bundle_snapshot_digest = ""
+    if not bundle_snapshot_digest and execution_result is not None:
+        bundle_snapshot_digest = str(
+            getattr(execution_result, "bundle_snapshot_digest", "") or ""
+        )
     if execution_result is not None:
         from app.workflow.stages.support import _load_embedded_artifact
 
         planned_state = _load_embedded_artifact(state, execution_result.planned_state_ref, PlannedState)
         changeset = _load_embedded_artifact(state, execution_result.parcel_changeset_ref, ParcelChangeSet)
+        spatial_changeset = _load_embedded_artifact(
+            state,
+            execution_result.spatial_changeset_ref,
+            SpatialChangeSet,
+        )
+        planned_entity_set = _load_embedded_artifact(
+            state,
+            execution_result.planned_entity_set_ref,
+            PlannedEntitySet,
+        )
+        planned_representation_set = _load_embedded_artifact(
+            state,
+            execution_result.planned_representation_set_ref,
+            PlannedRepresentationSet,
+        )
+        execution_trace = _load_embedded_artifact(
+            state,
+            execution_result.execution_trace_ref,
+            ExecutionTrace,
+        )
+        delivery_spatial_snapshot = _load_embedded_artifact(
+            state,
+            execution_result.delivery_spatial_snapshot_ref,
+            DeliverySpatialSnapshot,
+        )
     report = validate_aggregate(
         planned_state,
         changeset,
@@ -178,6 +223,34 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         execution_plan=execution_plan,
         execution_result=execution_result,
         bundle_snapshot_digest=bundle_snapshot_digest,
+        spatial_changeset=spatial_changeset,
+        planned_entity_set=planned_entity_set,
+        planned_representation_set=planned_representation_set,
+        execution_trace=execution_trace,
+        delivery_spatial_snapshot=delivery_spatial_snapshot,
+        delivery_snapshot_parent_digests={
+            "data_catalog": _descriptor_digest(
+                (state.get("artifact_refs") or {}).get("data_catalog")
+            ),
+            "approved_execution_input": _descriptor_digest(
+                (state.get("artifact_refs") or {}).get(
+                    "approved_execution_input"
+                )
+            ),
+            "execution_plan": _descriptor_digest(
+                (state.get("artifact_refs") or {}).get("execution_plan")
+            ),
+            "spatial_changeset_payload": (
+                "sha256:" + semantic_checksum(spatial_changeset)
+                if spatial_changeset is not None
+                else ""
+            ),
+            "planned_state_payload": (
+                "sha256:" + semantic_checksum(planned_state)
+                if planned_state is not None
+                else ""
+            ),
+        },
     )
     final_relation_validation = None
     if scenario is not None and planning_problem is not None:
@@ -354,6 +427,27 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         next_action = _next_action_human("blocked", "typed_repair_blocked", reason)
 
     certificate_failed_checks = [check for check in report.checks if not check.passed]
+    hard_constraint_failures = [
+        check
+        for check in certificate_failed_checks
+        if "hard" in str(check.check_id or check.code or "").casefold()
+    ]
+    unresolved_hard_failures = [
+        check
+        for check in hard_constraint_failures
+        if "unresolved" in str(check.actual_value or check.code or "").casefold()
+    ]
+    lineage_check_ids = {
+        "spatial_changeset_contract",
+        "spatial_planned_state_consistency",
+        "spatial_execution_result_consistency",
+        "spatial_output_views",
+        "delivery_spatial_snapshot",
+    }
+    lineage_checks = [
+        check for check in report.checks if check.check_id in lineage_check_ids
+    ]
+    lineage_complete = all(check.passed for check in lineage_checks)
     certificate_status = (
         "passed"
         if report.overall_passed
@@ -380,6 +474,12 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         ),
         parcel_changeset_ref=_descriptor_digest(
             getattr(execution_result, "parcel_changeset_ref", None)
+        ),
+        spatial_changeset_ref=_descriptor_digest(
+            getattr(execution_result, "spatial_changeset_ref", None)
+        ),
+        delivery_spatial_snapshot_ref=_descriptor_digest(
+            getattr(execution_result, "delivery_spatial_snapshot_ref", None)
         ),
         planned_state_fingerprint=str(
             getattr(planned_state, "fingerprint", "")
@@ -408,6 +508,9 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
             if str(getattr(item, "status", "") or "") == "succeeded"
             and str(getattr(item, "target_id", "") or "")
         }),
+        lineage_complete=lineage_complete,
+        hard_constraint_violation_count=len(hard_constraint_failures),
+        unresolved_hard_constraint_count=len(unresolved_hard_failures),
         context_version=str(getattr(context, "version", "") or _context_version(state)),
         bundle_snapshot_digest=bundle_snapshot_digest,
         status=certificate_status,

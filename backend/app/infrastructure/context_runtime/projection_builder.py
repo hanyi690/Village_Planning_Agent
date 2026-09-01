@@ -403,7 +403,11 @@ def _project_candidate(ref: FeatureEvidenceRef, packet: EvidencePacket) -> tuple
         "source_kinds": ["bundle_feature"],
         "source_refs": source_refs,
         "evidence_refs": evidence_refs,
-        "authority": "authoritative_geometry" if ref.geometry_authority == "bundle" else "advisory",
+        "authority": (
+            "authoritative_geometry"
+            if ref.geometry_authority in {"bundle", "data_resource_catalog"}
+            else "advisory"
+        ),
         "locators": [bsm],
         "snapshot_refs": snapshot_refs,
         "conflict_group_id": "",

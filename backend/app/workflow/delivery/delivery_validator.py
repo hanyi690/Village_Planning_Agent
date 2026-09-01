@@ -24,9 +24,24 @@ def assess_render_quality(render_layers: list[dict[str, Any]]) -> dict[str, Any]
         features = list((layer.get("geojson") or layer.get("data") or {}).get("features") or [])
         feature_counts[layer_type] = len(features)
         for feature in features:
+            properties = feature.get("properties") or {}
+            planned_feature = layer_type not in {
+                "current_landuse",
+                "current_boundary",
+                "current_road",
+                "current_annotation",
+                "boundary",
+                "input_constraint",
+                "data_catalog",
+                "data_catalog_geojson",
+            }
+            if layer_type == "complete_planned_landuse":
+                planned_feature = str(
+                    properties.get("change_status") or ""
+                ).casefold() not in {"", "preserved", "unchanged"}
             lineage = validate_render_feature(
                 feature,
-                planned=layer_type not in {"current_landuse", "current_boundary"},
+                planned=planned_feature,
             )
             if lineage["status"] == "diagnostic_only":
                 missing_lineage += 1
@@ -46,7 +61,7 @@ def assess_render_quality(render_layers: list[dict[str, Any]]) -> dict[str, Any]
                         placeholder_geometry += 1
                 except Exception:
                     invalid_geometry += 1
-            props = feature.get("properties") or {}
+            props = properties
             bsm = str(props.get("BSM") or props.get("bsm") or "")
             if bsm:
                 # BSM alone is not unique in the source land-use file. Keep
@@ -56,8 +71,19 @@ def assess_render_quality(render_layers: list[dict[str, Any]]) -> dict[str, Any]
                     json.dumps(feature.get("geometry"), sort_keys=True).encode("utf-8")
                 ).hexdigest()[:12]
                 feature_ids.append(f"{layer_type}:{bsm}:{code}:{geometry_digest}")
-    current_count = feature_counts.get("current_landuse", 0)
+    current_count = (
+        feature_counts.get("current_landuse", 0)
+        + feature_counts.get("data_catalog", 0)
+        + feature_counts.get("data_catalog_geojson", 0)
+    )
     planned_count = feature_counts.get("complete_planned_landuse", 0)
+    if planned_count == 0:
+        planned_count = sum(
+            count
+            for layer_type, count in feature_counts.items()
+            if layer_type.startswith("planned_")
+            or layer_type in {"planning_zone", "infrastructure", "facility", "development_axis"}
+        )
     duplicate_feature_ids = sorted({item for item in feature_ids if feature_ids.count(item) > 1})
     return {
         "status": "passed"
@@ -66,6 +92,7 @@ def assess_render_quality(render_layers: list[dict[str, Any]]) -> dict[str, Any]
         and not empty_geometry
         and not invalid_geometry
         and not placeholder_geometry
+        and not missing_lineage
         and not rejected_lineage
         else "failed",
         "current_layer_present": current_count > 0,

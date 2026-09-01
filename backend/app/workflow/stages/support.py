@@ -9,7 +9,11 @@ from typing import Any, Dict, List
 from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
 from app.contracts.workflow.workflow_contracts import GateDecision
 from app.infrastructure.logging import get_logger
-from app.workflow.stage_adapter import StageCompletion, persist_gate_decision
+from app.workflow.stage_adapter import (
+    STAGE_AUTHORITY_OUTPUT_KEYS,
+    StageCompletion,
+    persist_gate_decision,
+)
 
 logger = get_logger(__name__)
 
@@ -65,6 +69,151 @@ def _gate_route(gate: Any) -> str:
     if route is None and isinstance(gate, dict):
         route = gate.get("feedback_route")
     return route or "PASS"
+
+
+class UpstreamGateBlockedError(RuntimeError):
+    """Raised when a stage cannot prove every required upstream gate.
+
+    The workflow keeps the actual typed gate in CAS.  This exception is only
+    the small boundary diagnostic used by direct facades and stage adapters;
+    callers can inspect ``stage``, ``route`` and ``reason`` without parsing a
+    report or a legacy bundle payload.
+    """
+
+    def __init__(self, stage: str, route: str, reason: str) -> None:
+        self.stage = str(stage)
+        self.route = str(route or "BLOCK")
+        self.reason = str(reason or "upstream gate is not complete")
+        super().__init__(
+            f"UPSTREAM_GATE_BLOCKED: {self.stage} route={self.route}; {self.reason}"
+        )
+
+
+def _gate_pending(gate: Any) -> tuple[list[Any], list[Any]]:
+    if isinstance(gate, dict):
+        return (
+            list(gate.get("pending_requests") or []),
+            list(gate.get("evidence_requests") or []),
+        )
+    return (
+        list(getattr(gate, "pending_requests", None) or []),
+        list(getattr(gate, "evidence_requests", None) or []),
+    )
+
+
+def _require_gate_output_binding(state: Dict[str, Any], stage: str) -> None:
+    """Prove the gate was evaluated against the checkpoint's exact output."""
+
+    output_keys = STAGE_AUTHORITY_OUTPUT_KEYS.get(stage, ())
+    if not output_keys:
+        return
+    refs = dict(state.get("artifact_refs") or {})
+    gate_key = f"{stage}_gate"
+    raw_gate_ref = refs.get(gate_key)
+    if not raw_gate_ref:
+        raise UpstreamGateBlockedError(stage, "MISSING", f"missing artifact ref: {gate_key}")
+    try:
+        gate_ref = ArtifactDescriptor.model_validate(raw_gate_ref)
+    except Exception as exc:
+        raise UpstreamGateBlockedError(stage, "INVALID", f"invalid artifact ref: {gate_key}") from exc
+    for output_key in output_keys:
+        raw_output_ref = refs.get(output_key)
+        if not raw_output_ref:
+            raise UpstreamGateBlockedError(
+                stage,
+                "MISSING",
+                f"gate authority output is absent: {output_key}",
+            )
+        try:
+            output_ref = ArtifactDescriptor.model_validate(raw_output_ref)
+        except Exception as exc:
+            raise UpstreamGateBlockedError(
+                stage,
+                "INVALID",
+                f"invalid gate authority output ref: {output_key}",
+            ) from exc
+        bound_digest = str(gate_ref.parent_digests.get(output_key) or "")
+        if not bound_digest or bound_digest != output_ref.digest:
+            raise UpstreamGateBlockedError(
+                stage,
+                "STALE",
+                (
+                    f"gate/output digest mismatch for {output_key}: "
+                    f"bound={bound_digest or '<missing>'} current={output_ref.digest}"
+                ),
+            )
+
+
+def require_upstream_gates(
+    state: Dict[str, Any],
+    required_stages: tuple[str, ...] | list[str],
+    *,
+    allow_pending: bool = False,
+    allow_evidence_requests: bool = False,
+) -> dict[str, GateDecision]:
+    """Prove that all upstream gates are durable, complete and consumable.
+
+    A ``passed`` boolean alone is not sufficient: older evaluators could mark
+    a partial artifact as usable while retaining evidence requests.  Spatial
+    stages must fail closed for those artifacts.  ``allow_pending`` exists
+    only for explicitly bounded recovery callers; production downstream
+    stages use the strict default.  ``allow_evidence_requests`` is a narrower
+    exception for the EVIDENCE bootstrap: a passed DATA/KG gate may carry
+    typed evidence requests for EVIDENCE to consume, but failed gates,
+    non-PASS routes and pending requests remain blocking.
+    """
+
+    from app.workflow.state import load_root_gate
+
+    normalized_stages = tuple(
+        str(raw_stage or "").strip().lower() for raw_stage in required_stages
+    )
+    if allow_evidence_requests and set(normalized_stages) != {"data", "kg"}:
+        raise ValueError(
+            "allow_evidence_requests is reserved for the DATA+KG EVIDENCE bootstrap"
+        )
+
+    resolved: dict[str, GateDecision] = {}
+    for stage in normalized_stages:
+        try:
+            gate = load_root_gate(dict(state), stage)
+        except Exception as exc:
+            raise UpstreamGateBlockedError(stage, "MISSING", str(exc)) from exc
+        _require_gate_output_binding(state, stage)
+        pending, evidence = _gate_pending(gate)
+        route = str(gate.feedback_route or ("PASS" if gate.passed else "BLOCK"))
+        if not gate.passed or route not in {"PASS", ""}:
+            raise UpstreamGateBlockedError(
+                stage,
+                route,
+                _gate_failure_context(gate) or "gate did not pass",
+            )
+        if pending and (allow_evidence_requests or not allow_pending):
+            raise UpstreamGateBlockedError(
+                stage,
+                "PENDING",
+                (
+                    f"pending_requests={len(pending)} evidence_requests={len(evidence)}; "
+                    "resolve pending requests before consuming this artifact"
+                ),
+            )
+        if evidence and allow_evidence_requests and stage != "kg":
+            raise UpstreamGateBlockedError(
+                stage,
+                "PENDING",
+                "only KG evidence requests may be consumed by the EVIDENCE bootstrap",
+            )
+        if evidence and not (allow_pending or allow_evidence_requests):
+            raise UpstreamGateBlockedError(
+                stage,
+                "PENDING",
+                (
+                    f"pending_requests={len(pending)} evidence_requests={len(evidence)}; "
+                    "resolve evidence gaps before consuming this artifact"
+                ),
+            )
+        resolved[stage] = gate
+    return resolved
 
 
 def _gate_failure_context(gate: Any) -> str:
@@ -127,6 +276,33 @@ def _adopt_context(state: Dict[str, Any], context: Any) -> Dict[str, Any]:
         "version": version,
         "snapshot_id": str(getattr(snapshot, "snapshot_id", "") or ""),
         "snapshot_digest": str(getattr(snapshot, "digest", "") or ""),
+        "data_snapshot_digest": str(getattr(snapshot, "digest", "") or ""),
+        "data_resource_catalog_digest": str(
+            getattr(getattr(getattr(context, "data_resource_catalog", None), "snapshot", None), "digest", "")
+            or ""
+        ),
+        "world_model_mode": str(getattr(context, "world_model_mode", "off") or "off"),
+        "world_model_snapshot_ref": str(
+            getattr(getattr(context, "world_model", None), "snapshot_ref", "")
+            or getattr(getattr(context, "kg", None), "snapshot_ref", "")
+            or ""
+        ),
+        "world_model_snapshot_digest": str(
+            getattr(getattr(context, "world_model", None), "snapshot_digest", "")
+            or getattr(getattr(context, "kg", None), "snapshot_digest", "")
+            or ""
+        ),
+        "world_model_shadow_snapshot_ref": str(
+            getattr(getattr(context, "world_model_shadow", None), "snapshot_ref", "")
+            or ""
+        ),
+        "world_model_shadow_snapshot_digest": str(
+            getattr(getattr(context, "world_model_shadow", None), "snapshot_digest", "")
+            or ""
+        ),
+        "world_model_shadow_diff_ref": str(
+            getattr(context, "world_model_shadow_diff_ref", "") or ""
+        ),
     }
     meta = context.snapshot_meta()
     state["context_fingerprint"] = "sha256:" + hashlib.sha256(
@@ -284,7 +460,7 @@ def stage_completion_patch(
 __all__ = [
     "GATE_CHANNELS", "STAGE_FORWARD_TARGET", "_accumulate_gate", "_adopt_context",
     "_dump", "_evaluate_progress_gate", "_gate_route", "_jsonable", "_load_ref_artifact",
-    "_load_embedded_artifact",
+    "_load_embedded_artifact", "UpstreamGateBlockedError", "require_upstream_gates",
     "_pass_gate", "_require_context", "_retry_patch", "_run_id",
     "stage_completion_patch",
 ]

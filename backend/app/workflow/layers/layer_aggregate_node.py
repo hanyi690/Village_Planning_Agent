@@ -122,25 +122,23 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
             patch = {**{k: aggregate_state[k] for k in ("context_version", "context_fingerprint", "context_ref", "bootstrap_context_done") if k in aggregate_state}, **patch}
         patch["layer_just_completed"] = None
         _update_explore_retry(state, patch, layer, "l1")
-        # L1 identity is materialized as a direct GROUND sidecar.  It is not
-        # routed through TARGET_PROJECTION; post-L3 projection may retain L1
-        # fact lineage, while GROUND owns spatial identity resolution.
-        try:
-            identity_patch = await _persist_l1_identity_artifacts(
-                state,
-                aggregate_state,
-                patch,
-            )
-            patch = {
-                **patch,
-                **identity_patch,
-                "artifact_refs": {
-                    **dict(patch.get("artifact_refs") or {}),
-                    **dict(identity_patch.get("artifact_refs") or {}),
-                },
-            }
-        except Exception as exc:  # noqa: BLE001 - 接地失败不阻塞 L2，但记录
-            logger.warning("[layer_aggregate] L1 identity artifact production failed: %s", exc)
+        # Resolve present-world place identity while L1 still has the richest
+        # source context.  This is GROUND's independent location-resolution
+        # entry point; post-L3 GROUND remains responsible for selecting the
+        # purpose-specific representation used by a planning target.
+        identity_patch = await _persist_l1_identity_artifacts(
+            state,
+            aggregate_state,
+            patch,
+        )
+        patch = {
+            **patch,
+            **identity_patch,
+            "artifact_refs": {
+                **dict(patch.get("artifact_refs") or {}),
+                **dict(identity_patch.get("artifact_refs") or {}),
+            },
+        }
         return patch
 
     if layer == 2:

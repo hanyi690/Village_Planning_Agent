@@ -48,13 +48,16 @@ def render_delivery_artifacts(
                 int(change_summary.get(key) or 0)
                 for key in ("modified", "split", "merged", "created", "removed")
             )
+            generic_planned_count = int(
+                change_summary.get("generic_planned_feature_count") or 0
+            )
             delivery_status = str(getattr(snapshot, "delivery_status", "") or "partial")
             delivery_issues = []
-            if changed_count == 0:
+            if changed_count == 0 and generic_planned_count == 0:
                 delivery_issues.append({
-                    "code": "NO_PARCEL_CHANGES",
+                    "code": "NO_SPATIAL_CHANGES",
                     "message": (
-                        "本次没有 ParcelChange；期末地类仅保留现状，不能视为法定规划成果。"
+                        "本次没有通用规划要素或地籍变更；现状基线不能视为规划成果。"
                     ),
                 })
             if delivery_status != "complete":
@@ -92,6 +95,7 @@ def render_delivery_artifacts(
                 narrative_sections=[{
                     "title": "交付事实",
                     "text": (
+                        f"通用规划要素 {generic_planned_count} 个；"
                         f"期末地类变更 {changed_count} 个；"
                         f"保留地块 {int(change_summary.get('preserved') or 0)} 个；"
                         f"交付状态为 {delivery_status}。"

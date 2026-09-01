@@ -94,6 +94,12 @@ class ContentAddressedArtifactRepository:
         descriptor = ArtifactDescriptor.model_validate(data)
         if descriptor.descriptor_digest != descriptor_digest:
             raise ValueError("descriptor digest does not match descriptor identity")
+        descriptor_payload = descriptor.model_dump(
+            mode="json",
+            exclude={"descriptor_digest", "created_at"},
+        )
+        if _sha256(_canonical_json(descriptor_payload)) != descriptor_digest:
+            raise ValueError("artifact descriptor content checksum mismatch")
         return descriptor
 
     def put_bytes(

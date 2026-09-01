@@ -161,7 +161,19 @@ def after_analysis(
     phase = state.get("phase", "layer1")
     if phase == "post_l3":
         # L3 is not a terminal state.  The post-L3 chain owns target projection
-        # through DELIVER and is entered only through advance_phase.
+        # through DELIVER and is entered only through advance_phase.  Re-check
+        # the durable gate chain here because an old checkpoint may retain a
+        # stale ``post_l3`` cursor after a gate was replaced or invalidated.
+        try:
+            from app.workflow.stages.support import require_upstream_gates
+
+            require_upstream_gates(dict(state), ("l1", "l2", "l3"))
+        except Exception as exc:
+            logger.warning(
+                "[after_analysis] post_l3 blocked by upstream gates: %s",
+                exc,
+            )
+            return "human_review"
         return "target_projection"
     gate_route = _route_layer_gate(state, phase)
     if gate_route is not None:
@@ -476,6 +488,18 @@ def _route_layer_gate(
         return None
     route = gate_decision.feedback_route
     if route is None or route == "PASS":
+        pending = list(gate_decision.pending_requests or [])
+        evidence = list(gate_decision.evidence_requests or [])
+        if pending or evidence:
+            # Older gate artifacts could mark a partial product as PASS while
+            # retaining unresolved evidence.  Treat that state as a recovery
+            # route rather than allowing the next layer to consume it.
+            logger.warning(
+                "[after_analysis] Gate l%d has unresolved evidence despite PASS; "
+                "entering bounded EXPLORE",
+                layer_num,
+            )
+            return _route_explore(state, layer_num)
         # Gate PASS -> phase is advanced by the `advance_phase` node
         # (it writes phase + dispatches the next layer's dimensions).
         logger.info("[after_analysis] Gate l%d PASS -> advance_phase", layer_num)

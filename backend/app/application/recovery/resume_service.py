@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from app.contracts.workflow.resume_contracts import (
     ARTIFACT_STAGE_ORDER,
+    DATA_REPLAY_CHAIN,
     ResumeMode,
     ResumePlan,
     build_resume_plan,
@@ -44,6 +45,68 @@ _SPATIAL_REPLAY_PREREQUISITES = {
     "deliver": ("validation_certificate", "final_manifest"),
 }
 _SPATIAL_REPLAY_ORDER = tuple(_SPATIAL_REPLAY_STAGES.values())
+
+_DATA_REPLAY_NEXT = ("bootstrap_context",)
+_MISSING = object()
+
+
+def _data_replay_carriers(state: Dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    """Return and validate the four bounded DATA-replay state carriers.
+
+    Historical checkpoints can expose the same authority through the compact
+    top-level state and the stage-local runtime carrier.  Only these four
+    explicitly named dictionaries are inspected; this is intentionally not a
+    recursive search through arbitrary checkpoint data.
+    """
+
+    if not isinstance(state, dict):
+        raise ResumeConflictError("DATA replay requires a mapping checkpoint state")
+
+    raw_runtime = state.get("runtime", _MISSING)
+    if raw_runtime is _MISSING:
+        runtime: dict[str, Any] = {}
+    elif not isinstance(raw_runtime, dict):
+        raise ResumeConflictError("DATA replay runtime carrier has an invalid type")
+    else:
+        runtime = raw_runtime
+
+    raw_context_ref = state.get("context_ref", _MISSING)
+    if raw_context_ref is _MISSING:
+        context_ref: dict[str, Any] = {}
+    elif not isinstance(raw_context_ref, dict):
+        raise ResumeConflictError("DATA replay context_ref carrier has an invalid type")
+    else:
+        context_ref = raw_context_ref
+
+    raw_runtime_context_ref = runtime.get("context_ref", _MISSING)
+    if raw_runtime_context_ref is _MISSING:
+        runtime_context_ref: dict[str, Any] = {}
+    elif not isinstance(raw_runtime_context_ref, dict):
+        raise ResumeConflictError(
+            "DATA replay runtime.context_ref carrier has an invalid type"
+        )
+    else:
+        runtime_context_ref = raw_runtime_context_ref
+
+    carriers = (state, runtime, context_ref, runtime_context_ref)
+    for carrier in carriers:
+        if "artifact_refs" in carrier:
+            refs = carrier["artifact_refs"]
+            if not isinstance(refs, dict) or refs:
+                raise ResumeConflictError(
+                    "DATA replay requires empty artifact_refs in every carrier"
+                )
+        if "world_model_snapshot_digest" in carrier:
+            digest = carrier["world_model_snapshot_digest"]
+            if not isinstance(digest, str):
+                raise ResumeConflictError(
+                    "DATA replay world_model_snapshot_digest has an invalid type"
+                )
+            if digest.strip():
+                raise ResumeConflictError(
+                    "DATA replay requires empty world_model_snapshot_digest in every carrier"
+                )
+    return carriers
 
 def mark_plan_fork(plan: ResumePlan, branch_id: str | None = None) -> ResumePlan:
     """Return a copy of the plan annotated with the required fork branch.
@@ -220,6 +283,55 @@ class ResumeService:
         )
 
     @staticmethod
+    def explicit_data_replay_plan(
+        state: Dict[str, Any],
+        plan: ResumePlan,
+    ) -> ResumePlan:
+        """Authorize a full DATA-boundary replay from one exact cursor.
+
+        This is deliberately narrower than the spatial replay policy.  The
+        selected historical checkpoint must point only at
+        ``bootstrap_context`` and must not already carry DATA/KG/EVIDENCE
+        products.  In particular, a HUMAN checkpoint or a checkpoint with a
+        world-model digest cannot be repurposed as a cold upstream replay.
+        The caller still forks the checkpoint before invoking the runtime.
+        """
+
+        next_nodes = tuple(
+            str(node).strip().lower() for node in (plan.graph_next or ())
+        )
+        if next_nodes != _DATA_REPLAY_NEXT:
+            raise ResumeConflictError(
+                "DATA replay requires the selected checkpoint next nodes to be exactly "
+                "['bootstrap_context']"
+            )
+        _, runtime_state, _, _ = _data_replay_carriers(state)
+        if (
+            plan.checkpoint_kind == "human"
+            or plan.interrupt_id
+            or state.get("human_interrupt")
+            or state.get("interrupt_ref")
+            or runtime_state.get("human_interrupt")
+            or runtime_state.get("interrupt_ref")
+        ):
+            raise ResumeConflictError(
+                "DATA replay is not allowed from a HUMAN checkpoint"
+            )
+        return plan.model_copy(
+            update={
+                "mode": ResumeMode.RERUN,
+                "resume_from": "bootstrap_context",
+                "checkpoint_kind": "data_replay",
+                "reuse": [],
+                "rerun": list(DATA_REPLAY_CHAIN),
+                "reason": (
+                    "explicit DATA-boundary full-chain replay from bootstrap_context; "
+                    "historical checkpoint remains immutable"
+                ),
+            }
+        )
+
+    @staticmethod
     def select_replay_snapshot(snapshots: list[Any], plan: ResumePlan) -> Any | None:
         """Select the newest historical cursor at a safe replay boundary."""
 
@@ -254,6 +366,7 @@ class ResumeService:
 
 
 __all__ = [
+    "DATA_REPLAY_CHAIN",
     "FORK_BRANCH_MARKER",
     "ResumeConflictError",
     "ResumeService",

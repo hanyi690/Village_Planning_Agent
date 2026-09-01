@@ -86,7 +86,9 @@ def _geometry_kind(wkt_text: str) -> str:
 
 
 def _item_geometry(item: Any) -> str:
-    geometry = _text(getattr(item, "geometry", ""))
+    geometry = _text(getattr(item, "geometry", "")) or _text(
+        getattr(item, "geometry_wkt", "")
+    )
     if geometry:
         return geometry
     # PlannedFacility historically stored lon/lat separately.  Keeping this
@@ -103,7 +105,13 @@ def _state_records(planned_state: PlannedState) -> list[dict[str, Any]]:
     """Flatten every planning layer into final-feature identity records."""
 
     records: list[dict[str, Any]] = []
+    canonical_feature_ids = {
+        _text(getattr(item, "feature_id", ""))
+        for item in (getattr(planned_state, "features", None) or [])
+        if _text(getattr(item, "feature_id", ""))
+    }
     layers = (
+        ("feature", "features"),
         ("parcel", "parcels"),
         ("zone", "zones"),
         ("overlay", "overlays"),
@@ -113,6 +121,15 @@ def _state_records(planned_state: PlannedState) -> list[dict[str, Any]]:
     )
     for kind, attr in layers:
         for index, item in enumerate(getattr(planned_state, attr, None) or []):
+            # Generic candidate geometry used to be mirrored into
+            # ``PlannedState.parcels``.  Once the canonical ScenarioFeature is
+            # present, do not validate that compatibility projection twice.
+            if (
+                kind == "parcel"
+                and not _text(getattr(item, "bsm", ""))
+                and _text(getattr(item, "feature_id", "")) in canonical_feature_ids
+            ):
+                continue
             geometry = _item_geometry(item)
             identity = (
                 _text(getattr(item, "feature_id", ""))
@@ -125,6 +142,8 @@ def _state_records(planned_state: PlannedState) -> list[dict[str, Any]]:
                 or f"{kind}:{index}"
             )
             target_id = (
+                _text(getattr(item, "target_id", ""))
+                or
                 _text(getattr(item, "target_ref", ""))
                 or _text(getattr(item, "derived_from_target", ""))
                 or _text(getattr(item, "derived_from_zone_target", ""))

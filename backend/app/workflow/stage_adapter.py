@@ -30,12 +30,23 @@ class StageCompletion(BaseModel):
 
 
 _KEY_BY_TYPE = {
+    "DataResourceCatalogSnapshot": "data_catalog",
+    "SessionDataSnapshot": "data_snapshot",
+    "DataStageSnapshot": "data_stage",
+    "SourceSemanticMappingSnapshot": "schema_mapping_snapshot",
+    "SessionWorldModelSnapshot": "world_model_snapshot",
+    "CognitionStageSnapshot": "kg_stage",
+    "EvidenceStageSnapshot": "evidence_snapshot",
     "GroundingResult": "grounding_result",
     "GroundedPlanningProblem": "scoped_grounding_problem",
     "DemandPortfolio": "demand_portfolio",
     "SuitabilitySurface": "suitability_surface",
     "PortfolioDecision": "portfolio_decision",
     "ParcelChangeSet": "parcel_changeset",
+    "SpatialChangeSet": "spatial_changeset",
+    "PlannedEntitySet": "planned_entity_set",
+    "PlannedRepresentationSet": "planned_representation_set",
+    "ExecutionTrace": "execution_trace",
     "PlannedState": "planned_state",
     "ValidationReport": "validation_report",
     "FinalManifest": "final_manifest",
@@ -61,10 +72,35 @@ _KEY_BY_TYPE = {
     "RenderArtifacts": "render_artifacts",
     "EvidenceObservationSnapshot": "l1_observations",
     "GroundedEntityBindingSnapshot": "l1_bindings",
+    "L1ObservationSnapshot": "l1_observation_snapshot",
+    "L1BindingSnapshot": "l1_binding_snapshot",
+    "L1FinalProduct": "l1_final_product",
+    "L1ProductManifest": "l1_product_manifest",
+    "DataAdmissionReceipt": "data_admission_receipt",
+    "DataAdmissionGap": "data_admission_gap",
     "SourceSemanticClassificationSnapshot": "source_semantic_classification",
     "SolverSubproblemPlan": "solver_subproblem_plan",
     "SolverReadiness": "solver_readiness",
     "PlanningTaskGraph": "planning_task_graph",
+}
+
+
+# One authoritative output must be explicitly bound into every cognition
+# gate.  Downstream consumers compare this digest with the exact ref in the
+# resumed checkpoint, so a gate from artifact A cannot authorize artifact B.
+STAGE_AUTHORITY_OUTPUT_KEYS: dict[str, tuple[str, ...]] = {
+    "data": ("data_stage",),
+    "kg": ("kg_stage",),
+    "evidence": (
+        "evidence_snapshot",
+        "evidence_external_observations",
+        "evidence_gap_ledger",
+    ),
+    "l1": ("l1_snapshot",),
+    "l2": ("l2_strategy",),
+    "l3": ("planning_program",),
+    "target_projection": ("target_projection",),
+    "l1_final": ("l1_product_manifest", "l1_final_product"),
 }
 
 
@@ -116,8 +152,12 @@ def persist_gate_decision(
     """
 
     from app.infrastructure.artifacts.repository import ContentAddressedArtifactRepository
-    from app.infrastructure.artifacts.runtime import ARTIFACT_SCHEMA_VERSION
+    from app.infrastructure.artifacts.runtime import (
+        ARTIFACT_SCHEMA_VERSION,
+        context_ref_for,
+    )
     from app.infrastructure.paths import run_tmp_root
+    from pathlib import Path
     from app.contracts.workflow.workflow_contracts import GateDecision
 
     decision = gate if isinstance(gate, GateDecision) else GateDecision.model_validate(gate)
@@ -125,17 +165,37 @@ def persist_gate_decision(
     branch_id = str(state.get("branch_id") or "main")
     if not run_id:
         raise ValueError("gate artifact requires run_id")
-    refs = {
-        **dict(state.get("artifact_refs") or {}),
-        **dict(output_refs or {}),
+    required_outputs = STAGE_AUTHORITY_OUTPUT_KEYS.get(stage, ())
+    supplied_outputs = dict(output_refs or {})
+    # Required outputs define the minimum stage authority.  A composite stage
+    # may bind additional transition artifacts (for example L1 snapshot +
+    # identity-grounding projection + child World Model) into the same gate.
+    # Keep those explicit supplied refs in the immutable parent closure rather
+    # than silently dropping them.
+    normalized_outputs = {
+        str(key): value
+        for key, value in supplied_outputs.items()
+        if value
     }
+    missing_outputs = [key for key in required_outputs if not normalized_outputs.get(key)]
+    if missing_outputs:
+        raise ValueError(
+            f"{stage} gate requires explicit authoritative output refs: "
+            + ", ".join(missing_outputs)
+        )
     parent_digests: dict[str, str] = {}
-    for key, value in refs.items():
+    for key, value in normalized_outputs.items():
         if not value:
             continue
         descriptor = value if isinstance(value, ArtifactRef) else ArtifactRef.model_validate(value)
         parent_digests[str(key)] = descriptor.digest
-    repository = ContentAddressedArtifactRepository(run_tmp_root())
+    # Gate blobs must live beside the stage artifacts referenced by the same
+    # checkpoint.  A resumed worker may have a run-specific artifact root;
+    # using the process-global temp root here makes an otherwise valid gate
+    # impossible to reload after restart.
+    repository = ContentAddressedArtifactRepository(
+        Path(str(state.get("artifact_root") or run_tmp_root())).resolve()
+    )
     return repository.put_json(
         decision.model_dump(mode="json"),
         schema_id="GateDecision",
@@ -146,7 +206,7 @@ def persist_gate_decision(
         parent_digests=parent_digests,
         provenance={
             "artifact_key": f"{stage}_gate",
-            "context_ref": dict(state.get("context_ref") or {}),
+            "context_ref": context_ref_for(state),
             "context_fingerprint": str(state.get("context_fingerprint") or ""),
         },
     )
@@ -175,4 +235,5 @@ __all__ = [
     "command_from_state",
     "persist_gate_decision",
     "persist_stage_artifact",
+    "STAGE_AUTHORITY_OUTPUT_KEYS",
 ]

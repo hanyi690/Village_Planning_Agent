@@ -35,8 +35,11 @@ STAGE = StageId.DELIVER.value
 _BASELINE_LAYER_TYPES = {
     "current_landuse",
     "current_road",
+    "current_annotation",
     "boundary",
     "input_constraint",
+    "data_catalog",
+    "data_catalog_geojson",
 }
 _COMPLETE_PLANNED_LAYER = "complete_planned_landuse"
 _UNCHANGED_STATUSES = {None, "", "preserved", "unchanged"}

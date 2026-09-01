@@ -37,6 +37,7 @@ _ARTIFACT_STAGE: dict[str, str] = {
     "approved_execution_input": "SELECT",
     "execution_plan": "EXECUTE",
     "execution_result": "EXECUTE",
+    "spatial_changeset": "EXECUTE",
     "parcel_changeset": "EXECUTE",
     "planned_state": "EXECUTE",
     "validation_report": "VALIDATE",

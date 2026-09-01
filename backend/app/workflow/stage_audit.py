@@ -53,7 +53,7 @@ def _output_snapshot(value: Any, *, depth: int = 0) -> Any:
         return {
             str(key): _output_snapshot(item, depth=depth + 1)
             for key, item in list(value.items())[:40]
-            if key not in {"planned_state", "parcel_changeset"}
+            if key not in {"planned_state", "parcel_changeset", "spatial_changeset"}
         }
     if isinstance(value, (list, tuple)):
         return {"items": len(value), "sample": [_output_snapshot(item, depth=depth + 1) for item in value[:3]]}
@@ -134,7 +134,7 @@ def _semantic_stage_output(result: Dict[str, Any], refs: Dict[str, Any]) -> Dict
             key: value
             for key, value in result.items()
             if not key.endswith("_gate")
-            and key not in {"artifact_refs", "planned_state", "parcel_changeset"}
+            and key not in {"artifact_refs", "planned_state", "parcel_changeset", "spatial_changeset"}
         },
     }
 
@@ -247,7 +247,7 @@ def audited_stage(stage: str) -> Callable[[Callable[..., Awaitable[Dict[str, Any
                     stage_outputs_present = bool(
                         refs
                         or any(
-                            key not in {"artifact_refs", "planned_state", "parcel_changeset"}
+                            key not in {"artifact_refs", "planned_state", "parcel_changeset", "spatial_changeset"}
                             and not key.endswith("_gate")
                             for key in result
                         )
@@ -262,7 +262,7 @@ def audited_stage(stage: str) -> Callable[[Callable[..., Awaitable[Dict[str, Any
                 inputs = {**inputs, "input_checksum": audit_record["input_checksum"]}
                 outputs = {
                     "artifact_refs": _semantic_refs(refs),
-                    "output_keys": sorted(k for k in result if k not in {"planned_state", "parcel_changeset"}),
+                    "output_keys": sorted(k for k in result if k not in {"planned_state", "parcel_changeset", "spatial_changeset"}),
                     "output_summary": _output_snapshot({
                         **result,
                         "artifact_refs": _semantic_refs(refs),

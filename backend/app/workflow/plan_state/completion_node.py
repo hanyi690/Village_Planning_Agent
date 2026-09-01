@@ -11,7 +11,7 @@ must fire AFTER the interrupt point to avoid duplication.
 Stage completion lives in the current workflow graph described by docs/architecture/CURRENT_RUNTIME.md.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from langgraph.types import interrupt
 from app.infrastructure.logging import get_logger
@@ -23,88 +23,6 @@ from app.contracts.workflow.human_interrupt_contracts import (
 )
 
 logger = get_logger(__name__)
-
-
-async def _snapshot_bundle(session_id: str, trigger_reason: str) -> None:
-    """Persist a versioned session bundle snapshot at a layer boundary.
-
-    Non-fatal: a failed snapshot is logged and the pipeline continues.
-    """
-    if not session_id:
-        return
-    try:
-        from app.application.sessions.session_bundle import snapshot_session_bundle
-
-        await snapshot_session_bundle(session_id, trigger_reason=trigger_reason)
-    except Exception as e:
-        logger.warning(
-            "[layer_completion_check] Bundle snapshot failed for %s (trigger=%s): %s",
-            session_id, trigger_reason, e,
-        )
-
-
-async def _maybe_extract_bindings(
-    session_id: str,
-    layer: int,
-    state: Optional[Dict[str, Any]] = None,
-) -> None:
-    """Wave-end hook: extract village/BSM bindings from the completed layer.
-
-    Non-fatal: extraction failures are logged and never break the pipeline.
-    """
-    if not session_id:
-        return
-    try:
-        from app.infrastructure.reports.report_store import ReportStore
-
-        store = ReportStore.get_instance()
-        reports = await store.get_layer_reports(session_id, layer)
-        if not reports:
-            logger.info("[layer_completion_check] No reports for L%d, skip extraction", layer)
-            return
-
-        # KG 多级增强（enrichment）：L1 村名绑定 / L2/L3 实体注解 + 关系注记
-        from app.infrastructure.kg.enrichment import run_wave
-        from app.infrastructure.llm.tools.access.shared import resolve_bundle
-
-        _bundle = None
-        try:
-            _bundle = await resolve_bundle(session_id)
-        except Exception:
-            pass
-        location_facts = []
-        if layer == 1:
-            try:
-                from app.infrastructure.artifacts.runtime import load_artifact
-                from app.contracts.l1.l1_contracts import L1Snapshot
-
-                refs = dict((state or {}).get("artifact_refs") or {})
-                migrated = dict(state or {})
-                migrated["artifact_refs"] = refs
-                snapshot = load_artifact(migrated, "l1_snapshot", L1Snapshot)
-                location_facts = list(
-                    getattr(snapshot, "location_mentions", []) or []
-                )
-            except Exception as exc:
-                logger.warning("[layer_completion_check] L1 location facts load failed: %s", exc)
-        stats = await run_wave(
-            session_id, wave=layer, reports=reports, bundle=_bundle,
-            location_facts=location_facts,
-        )
-        logger.info("[layer_completion_check] KG enrichment layer=%d stats=%s", layer, stats)
-    except Exception as e:
-        logger.warning("[layer_completion_check] KG enrichment failed for %s L%d: %s", session_id, layer, e)
-
-
-async def _invoke_extraction(session_id: str, layer: int, state: Dict[str, Any]) -> None:
-    """Invoke the enrichment hook while keeping older test/plugin hooks valid."""
-    import inspect
-
-    parameters = inspect.signature(_maybe_extract_bindings).parameters
-    if len(parameters) < 3:
-        await _maybe_extract_bindings(session_id, layer)  # type: ignore[misc]
-    else:
-        await _maybe_extract_bindings(session_id, layer, state)
 
 
 async def _flush_pending_reports(
@@ -233,7 +151,6 @@ async def layer_completion_check(
                 event_type="cascade_complete",
                 revised_dimensions=all_dims,
             )
-            await _snapshot_bundle(session_id, "revision")
             from app.config import get_dimension_layer
 
             revised_layers = [
@@ -387,9 +304,6 @@ async def layer_completion_check(
                 dimension_count=len(completed),
                 total_chars=total_chars,
             )
-            await _snapshot_bundle(
-                session_id, "final" if layer >= 3 else f"layer{layer}",
-            )
             if layer < 3:
                 logger.info(
                     "[layer_completion_check] Approved completion for layer %d; "
@@ -413,7 +327,6 @@ async def layer_completion_check(
                 dimension_count=len(completed),
                 total_chars=total_chars,
             )
-            await _snapshot_bundle(session_id, f"layer{layer}")
             logger.info(
                 "[layer_completion_check] Rejected: starting revision for %s",
                 resume_data.get("dimensions", []),
@@ -456,9 +369,6 @@ async def layer_completion_check(
         layer_name=get_layer_name(layer),
         dimension_count=len(completed),
         total_chars=total_chars,
-    )
-    await _snapshot_bundle(
-        session_id, "final" if layer >= 3 else f"layer{layer}",
     )
     if layer < 3:
         logger.info(

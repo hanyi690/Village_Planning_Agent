@@ -1,8 +1,8 @@
 """PlanningContext - versioned, session-scoped fact authority.
 
 Pure data container (no imports from agent/services/api). Holds the
-single authoritative view of a planning session: the VillageBundle, the
-session KG reference, the gazetteer, the constraint index and the report
+single authoritative view of a planning session: the DATA workspace/catalog,
+the session KG reference, the gazetteer, the constraint index and the report
 summaries that the downstream EXPLORE/PARSE/GROUND/SELECT pipeline reads.
 
 The context may hold typed data/evidence ports, but artifact descriptors are
@@ -39,7 +39,13 @@ class PlanningContext:
         village_name: Resolved village name (never the ``"jintian"`` fallback).
         version: Monotonic build version. Bumped on every rebuild.
         workspace: data-owned ``SpatialWorkspace`` (may be None when unavailable).
+        data_resource_catalog: Generic Data source/representation/capability
+            index. The legacy Bundle remains private to the workspace.
         kg: Live session ``PlanningKG`` instance (may be None).
+        world_model: DATA-backed ``WorldModelKGStore`` when a normalized
+            catalog is available.  This is the cognition authority in V2;
+            ``kg`` remains only the legacy compatibility projection in
+            ``off``/``shadow`` migration modes.
         kg_session_ref: KG session key used by ``KGManager``.
         kg_version: KG mutation version (invalidates cached SPARQL results).
         gazetteer: Village gazetteer (may be None when not resolvable).
@@ -72,16 +78,28 @@ class PlanningContext:
 
     session_id: str = ""
     village_name: str = ""
+    administrative_scope: Dict[str, str] = field(default_factory=dict)
+    project_scope_bbox_wgs84: tuple[float, float, float, float] | None = None
     version: int = 1
     workspace: SpatialWorkspace | None = None
+    data_resource_catalog: Any = None
     data_snapshot: SessionDataSnapshot | None = None
     # Typed relation inputs.  These are immutable-by-convention snapshots
     # built from the authoritative workspace; prose counts never enter here.
     networks: Dict[str, Any] = field(default_factory=dict)
     demands: Dict[str, Any] = field(default_factory=dict)
     kg: Any = None
+    world_model: Any = None
     kg_session_ref: str = ""
     kg_version: int = 0
+    # Migration mode is explicit so callers can tell whether compatibility
+    # Bundle/KG projections are authoritative for this context.
+    world_model_mode: str = "off"
+    # In shadow mode the V2 graph is built and written for comparison, while
+    # the legacy KG remains the read authority until an explicit cutover.
+    world_model_shadow: Any = None
+    world_model_shadow_diff: Any = None
+    world_model_shadow_diff_ref: str = ""
     gazetteer: Any = None
     constraint_index: Any = None
     input_documents: List[Dict[str, Any]] = field(default_factory=list)
@@ -89,6 +107,7 @@ class PlanningContext:
     reports_loaded: bool = False
     report_summary_index: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     l1_snapshot_ref: str = ""
+    l1_world_projection_ref: str = ""
     l1_fact_records: List[Any] = field(default_factory=list)
     location_mentions: List[Any] = field(default_factory=list)
     # Read compatibility for persisted callers created before the contract
@@ -97,6 +116,9 @@ class PlanningContext:
     source_semantic_decisions: Dict[str, Any] = field(default_factory=dict)
     source_semantic_fingerprint: str = ""
     source_semantic_diagnostics: List[Dict[str, Any]] = field(default_factory=list)
+    # Closed-set DATA schema understanding produced by Cognition.  This is a
+    # bounded candidate/decision snapshot, never a raw nested prompt payload.
+    schema_mapping_snapshot: Any = None
     evidence_graph: Any = None
     evidence_graph_key: str = ""
     external_search_port: Any = None
@@ -188,7 +210,34 @@ class PlanningContext:
             "version": self.version,
             "kg_session_ref": self.kg_session_ref,
             "kg_version": self.kg_version,
+            "world_model_mode": self.world_model_mode,
+            "world_model_snapshot_ref": str(
+                getattr(self.world_model, "snapshot_ref", "")
+                or getattr(self.kg, "snapshot_ref", "")
+                or ""
+            ),
+            "world_model_snapshot_digest": str(
+                getattr(self.world_model, "snapshot_digest", "")
+                or getattr(self.kg, "snapshot_digest", "")
+                or ""
+            ),
+            "world_model_shadow_snapshot_ref": str(
+                getattr(self.world_model_shadow, "snapshot_ref", "") or ""
+            ),
+            "world_model_shadow_snapshot_digest": str(
+                getattr(self.world_model_shadow, "snapshot_digest", "") or ""
+            ),
+            "world_model_shadow_diff_digest": str(
+                getattr(self.world_model_shadow_diff, "digest", "") or ""
+            ),
+            "world_model_shadow_diff_ref": self.world_model_shadow_diff_ref,
             "has_workspace": self.has_workspace,
+            "has_data_resource_catalog": self.data_resource_catalog is not None,
+            "data_resource_catalog_digest": str(
+                getattr(self.data_resource_catalog, "snapshot", None)
+                and getattr(getattr(self.data_resource_catalog, "snapshot", None), "digest", "")
+                or ""
+            ),
             "network_refs": sorted(str(key) for key in self.networks),
             "network_fingerprints": {
                 str(key): str(getattr(value, "fingerprint", "") or "")
@@ -200,6 +249,7 @@ class PlanningContext:
                 for key, value in self.demands.items()
             },
             "has_kg": self.has_kg,
+            "has_world_model": self.world_model is not None,
             "has_gazetteer": self.gazetteer is not None,
             "has_constraint_index": self.constraint_index is not None,
             "has_evidence_graph": self.evidence_graph is not None,
@@ -241,7 +291,12 @@ class PlanningContext:
         self.capabilities = {
             "data_snapshot": self.data_snapshot is not None,
             "workspace": self.workspace is not None,
+            "data_resource_catalog": self.data_resource_catalog is not None,
             "kg": self.kg is not None,
+            "world_model": self.world_model is not None,
+            "world_model_shadow": self.world_model_shadow is not None,
+            "world_model_port": getattr(self.ports, "world_model", None) is not None,
+            "world_model_commit": getattr(self.ports, "world_model_commit", None) is not None,
             "gazetteer": self.gazetteer is not None,
             "constraint_index": self.constraint_index is not None,
             "reports": bool(self.reports),

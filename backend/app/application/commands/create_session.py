@@ -104,7 +104,17 @@ class _IngestionDefault:
     async def process(self, file: object, session_id: str, category: str) -> Mapping[str, object]:
         from app.data.ingestion.upload import process_uploaded_file
 
-        return await process_uploaded_file(file, session_id, category)
+        declared_roles = {
+            "village_data": "current_evidence",
+            "task_description": "planning_brief",
+            "constraint": "planning_instruction",
+        }
+        return await process_uploaded_file(
+            file,
+            session_id,
+            category,
+            input_role=declared_roles.get(category, "unclassified"),
+        )
 
 
 class _StarterDefault:
@@ -145,6 +155,7 @@ def _default_state(command: CreateSessionCommand) -> dict[str, object]:
         planning_period=command.planning_period,
         session_id=command.session_id,
         task_description=command.task_description,
+        constraints=command.constraints,
         stream_mode=True,
         step_mode=command.step_mode,
         rag_enabled=command.rag_enabled,
@@ -173,6 +184,28 @@ class CreateSessionService:
         parsed_content = command.village_data
         task_description = command.task_description
         constraints = command.constraints
+        from app.data.ingestion.source_admission import (
+            assess_source_admission,
+            has_strong_planned_output_signals,
+        )
+
+        direct_data_assessment = assess_source_admission(
+            input_role="current_evidence",
+            source="village_data",
+            parsed_text=parsed_content,
+        )
+        if (
+            parsed_content.strip()
+            and direct_data_assessment.status != "admitted"
+        ):
+            raise CreateSessionValidationError(
+                "村庄现状文本包含规划成果信号，不能作为 current evidence 输入；"
+                "请只提供现状报告。"
+            )
+        evidence_supplied = (
+            len(parsed_content.strip()) >= 10
+            and direct_data_assessment.status == "admitted"
+        )
         created = False
         try:
             await self._sessions.create(
@@ -199,13 +232,68 @@ class CreateSessionService:
                 for file in files:
                     result = await self._ingestion.process(file, command.session_id, category)
                     parsed_text = str(result.get("parsed_text") or "")
-                    if category == "village_data" and parsed_text:
-                        parsed_content += f"\n\n--- 村庄数据: {result.get('filename', 'upload')} ---\n{parsed_text}"
-                    elif category == "task_description" and parsed_text:
+                    input_role = str(result.get("input_role") or "")
+                    admission_status = str(
+                        result.get("admission_status") or ""
+                    )
+                    admission_signals = [
+                        str(value)
+                        for value in result.get("admission_signals") or []
+                    ]
+                    filename = str(result.get("filename") or "上传文件")
+                    verified_assessment = assess_source_admission(
+                        input_role=input_role,
+                        source="upload",
+                        category=category,
+                        filename=filename,
+                        parsed_text=parsed_text,
+                        gis_data=(
+                            result.get("gis_data")
+                            if isinstance(result.get("gis_data"), Mapping)
+                            else None
+                        ),
+                        gis_data_type=str(result.get("gis_data_type") or ""),
+                    )
+                    verified_signals = list(verified_assessment.signals)
+                    strong_output_signal = has_strong_planned_output_signals(
+                        admission_signals + verified_signals
+                    )
+                    if (
+                        input_role == "planned_output"
+                        or verified_assessment.input_role == "planned_output"
+                        or strong_output_signal
+                    ):
+                        raise CreateSessionValidationError(
+                            f"{filename} 被识别为规划成果，不能作为规划输入。"
+                        )
+                    if (
+                        verified_assessment.input_role != input_role
+                        or verified_assessment.status != admission_status
+                    ):
+                        raise CreateSessionValidationError(
+                            f"{filename} 的准入角色或状态无法复核，已拒绝输入。"
+                        )
+                    if category == "village_data":
+                        evidence_supplied = evidence_supplied or (
+                            input_role == "current_evidence"
+                            and admission_status == "admitted"
+                            and bool(parsed_text.strip() or result.get("gis_data"))
+                        )
+                    elif (
+                        category == "task_description"
+                        and input_role == "planning_brief"
+                        and admission_status == "control_only"
+                        and parsed_text
+                    ):
                         task_description = parsed_text.strip()
-                    elif category == "constraint" and parsed_text:
+                    elif (
+                        category == "constraint"
+                        and input_role == "planning_instruction"
+                        and admission_status == "control_only"
+                        and parsed_text
+                    ):
                         constraints = parsed_text.strip()
-            if len(parsed_content.strip()) < 10:
+            if not evidence_supplied:
                 raise CreateSessionValidationError("村庄数据不能为空或过短")
             await self._sessions.update(
                 command.session_id,
@@ -215,6 +303,8 @@ class CreateSessionService:
                     "constraints": constraints,
                 },
             )
+            command.task_description = task_description
+            command.constraints = constraints
             await self._starter.start(command.session_id, self._state_factory(command))
             return CreateSessionResult(
                 session_id=command.session_id,

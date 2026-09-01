@@ -85,7 +85,7 @@ class Deliverable(BaseModel):
 class TraceabilityEntry(BaseModel):
     target_id: str = ""
     target_type: str = ""
-    expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"] = "parcel"
+    expected_output_kind: Literal["parcel", "polygon", "point", "line", "multipatch", "action"] = "polygon"
     execution_task_id: str = ""
     output_artifacts: list[str] = Field(default_factory=list)
     status: Literal["covered", "partial", "missing", "deferred", "failed"] = "missing"

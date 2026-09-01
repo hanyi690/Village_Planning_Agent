@@ -6,19 +6,29 @@ JSON remains an internal persistence/digest format; prompts use these helpers.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from .budgets import ContextBudget
 
 
-def table_cell(value: Any) -> str:
+def _flat_cell_value(value: Any) -> str:
     if value is None:
         return ""
-    if isinstance(value, (Mapping, list, tuple)):
-        value = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return str(value).replace("|", "\\|").replace("\n", "<br>")
+    if isinstance(value, Mapping):
+        return "; ".join(
+            f"{key}={_flat_cell_value(child)}"
+            for key, child in sorted(value.items(), key=lambda item: str(item[0]))
+        )
+    if isinstance(value, (set, frozenset)):
+        value = sorted(value, key=str)
+    if isinstance(value, (list, tuple)):
+        return "; ".join(_flat_cell_value(child) for child in value)
+    return str(value)
+
+
+def table_cell(value: Any) -> str:
+    return _flat_cell_value(value).replace("|", "\\|").replace("\n", "<br>")
 
 
 def render_table(columns: Sequence[str], rows: Iterable[Mapping[str, Any]]) -> str:

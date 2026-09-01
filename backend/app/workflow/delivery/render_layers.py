@@ -19,7 +19,7 @@ def _wkt_to_geojson(wkt: str) -> Optional[Dict[str, Any]]:
         from shapely.geometry import mapping
 
         geom = shapely_wkt.loads(wkt)
-        if geom is None or geom.is_empty:
+        if geom is None or geom.is_empty or not geom.is_valid:
             return None
         return mapping(geom)
     except Exception:
@@ -37,6 +37,14 @@ def _lineage_properties(item: Any) -> Dict[str, Any]:
         "source_bsms",
         "feature_bsms",
         "source_feature_ids",
+        "source_refs",
+        "resource_refs",
+        "representation_refs",
+        "input_geometry_refs",
+        "source_snapshot_refs",
+        "resource_digests",
+        "capability_refs",
+        "selection_refs",
         "entity_refs",
         "relation_refs",
         "evidence_refs",
@@ -49,6 +57,16 @@ def _lineage_properties(item: Any) -> Dict[str, Any]:
         "l1_snapshot_ref",
         "bundle_snapshot_digest",
         "subgeometry_operation",
+        "part_ref",
+        "change_ref",
+        "approval_ref",
+        "world_model_digest",
+        "input_operation",
+        "input_crs",
+        "output_crs",
+        "geometry_digest",
+        "generation_operation",
+        "crs",
     ):
         result[name] = str(getattr(item, name, "") or "")
     result["subgeometry_diagnostics"] = list(
@@ -69,6 +87,9 @@ def _lineage_properties(item: Any) -> Dict[str, Any]:
             result[name] = float(value)
     result["availability_status"] = str(
         getattr(item, "availability_status", "unknown") or "unknown"
+    )
+    result["operation_parameters"] = dict(
+        getattr(item, "operation_parameters", None) or {}
     )
     for name in ("adjacent_parcel_bsms", "adjacency_evidence_refs"):
         values = getattr(item, name, None) or []
@@ -208,30 +229,57 @@ def _semantic_overlay_layers(planned_state: Any) -> List[Dict[str, Any]]:
     ]
 
 
-def _project_point_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
-    """Expose a small centroid marker for every landed project footprint."""
-    features: List[Dict[str, Any]] = []
-    for parcel in getattr(planned_state, "parcels", None) or []:
-        project_ref = str(getattr(parcel, "project_ref", "") or "")
-        geometry = _wkt_to_geojson(getattr(parcel, "geometry", "") or "")
-        if not project_ref or geometry is None:
-            continue
-        try:
-            from shapely.geometry import shape, mapping
+def _generic_feature_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
+    """Render canonical ScenarioFeature outputs without parcel semantics.
 
-            point = mapping(shape(geometry).representative_point())
-        except Exception:
-            continue
-        features.append({
-            "type": "Feature",
-            "properties": {
-                "project_ref": project_ref,
-                "bsm": getattr(parcel, "bsm", ""),
-                "marker_size": "small",
-            },
-            "geometry": point,
-        })
-    return _layer("planned_project_point", "规划项目定位点", features)
+    This is the primary projection for DATA/KG-backed geometry.  A feature
+    may be a point, line, polygon, or multipatch and is identified by its
+    feature/target/candidate lineage rather than a cadastral BSM.
+    """
+    features: List[Dict[str, Any]] = []
+    for item in getattr(planned_state, "features", None) or []:
+        crs = str(
+            getattr(item, "output_crs", "")
+            or getattr(item, "crs", "")
+            or ""
+        )
+        if crs.casefold() not in {
+            "epsg:4326",
+            "4326",
+            "crs84",
+            "urn:ogc:def:crs:ogc:1.3:crs84",
+        }:
+            raise ValueError(
+                "DELIVER requires EXECUTE to persist a WGS84 display representation"
+            )
+        geometry = _wkt_to_geojson(getattr(item, "geometry_wkt", "") or "")
+        if geometry is None:
+            raise ValueError(
+                "PlannedState contains an empty or invalid ScenarioFeature geometry"
+            )
+        properties = {
+            "feature_id": getattr(item, "feature_id", ""),
+            "target_id": getattr(item, "target_id", ""),
+            "candidate_id": getattr(item, "candidate_id", ""),
+            "geometry_kind": getattr(item, "geometry_kind", ""),
+            "generation_operation": getattr(item, "generation_operation", ""),
+            "scenario_id": getattr(item, "scenario_id", ""),
+            "crs": crs,
+            "part_ref": getattr(item, "part_ref", ""),
+            "representation_refs": list(getattr(item, "representation_refs", None) or []),
+            "resource_refs": list(getattr(item, "resource_refs", None) or []),
+            **_lineage_properties(item),
+        }
+        # Keep singular primary refs for generic consumers that do not yet
+        # understand the plural multi-representation form.  The complete
+        # arrays above remain authoritative and preserve multi-geometry
+        # lineage.
+        if properties["representation_refs"]:
+            properties["representation_ref"] = properties["representation_refs"][0]
+        if properties["resource_refs"]:
+            properties["resource_ref"] = properties["resource_refs"][0]
+        features.append({"type": "Feature", "properties": properties, "geometry": geometry})
+    return _layer("planned_features", "通用规划要素", features)
 
 
 def _facility_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
@@ -239,11 +287,7 @@ def _facility_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
     for facility in getattr(planned_state, "facilities", None) or []:
         geometry = _wkt_to_geojson(getattr(facility, "geometry", "") or "")
         if geometry is None:
-            lon = float(getattr(facility, "lon", 0.0) or 0.0)
-            lat = float(getattr(facility, "lat", 0.0) or 0.0)
-            if not lon and not lat:
-                continue
-            geometry = {"type": "Point", "coordinates": [lon, lat]}
+            continue
         features.append({
             "type": "Feature",
             "properties": {
@@ -352,7 +396,7 @@ def build_planned_overlay_layers(
         _function_zone_layer,
         _project_layer,
         _semantic_overlay_layers,
-        _project_point_layer,
+        _generic_feature_layer,
         _facility_layer,
         _road_layer,
         _axis_layer,
@@ -379,14 +423,41 @@ def build_delivery_render_layers(
         load_snapshot_planned_overlays,
     )
 
+    if (
+        str(getattr(snapshot, "delivery_status", "") or "")
+        == "diagnostic_only"
+        and getattr(snapshot, "complete_planned_landuse", None) is None
+    ):
+        return []
+
     current = _delivery_gis_data(load_snapshot_gis_data(snapshot))
+    generic_baseline = current.get("data_catalog_geojson")
     if current.get("landuse_current_geojson"):
         current["landuse_current_geojson"] = colorize_feature_collection(
             current["landuse_current_geojson"]
         )
     planned = colorize_feature_collection(load_complete_planned_geojson(snapshot))
     layouts: list[dict[str, Any]] = []
-    if planned.get("features"):
+    if isinstance(generic_baseline, dict) and generic_baseline.get("features"):
+        layouts.append({
+            "layerType": "data_catalog",
+            "layerName": "DATA 现状基线",
+            "data": generic_baseline,
+            "geojson": generic_baseline,
+            "color": "#64748b",
+            "default_visible": False,
+            "style": {
+                "fill-opacity": 0.08,
+                "line-opacity": 0.55,
+                "line-width": 1,
+            },
+        })
+        current = {
+            key: value
+            for key, value in current.items()
+            if key != "data_catalog_geojson"
+        }
+    if planned.get("features") and generic_baseline is None:
         layouts.append({
             "layerType": "complete_planned_landuse",
             "layerName": "完整期末地类（含未修改地块）",
@@ -403,11 +474,11 @@ def build_delivery_render_layers(
         })
     overlay_names = {
         "planned_project_geojson": ("planned_project", "规划项目落地", "#f97316"),
-        "planned_project_point_geojson": ("planned_project_point", "规划项目定位点", "#b91c1c"),
         "planned_facility_geojson": ("facility_point", "公共服务设施", "#2563eb"),
         "planned_road_geojson": ("planned_road", "规划道路", "#d97706"),
         "planned_axis_geojson": ("development_axis", "发展轴", "#7c3aed"),
         "planned_zone_geojson": ("planning_zone", "规划分区", "#16a34a"),
+        "planned_features_geojson": ("planned_features", "通用规划要素", "#0f766e"),
         "planned_restoration_geojson": ("restoration_zone", "生态修复", "#15803d"),
         "planned_protection_geojson": ("protection_zone", "保护范围", "#7c3aed"),
     }
@@ -425,7 +496,6 @@ def build_delivery_render_layers(
             "color": color,
             "default_visible": layer_type in {
                 "planned_project",
-                "planned_project_point",
                 "facility_point",
                 "planned_road",
                 "development_axis",
@@ -435,7 +505,6 @@ def build_delivery_render_layers(
             },
             "force_layer_colors": layer_type in {
                 "planned_project",
-                "planned_project_point",
                 "facility_point",
                 "planned_road",
                 "development_axis",

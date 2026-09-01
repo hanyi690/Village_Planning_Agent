@@ -236,6 +236,10 @@ class AgentState(TypedDict, total=False):
     post_l3_status: str  # "needs_human_review" 等
     # ── Wave M: post-L3 主图独立节点链 typed artifacts（单一状态源）──
     # L3 输入
+    # DATA -> World Model/KG -> EVIDENCE bootstrap gates
+    data_gate: Optional[Any]
+    kg_gate: Optional[Any]
+    evidence_gate: Optional[Any]
     # TARGET_PROJECTION 输出
     target_projection_gate: Optional[Any]  # GateDecision
     # GROUND 输出

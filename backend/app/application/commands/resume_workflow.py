@@ -233,6 +233,19 @@ class ResumeWorkflowService:
             command.session_id,
             snapshot,
         )
+        requested_stage = str(command.replay_from_stage or "").strip().lower()
+        if requested_stage and requested_stage != "data" and requested_stage not in {
+            "target_projection",
+            "ground",
+            "select",
+            "execute",
+            "validate",
+            "reconcile",
+            "deliver",
+        }:
+            raise ResumeConflictError(
+                f"unsupported replay stage: {command.replay_from_stage!r}"
+            )
         diagnostic_code = None
         if isinstance(snapshot.values, dict):
             diagnostic = snapshot.values.get("diagnostic_terminal") or {}
@@ -251,7 +264,17 @@ class ResumeWorkflowService:
             # artifacts remain a valid explicit replay prefix.
             "UNAUTHORIZED_STAGE",
         }
-        stale_replay = bool(command.replay_from_stage) and replayable_diagnostic
+        data_replay = requested_stage == "data"
+        if data_replay:
+            plan = ResumeService.explicit_data_replay_plan(
+                dict(snapshot.values),
+                plan,
+            )
+        stale_replay = (
+            bool(command.replay_from_stage)
+            and not data_replay
+            and replayable_diagnostic
+        )
         if stale_replay:
             plan = ResumeService.explicit_spatial_replay_plan(
                 dict(snapshot.values),
@@ -259,7 +282,7 @@ class ResumeWorkflowService:
                 command.replay_from_stage or "",
             )
         if (
-            (not stable and not stale_replay)
+            (not stable and not stale_replay and not data_replay)
             or kind == "human"
             or plan.mode is ResumeMode.BLOCKED
         ):
@@ -271,7 +294,7 @@ class ResumeWorkflowService:
             command.session_id,
             checkpoint_id=command.checkpoint_id,
             state_values=dict(snapshot.values),
-            replay_from_stage=command.replay_from_stage,
+            replay_from_stage=("data" if data_replay else command.replay_from_stage),
             branch_id=branch_id,
         )
         return ResumeWorkflowResult(

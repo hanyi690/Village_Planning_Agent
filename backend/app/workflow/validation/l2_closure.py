@@ -141,8 +141,8 @@ def validate_l2_decision_set(
     strategy_ids = {item.strategy_id for item in decision.strategies}
 
     for objective in decision.objectives:
-        if objective.status == "observed" and not objective.source_fact_refs:
-            errors.append(f"observed_objective_evidence_missing:{objective.objective_id}")
+        if not objective.source_fact_refs:
+            errors.append(f"objective_evidence_missing:{objective.objective_id}")
         errors.extend(
             _validate_source_fact_refs(
                 objective.source_fact_refs,
@@ -153,8 +153,8 @@ def validate_l2_decision_set(
         )
 
     for metric in decision.metrics:
-        if metric.status == "observed" and not metric.source_fact_refs:
-            errors.append(f"observed_metric_evidence_missing:{metric.metric_id}")
+        if not metric.source_fact_refs:
+            errors.append(f"metric_evidence_missing:{metric.metric_id}")
         errors.extend(
             _validate_source_fact_refs(
                 metric.source_fact_refs,

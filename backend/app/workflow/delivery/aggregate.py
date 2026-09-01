@@ -308,8 +308,18 @@ def deliver_aggregate(
 
     upstream_items = collect_upstream_human_items(upstream_gates)
 
+    # Area-balance is a cadastral invariant, not a generic geometry invariant.
+    # Polygon targets backed only by DATA/KG representations must be delivered
+    # through ``planned_features`` and must not be forced through a BSM parcel
+    # ledger.  Keep the legacy gate only for an explicit parcel contract or a
+    # task that names BSM/source-parcel lineage.
     land_balance_expected = any(
-        str(getattr(task, "expected_output_kind", "")) in {"parcel", "polygon"}
+        str(getattr(task, "expected_output_kind", "")) == "parcel"
+        or bool(
+            getattr(task, "source_bsms", None)
+            or getattr(task, "feature_bsms", None)
+            or (getattr(task, "target_binding", None) or {}).get("source_bsms")
+        )
         for task in (getattr(execution_plan, "worker_tasks", None) or [])
     )
     planned_geojson = (
@@ -322,13 +332,22 @@ def deliver_aggregate(
         if isinstance(planned_geojson, dict)
         else []
     )
+    generic_feature_payload = (
+        export_result.get("planned_features_geojson")
+        if isinstance(export_result, dict)
+        else None
+    )
+    has_generic_planning_output = bool(
+        isinstance(generic_feature_payload, dict)
+        and generic_feature_payload.get("features")
+    )
     has_material_planned_change = any(
         (feature.get("properties") or {}).get("change_status")
         not in {None, "preserved", "unchanged"}
         for feature in planned_features
         if isinstance(feature, dict)
     )
-    if not has_material_planned_change:
+    if not has_material_planned_change and not has_generic_planning_output:
         check_items.append(HumanItem(
             item_id="hi-no-parcel-changes",
             description="期末地类没有实际 ParcelChange",
@@ -344,7 +363,7 @@ def deliver_aggregate(
             current_parcels=list(current_parcels or []),
             planned_parcels=planned_for_balance,
         )
-        if land_balance_expected or execution_plan is None
+        if land_balance_expected
         else DeliveryGate(land_balance_closed=True, zones_complete=True)
     )
     if spatial_output_count > 0 and not gate.passed:
@@ -366,7 +385,8 @@ def deliver_aggregate(
         "diagnostic_only"
         if blocking
         else "partial"
-        if deferral_summary["count"] > 0 or not has_material_planned_change
+        if deferral_summary["count"] > 0
+        or (not has_material_planned_change and not has_generic_planning_output)
         else "complete"
     )
     statutory_complete = (

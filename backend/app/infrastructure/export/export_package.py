@@ -79,7 +79,11 @@ def export_delivery_package(
     )
 
     gis_data = load_snapshot_gis_data(snapshot)
-    complete_planned_geojson = load_complete_planned_geojson(snapshot)
+    complete_planned_geojson = (
+        load_complete_planned_geojson(snapshot)
+        if getattr(snapshot, "complete_planned_landuse", None) is not None
+        else {"type": "FeatureCollection", "features": []}
+    )
 
     if not output_dir:
         project_root = Path(__file__).resolve().parents[3]
@@ -144,7 +148,10 @@ def export_delivery_package(
         else:
             geojson = None
 
-        if geojson:
+        if geojson and (
+            geojson.get("features")
+            or layer_key not in {"planned_landuse"}
+        ):
             path = os.path.join(output_dir, source)
             os.makedirs(os.path.dirname(path), exist_ok=True)
             geojson = _normalize_fields(geojson, layer_key)
@@ -160,9 +167,20 @@ def export_delivery_package(
             json.dump(custom_planning_zone, f, ensure_ascii=False)
         exported.append("planned/custom_planning_zone.geojson")
 
+    # Generic ScenarioFeature outputs are first-class planning artifacts. They
+    # may be points, lines, polygons, or multipatches and intentionally do not
+    # enter the cadastral ``planned_landuse`` registry layer.
+    generic_features = _find_layer_in_configs(layout_configs, "planned_features")
+    if generic_features and generic_features.get("features"):
+        generic_path = os.path.join(output_dir, "planned", "planned_features.geojson")
+        os.makedirs(os.path.dirname(generic_path), exist_ok=True)
+        with open(generic_path, "w", encoding="utf-8") as f:
+            json.dump(generic_features, f, ensure_ascii=False)
+        exported.append("planned/planned_features.geojson")
+
     # ── Land balance table ─────────────────────────────────────
     balance_geojson = complete_planned
-    if balance_geojson:
+    if balance_geojson and balance_geojson.get("features"):
         balance = _compute_land_balance(balance_geojson)
         balance_path = os.path.join(output_dir, "tables/land_balance.json")
         os.makedirs(os.path.dirname(balance_path), exist_ok=True)
@@ -207,6 +225,7 @@ def export_delivery_package(
         "exported_files": exported,
         "file_count": len(exported),
         "planned_landuse_geojson": complete_planned,
+        "planned_features_geojson": generic_features,
     }
 
 

@@ -55,10 +55,16 @@ def validate_render_feature(feature: dict[str, Any], *, planned: bool = True) ->
         "world_model_digest",
         "bundle_snapshot_digest",
     )
-    if not any(str(properties.get(key) or "").strip() for key in lineage_keys):
+    if not any(
+        str(properties.get(key) or "").strip()
+        or any(str(value).strip() for value in (properties.get(f"{key}s") or []))
+        for key in lineage_keys
+    ):
         return {"status": "diagnostic_only", "code": "missing_geometry_lineage"}
     for key in ("resource_ref", "representation_ref"):
         if is_external_observation_ref(properties.get(key)):
+            return {"status": "rejected", "code": "external_observation_geometry_ref"}
+        if any(is_external_observation_ref(value) for value in (properties.get(f"{key}s") or [])):
             return {"status": "rejected", "code": "external_observation_geometry_ref"}
     return {"status": "accepted"}
 

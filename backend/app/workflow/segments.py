@@ -433,6 +433,36 @@ def _build_spatial_chain(checkpointer) -> StateGraph:
     def spatial_entry(state: Dict[str, Any]) -> Command:
         entry = state.get("subgraph_entry")
         target = entry if entry in _SPATIAL_INTERNAL else "target_projection"
+        required_gates = {
+            "target_projection": ("data", "kg", "evidence", "l1", "l2", "l3"),
+            "ground": ("data", "kg", "evidence", "l1", "l2", "l3", "target_projection"),
+            "select": ("data", "kg", "evidence", "l1", "l2", "l3", "target_projection", "ground"),
+            "execute": ("data", "kg", "evidence", "l1", "l2", "l3", "target_projection", "ground", "select"),
+            "validate": ("data", "kg", "evidence", "l1", "l2", "l3", "target_projection", "ground", "select"),
+            "reconcile": ("data", "kg", "evidence", "l1", "l2", "l3", "target_projection", "ground", "select", "validate"),
+            "deliver": ("data", "kg", "evidence", "l1", "l2", "l3", "target_projection", "ground", "select", "validate", "reconcile"),
+        }.get(target, ())
+        if required_gates:
+            try:
+                from app.workflow.stages.support import require_upstream_gates
+
+                require_upstream_gates(dict(state), required_gates)
+            except Exception as exc:
+                from app.workflow.routing.dispatch import DispatchDiagnostic, DispatchDiagnosticCode
+                from app.workflow.terminal import diagnostic_terminal, terminal_patch
+
+                diagnostic = DispatchDiagnostic(
+                    code=DispatchDiagnosticCode.UPSTREAM_GATE_BLOCKED,
+                    source_stage="spatial_entry",
+                    target_stage=target,
+                    message="spatial chain entry is blocked by an upstream gate",
+                    details={"error": str(exc), "target_stage": target},
+                )
+                return Command(
+                    update=terminal_patch(diagnostic_terminal(diagnostic)),
+                    graph=Command.PARENT,
+                    goto="end_diagnostic",
+                )
         return Command(update={"subgraph_entry": None}, goto=target)
 
     builder.add_node("spatial_entry", rg.adapt_node(spatial_entry))

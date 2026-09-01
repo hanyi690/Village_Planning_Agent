@@ -66,6 +66,8 @@ def reconcile_gate_route(report: FinalManifest) -> str:
     """Return the deterministic route:
     "PASS"|"RETRY_L3"|"RETRY_EXECUTE"|"HUMAN".
     """
+    if report.status == "human_required":
+        return "HUMAN"
     if not report.inconsistencies:
         return "PASS"
     if all(inc.severity != "error" for inc in report.inconsistencies):

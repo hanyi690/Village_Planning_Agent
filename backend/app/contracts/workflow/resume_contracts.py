@@ -57,7 +57,13 @@ class ResumeResult(BaseModel):
 
 
 class ResumePlan(BaseModel):
-    """Auditable application decision for a checkpoint operation."""
+    """Auditable application decision for a checkpoint operation.
+
+    A DATA-boundary replay is represented as one explicit full-chain plan.  It
+    starts at the persisted ``bootstrap_context`` cursor and reruns every
+    downstream product in order; it is not a shortcut into KG, Evidence, or a
+    planning layer.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -93,7 +99,13 @@ def repair_plan_for_integrity(
     invalid = set(invalid_artifacts)
     if not invalid:
         return plan
-    stage_by_key = dict(ARTIFACT_STAGE_ORDER)
+    stage_by_key = {
+        **dict(ARTIFACT_STAGE_ORDER),
+        **{
+            gate_key: stage
+            for gate_key, (_output_key, stage) in _GATE_OUTPUT_BY_KEY.items()
+        },
+    }
     ordered = [
         (key, stage_by_key[key])
         for key in invalid
@@ -110,7 +122,12 @@ def repair_plan_for_integrity(
     )
     stages = list(dict.fromkeys(stage for _, stage in ARTIFACT_STAGE_ORDER))
     start = stages.index(first_stage)
-    reuse = [key for key, stage in ARTIFACT_STAGE_ORDER if stages.index(stage) < start]
+    reusable_stages = set(stages[:start])
+    reuse = [
+        key
+        for key, stage in stage_by_key.items()
+        if stage in reusable_stages
+    ]
     return plan.model_copy(update={
         "mode": ResumeMode.RERUN,
         "resume_from": first_stage,
@@ -132,12 +149,39 @@ ARTIFACT_STAGE_ORDER: tuple[tuple[str, str], ...] = (
     ("approved_execution_input", "SELECT"),
     ("execution_plan", "EXECUTE"),
     ("execution_result", "EXECUTE"),
+    ("spatial_changeset", "EXECUTE"),
     ("parcel_changeset", "EXECUTE"),
     ("planned_state", "EXECUTE"),
     ("validation_report", "VALIDATE"),
     ("final_manifest", "RECONCILE"),
     ("delivery_manifest", "DELIVER"),
 )
+
+# The only supported replay that invalidates the complete upstream product
+# chain.  Keep this separate from ARTIFACT_STAGE_ORDER: DATA, KG, and EVIDENCE
+# are bootstrap products and do not have the ordinary planning artifact keys.
+DATA_REPLAY_CHAIN: tuple[str, ...] = (
+    "DATA",
+    "KG",
+    "EVIDENCE",
+    "L1",
+    "L2",
+    "L3",
+    "TARGET_PROJECTION",
+    "GROUND",
+    "SELECT",
+    "EXECUTE",
+    "VALIDATE",
+    "RECONCILE",
+    "DELIVER",
+)
+
+_GATE_OUTPUT_BY_KEY: dict[str, tuple[str, str]] = {
+    "l1_gate": ("l1_snapshot", "L1"),
+    "l2_gate": ("l2_strategy", "L2"),
+    "l3_gate": ("planning_program", "L3"),
+    "target_projection_gate": ("target_projection", "TARGET_PROJECTION"),
+}
 
 
 def _ref_digest(ref: Any) -> str:
@@ -267,7 +311,26 @@ def _validated_reuse(refs: Dict[str, Any], state: Dict[str, Any]) -> tuple[list[
             return reuse, f"parent identity missing at {stage}"
         if parent_status == "changed":
             return reuse, f"parent identity changed at {stage}"
+        gate_key = next(
+            (
+                key
+                for key, (output_key, _gate_stage) in _GATE_OUTPUT_BY_KEY.items()
+                if output_key == artifact_key
+            ),
+            "",
+        )
+        if gate_key:
+            gate_ref = refs.get(gate_key)
+            if gate_ref is None:
+                return reuse, f"gate identity missing at {stage}"
+            if _artifact_context_changed(gate_ref, state):
+                return reuse, f"gate context identity changed at {stage}"
+            bound_output_digest = _ref_parent_digests(gate_ref).get(artifact_key)
+            if bound_output_digest != _ref_digest(ref):
+                return reuse, f"gate output identity changed at {stage}"
         reuse.append(artifact_key)
+        if gate_key:
+            reuse.append(gate_key)
     return reuse, None
 
 
@@ -378,6 +441,7 @@ def build_resume_plan(
 
 __all__ = [
     "ARTIFACT_STAGE_ORDER",
+    "DATA_REPLAY_CHAIN",
     "ResumeMode",
     "ResumeCommand",
     "ResumeResult",
