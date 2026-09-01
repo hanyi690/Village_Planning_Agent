@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -56,6 +56,22 @@ class ScenarioFeature(BaseModel):
     crs: str = Field(min_length=1)
     generation_operation: str = Field(min_length=1)
     source_refs: list[str] = Field(min_length=1)
+    resource_refs: list[str] = Field(default_factory=list)
+    representation_refs: list[str] = Field(default_factory=list)
+    input_geometry_refs: list[str] = Field(default_factory=list)
+    source_snapshot_refs: list[str] = Field(default_factory=list)
+    resource_digests: list[str] = Field(default_factory=list)
+    capability_refs: list[str] = Field(default_factory=list)
+    selection_refs: list[str] = Field(default_factory=list)
+    part_ref: str = ""
+    change_ref: str = ""
+    approval_ref: str = ""
+    world_model_digest: str = ""
+    input_operation: str = ""
+    operation_parameters: dict[str, Any] = Field(default_factory=dict)
+    input_crs: str = ""
+    output_crs: str = ""
+    geometry_digest: str = ""
     source_bsms: list[str] = Field(default_factory=list)
     feature_bsms: list[str] = Field(default_factory=list)
     source_feature_ids: list[str] = Field(default_factory=list)
@@ -97,6 +113,13 @@ class ScenarioFeature(BaseModel):
         "source_bsms",
         "feature_bsms",
         "source_feature_ids",
+        "resource_refs",
+        "representation_refs",
+        "input_geometry_refs",
+        "source_snapshot_refs",
+        "resource_digests",
+        "capability_refs",
+        "selection_refs",
         "entity_refs",
         "evidence_refs",
         "l1_fact_refs",
@@ -128,15 +151,78 @@ class ScenarioTargetSelection(BaseModel):
     selection_mode: Literal["all_members", "choose_one", "choose_subset"]
     candidate_ids: list[str] = Field(min_length=1)
     binding_ref: str = ""
+    resource_refs: list[str] = Field(default_factory=list)
+    representation_refs: list[str] = Field(default_factory=list)
+    geometry_refs: list[str] = Field(default_factory=list)
+    operation: str = "select"
+    operation_parameters: dict[str, Any] = Field(default_factory=dict)
+    required_capability: str = ""
 
     @model_validator(mode="after")
     def canonicalize(self) -> "ScenarioTargetSelection":
         self.candidate_ids = sorted(set(item for item in self.candidate_ids if item))
+        self.resource_refs = sorted(set(str(item) for item in self.resource_refs if str(item).strip()))
+        self.representation_refs = sorted(set(str(item) for item in self.representation_refs if str(item).strip()))
+        self.geometry_refs = sorted(set(str(item) for item in self.geometry_refs if str(item).strip()))
+        self.operation = str(self.operation or "select").strip() or "select"
+        self.required_capability = str(self.required_capability or "").strip()
         if not self.candidate_ids:
             raise ValueError("candidate_ids must contain at least one member")
         if self.selection_mode == "choose_one" and len(self.candidate_ids) != 1:
             raise ValueError("choose_one selection must contain exactly one candidate")
         return self
+
+    def to_selection_decision(
+        self,
+        *,
+        entity_ref: str = "",
+        part_ref: str = "",
+        representation_ref: str = "",
+        resource_ref: str = "",
+        geometry_ref: str = "",
+        input_geometry_kind: str = "",
+        geometry_kind: str = "",
+        input_crs: str = "",
+        output_crs: str = "",
+        source_snapshot_ref: str = "",
+        resource_digest: str = "",
+        capability_ref: str = "",
+        constraint_refs: list[str] | None = None,
+        evidence_refs: list[str] | None = None,
+        hard_constraint_status: str = "unknown",
+        availability_status: str = "unknown",
+        status: str = "selected",
+    ) -> Any:
+        """Project a scenario row into the generic EXECUTE-facing contract."""
+
+        from app.contracts.select.selection_decision import SelectionDecision
+
+        selection_ref = f"selection:{self.target_id}:{self.candidate_ids[0]}"
+        return SelectionDecision(
+            selection_ref=selection_ref,
+            candidate_ref=self.candidate_ids[0],
+            target_ref=self.target_id,
+            entity_ref=entity_ref,
+            part_ref=part_ref,
+            representation_ref=representation_ref or (self.representation_refs[0] if self.representation_refs else ""),
+            resource_ref=resource_ref or (self.resource_refs[0] if self.resource_refs else ""),
+            geometry_ref=geometry_ref or (self.geometry_refs[0] if self.geometry_refs else ""),
+            input_geometry_kind=input_geometry_kind,
+            geometry_kind=geometry_kind,
+            operation=self.operation,
+            operation_parameters=dict(self.operation_parameters),
+            input_crs=input_crs,
+            output_crs=output_crs,
+            source_snapshot_ref=source_snapshot_ref,
+            resource_digest=resource_digest,
+            capability_ref=capability_ref,
+            constraint_refs=list(constraint_refs or []),
+            evidence_refs=list(evidence_refs or []),
+            hard_constraint_status=hard_constraint_status,
+            availability_status=availability_status,
+            required_capability=self.required_capability or "read",
+            status=status,
+        )
 
 
 class PlanningScenario(ContractMeta):

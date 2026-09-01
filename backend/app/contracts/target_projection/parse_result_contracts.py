@@ -16,6 +16,27 @@ from app.contracts.target_projection.p1_closure import GroundingRequest, Physica
 from app.contracts.target_projection.parse_contracts import SpatialPlanningIntent
 
 
+TargetRepresentationPurpose = Literal[
+    "point_location",
+    "service_area",
+    "centerline",
+    "corridor",
+    "site_footprint",
+    "land_use_assignment",
+    "functional_overlay",
+    "protection_overlay",
+    "restoration_overlay",
+]
+TargetRepresentationType = Literal[
+    "point",
+    "line",
+    "polygon",
+    "parcel_set",
+    "network_path",
+    "service_area",
+]
+
+
 class CompilationStatus(str, Enum):
     DRAFT = "draft"
     VALIDATED = "validated"
@@ -51,6 +72,44 @@ class ClaimDispositionAudit(BaseModel):
     missing_requirements: list[str] = Field(default_factory=list)
 
 
+class TargetProjectionRow(BaseModel):
+    """Flat TARGET output consumed by GROUND alongside GroundingRequest."""
+
+    projection_ref: str
+    target_ref: str
+    target_type: str
+    operation: str
+    entity_type_requirements: list[str] = Field(default_factory=list, max_length=8)
+    representation_type_requirements: list[TargetRepresentationType] = Field(
+        default_factory=list,
+        min_length=1,
+        max_length=4,
+    )
+    representation_purpose: TargetRepresentationPurpose
+    required_capabilities: list[str] = Field(default_factory=list, max_length=12)
+    constraint_refs: list[str] = Field(default_factory=list, max_length=16)
+    l2_refs: list[str] = Field(default_factory=list, min_length=1, max_length=24)
+    source_fact_refs: list[str] = Field(default_factory=list, max_length=24)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=24)
+    candidate_request_ref: str
+    route_to: Literal["ground"] = "ground"
+    status: Literal["ready", "pending_grounding"] = "ready"
+    bypass_ref: str = ""
+
+
+class TargetProjectionBypassRecord(BaseModel):
+    """Auditable deferral that still routes the target into GROUND."""
+
+    bypass_ref: str
+    target_ref: str
+    condition: str
+    reason_code: str
+    detail: str = ""
+    source_refs: list[str] = Field(default_factory=list, max_length=24)
+    route_to: Literal["ground"] = "ground"
+    status: Literal["routed_pending"] = "routed_pending"
+
+
 class IntentCompilationResult(ContractMeta):
     schema_version: Literal["2.0"] = "2.0"
     program_ref: str = ""
@@ -71,11 +130,15 @@ class IntentCompilationResult(ContractMeta):
     physical_projects: PhysicalProjectAssembly | None = None
     grounding_requests: list[GroundingRequest] = Field(default_factory=list)
     pending_grounding_requests: list[GroundingRequest] = Field(default_factory=list)
+    target_projection_rows: list[TargetProjectionRow] = Field(default_factory=list)
+    bypass_records: list[TargetProjectionBypassRecord] = Field(default_factory=list)
 
 
 __all__ = [
     "CompilationStatus",
     "ParseDiagnostic",
     "ClaimDispositionAudit",
+    "TargetProjectionRow",
+    "TargetProjectionBypassRecord",
     "IntentCompilationResult",
 ]

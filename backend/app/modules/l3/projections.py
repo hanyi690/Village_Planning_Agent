@@ -19,8 +19,8 @@ def build_l3_projection(program: Any, *, budget: ContextBudget | None = None) ->
     rows, table = build_bounded_table(
         ("intervention_id", "name", "action", "spatial_requirement_count"),
         rows,
-        max_rows=(budget.max_rows if budget is not None else 80),
-        max_chars=(budget.max_chars if budget is not None else 12000),
+        max_rows=(budget.max_rows if budget is not None else 32),
+        max_chars=(budget.max_chars if budget is not None else 6200),
     )
     return {"rows": rows, "table": table, "count": len(rows)}
 

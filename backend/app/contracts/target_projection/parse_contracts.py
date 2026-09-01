@@ -62,7 +62,10 @@ class TargetExecutionContract(BaseModel):
 
     target_id: str = ""
     execution_mode: Literal["spatial", "non_spatial"] = "spatial"
-    expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"] = "parcel"
+    # Generic spatial targets produce a geometry feature by default.  A
+    # cadastral parcel is an explicit compatibility choice, never an implicit
+    # requirement of the base contract.
+    expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"] = "polygon"
     requires_spatial: bool = True
     classification_decision: ClassificationDecision | None = None
     claim_refs: list[str] = Field(default_factory=list)
@@ -292,15 +295,17 @@ class LinearAssetTarget(TargetExecutionContract):
 
 
 class SiteAreaTarget(TargetExecutionContract):
-    """Land-consuming site area with a parcel/polygon execution footprint.
+    """Land-consuming site area with a generic polygon execution footprint.
 
     A site-area target is not a facility marker. If the planning intent is a
     service node, public square, shelter, or another locatable facility, L3
-    must emit ``FacilityTarget`` with point output. A site-area intervention consumes
-    a selected parcel and produces a parcel/polygon footprint.
+    must emit ``FacilityTarget`` with point output. A site-area intervention
+    produces a polygon; ``parcel`` remains an explicit compatibility output
+    only when the planning contract requires cadastral capacity/remainder
+    accounting.
     """
 
-    expected_output_kind: Literal["parcel", "polygon", "action"] = "parcel"
+    expected_output_kind: Literal["parcel", "polygon", "action"] = "polygon"
 
     site_area_id: str
     name: str

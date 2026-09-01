@@ -9,7 +9,7 @@ different algorithm.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from app.contracts.select.scenario import ScenarioSet
 from app.contracts.select.solver import (
@@ -30,7 +30,8 @@ from app.core.common.solver_kind import (
     solver_kind_input_gate,
 )
 
-from .parcel_assignment_backend import ParcelAssignmentBackend
+if TYPE_CHECKING:
+    from .parcel_assignment_backend import ParcelAssignmentBackend
 
 
 class SolverBackend(Protocol):
@@ -552,19 +553,40 @@ class SolverBackendRegistry:
 
     def __init__(self, backends: list[SolverBackend] | None = None) -> None:
         self._backends: list[SolverBackend] = []
+        self._legacy_parcel_backend_loaded = False
         for backend in backends or []:
             self.register(backend)
+        self._legacy_parcel_backend_loaded = any(
+            item.backend_id == "parcel_assignment_bounded"
+            for item in self._backends
+        )
+
+    def _ensure_legacy_parcel_backend(self, problem_kind: str) -> None:
+        """Load the parcel compatibility backend only for explicit parcel work.
+
+        Generic DATA candidates must not import the retired parcel allocator
+        path.  The compatibility backend remains available for old plans whose
+        typed solver kind is explicitly ``parcel_assignment``.
+        """
+        if problem_kind != "parcel_assignment" or self._legacy_parcel_backend_loaded:
+            return
+        from .parcel_assignment_backend import ParcelAssignmentBackend
+
+        self.register(ParcelAssignmentBackend())
 
     def register(self, backend: SolverBackend) -> None:
         if any(item.backend_id == backend.backend_id for item in self._backends):
             raise ValueError(f"duplicate solver backend: {backend.backend_id}")
         self._backends.append(backend)
+        if backend.backend_id == "parcel_assignment_bounded":
+            self._legacy_parcel_backend_loaded = True
 
     def resolve(
         self,
         problem: GroundedPlanningProblem,
         view: SolverProblemView,
     ) -> BackendResolution:
+        self._ensure_legacy_parcel_backend(str(view.problem_kind))
         if not problem.can_solve and not (
             view.problem_kind == "network_path" and view.input_complete
         ):
@@ -613,11 +635,19 @@ class SolverBackendRegistry:
 
 def default_solver_registry() -> SolverBackendRegistry:
     return SolverBackendRegistry([
-        ParcelAssignmentBackend(),
         NetworkRelationBackend(),
         TopologyLayoutBackend(),
         DeterministicChoiceBackend(),
     ])
+
+
+def __getattr__(name: str):
+    """Preserve the historical import without eager parcel-module loading."""
+    if name == "ParcelAssignmentBackend":
+        from .parcel_assignment_backend import ParcelAssignmentBackend
+
+        return ParcelAssignmentBackend
+    raise AttributeError(name)
 
 
 __all__ = [

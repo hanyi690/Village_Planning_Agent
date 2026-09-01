@@ -76,6 +76,14 @@ CONTRACT_REGISTRY: dict[str, ContractRegistration] = {
         version="2",
         description="Stable L3 provider claims envelope; runtime catalog closure is local.",
     ),
+    "cognition.schema_mapping": ContractRegistration(
+        key="cognition.schema_mapping",
+        role="llm_output",
+        owner="cognition",
+        model_path="app.contracts.cognition.decision:SchemaMappingProposalBatch",
+        version="1",
+        description="Bounded closed-set schema mapping proposals for one source-collection table page.",
+    ),
     "llm.closed_set": ContractRegistration(
         key="llm.closed_set",
         role="llm_output",
@@ -99,6 +107,14 @@ CONTRACT_REGISTRY: dict[str, ContractRegistration] = {
         model_path="app.contracts.ground.spatial_reference_contracts:CandidateSelectionBatchProposal",
         version="1",
         description="Batch closed-set grounding decisions for one shared round.",
+    ),
+    "ground.target_priority": ContractRegistration(
+        key="ground.target_priority",
+        role="llm_output",
+        owner="grounding",
+        model_path="app.contracts.ground.spatial_reference_contracts:GroundTargetPriorityBatchProposal",
+        version="1",
+        description="Bounded priority advice for ordering already admitted grounding targets.",
     ),
     "select.scenario_selection": ContractRegistration(
         key="select.scenario_selection",

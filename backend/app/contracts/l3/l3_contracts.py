@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.contracts.artifacts.contract_meta import ContractMeta
 from app.contracts.artifacts.classification_ref import ClassificationDecision
@@ -25,6 +25,102 @@ from app.contracts.l2.planning_semantics import (
     RoadPlanningParameters,
     LINEAR_ASSET_KINDS,
 )
+
+
+RepresentationPurpose = Literal[
+    "point_location",
+    "service_area",
+    "centerline",
+    "corridor",
+    "site_footprint",
+    "land_use_assignment",
+    "functional_overlay",
+    "protection_overlay",
+    "restoration_overlay",
+]
+RepresentationType = Literal[
+    "point",
+    "line",
+    "polygon",
+    "parcel_set",
+    "network_path",
+    "service_area",
+]
+
+
+class L3TargetRow(BaseModel):
+    """Flat semantic target produced by L3; never a world/entity binding."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_ref: str = Field(min_length=1)
+    claim_family: str = Field(min_length=1)
+    subject_ref: str = ""
+    subject_text: str = Field(min_length=1)
+    operation: str = Field(min_length=1)
+    representation_purpose: RepresentationPurpose
+    required_capabilities: list[str] = Field(default_factory=list, max_length=12)
+    constraint_refs: list[str] = Field(default_factory=list, max_length=16)
+    l2_refs: list[str] = Field(default_factory=list, min_length=1, max_length=24)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=24)
+    source_fact_refs: list[str] = Field(default_factory=list, max_length=24)
+    candidate_request_ref: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_lineage(self) -> "L3TargetRow":
+        if not (self.evidence_refs or self.source_fact_refs):
+            raise ValueError("L3 target requires evidence or source-fact lineage")
+        for field_name in (
+            "required_capabilities",
+            "constraint_refs",
+            "l2_refs",
+            "evidence_refs",
+            "source_fact_refs",
+        ):
+            values = getattr(self, field_name)
+            setattr(self, field_name, list(dict.fromkeys(v for v in values if v)))
+        return self
+
+
+class L3SpatialRequirementRow(BaseModel):
+    """Flat representation request; it deliberately cannot carry geometry."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    requirement_ref: str = Field(min_length=1)
+    target_ref: str = Field(min_length=1)
+    representation_type: RepresentationType
+    representation_purpose: RepresentationPurpose
+    operation: str = Field(min_length=1)
+    location_hints: list[str] = Field(default_factory=list, max_length=8)
+    grounding_requirements: list[str] = Field(default_factory=list, max_length=12)
+    required_capabilities: list[str] = Field(default_factory=list, max_length=12)
+    l2_refs: list[str] = Field(default_factory=list, min_length=1, max_length=24)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=24)
+
+
+class L3CandidateRequestRow(BaseModel):
+    """Flat request for GROUND to build a candidate domain, not a candidate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    request_ref: str = Field(min_length=1)
+    target_ref: str = Field(min_length=1)
+    entity_type_requirements: list[str] = Field(default_factory=list, max_length=8)
+    representation_type_requirements: list[RepresentationType] = Field(
+        default_factory=list,
+        min_length=1,
+        max_length=4,
+    )
+    representation_purpose: RepresentationPurpose
+    operation: str = Field(min_length=1)
+    query_terms: list[str] = Field(default_factory=list, max_length=8)
+    location_hints: list[str] = Field(default_factory=list, max_length=8)
+    constraint_refs: list[str] = Field(default_factory=list, max_length=16)
+    l2_refs: list[str] = Field(default_factory=list, min_length=1, max_length=24)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=24)
+    route_to: Literal["ground"] = "ground"
+    status: Literal["ready", "pending_location_evidence"] = "ready"
 
 
 class PlanningIntervention(BaseModel):
@@ -129,11 +225,10 @@ class PlanningIntervention(BaseModel):
         if self.expected_output_kind == "line" and self.category == "road":
             if self.asset_kind == "none":
                 raise ValueError("line interventions require an explicit asset_kind")
-            if self.asset_kind == "road":
-                if self.road_parameters is None or self.linear_parameters is not None:
-                    raise ValueError("road asset_kind requires only road_parameters")
-            elif self.linear_parameters is None or self.road_parameters is not None:
-                raise ValueError("non-road linear assets require only linear_parameters")
+            if self.asset_kind == "road" and self.linear_parameters is not None:
+                raise ValueError("road asset_kind cannot use linear_parameters")
+            if self.asset_kind != "road" and self.road_parameters is not None:
+                raise ValueError("non-road linear assets cannot use road_parameters")
         elif self.asset_kind not in {"none", "facility", "land_use", "axis"}:
             raise ValueError("linear asset_kind requires line output")
         return self
@@ -222,9 +317,17 @@ class PlanningProgram(ContractMeta):
     l1_snapshot_ref: str = ""
     l2_strategy_ref: str = ""
     evidence_requirements: list[EvidenceRequirement] = Field(default_factory=list)
+    target_rows: list[L3TargetRow] = Field(default_factory=list)
+    spatial_requirement_rows: list[L3SpatialRequirementRow] = Field(default_factory=list)
+    candidate_request_rows: list[L3CandidateRequestRow] = Field(default_factory=list)
 
 __all__ = [
     "RoadPlanningParameters",
+    "RepresentationPurpose",
+    "RepresentationType",
+    "L3TargetRow",
+    "L3SpatialRequirementRow",
+    "L3CandidateRequestRow",
     "PlanningIntervention",
     "InterventionDependency",
     "ProgramIssue",

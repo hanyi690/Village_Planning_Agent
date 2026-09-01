@@ -32,6 +32,50 @@ def evaluate_l3_gate(
     cv = context_version or program.context_version
     gate_artifact_id = "gate-l3-" + (program.artifact_id or "0")
 
+    incomplete_dimensions = [
+        issue for issue in program.program_issues
+        if issue.code == "dimension_product_incomplete" and issue.severity == "error"
+    ]
+    if incomplete_dimensions:
+        from app.contracts.workflow.recovery_pointer import RecoveryPointer
+
+        pending_requests: list[PendingRequest] = []
+        for issue in incomplete_dimensions:
+            dimension = str(issue.dimension_key or "unknown").strip()
+            artifact_key = f"l3_dimension__{dimension}"
+            recovery = RecoveryPointer(
+                item_id=dimension,
+                item_kind="artifact_input",
+                source_stage="l3",
+                return_stage="l3",
+                source_artifact_key=artifact_key,
+                source_artifact_ref="",
+                source_input_refs=["artifact:l1_snapshot", "artifact:l2_strategy"],
+                missing_requirements=["completed typed L3 dimension product"],
+                expected_artifact_key=artifact_key,
+                reason_code="dimension_product_incomplete",
+            )
+            pending_requests.append(PendingRequest(
+                request_id=f"pr-l3-dimension-{dimension}",
+                stage="l3",
+                request_type="dimension_product_recovery",
+                context={
+                    "producer_dimension": dimension,
+                    "message": issue.message,
+                    "detail": issue.detail or "",
+                },
+                recovery=recovery,
+            ))
+        return GateDecision(
+            stage=stage,
+            passed=False,
+            feedback_route="HUMAN",
+            pending_requests=pending_requests,
+            context_version=cv,
+            artifact_id=gate_artifact_id,
+            route_reason="typed_dimension_product_incomplete",
+        )
+
     empty_program = (
         not program.interventions
         and not program.claims
@@ -171,12 +215,12 @@ def evaluate_l3_gate(
             )
         return GateDecision(
             stage=stage,
-            passed=True,
-            feedback_route=None,
+            passed=False,
+            feedback_route="HUMAN",
             pending_requests=pending_requests,
             context_version=cv,
             artifact_id=gate_artifact_id,
-            route_reason="passed_with_pending_claims",
+            route_reason="pending_claims_require_l3_review",
         )
 
     classification_targets = classification_review_targets(program)
@@ -237,18 +281,18 @@ def evaluate_l3_gate(
                     context={"gap_id": g.gap_id, "dimension": g.dimension, "required_fact": g.required_fact},
                 )
             )
-        # A program may be delivered with explicit unresolved evidence.  The
-        # gap and its recovery request stay attached to the program, while
-        # TARGET_PROJECTION decides whether the affected target is pending or
-        # deferred.  Structural claim failures above still block L3.
+        # L3 evidence gaps are not a license to project a partial program.
+        # Keep the recovery requests attached to the gate and stop before
+        # TARGET_PROJECTION; the routing policy can either retrieve bounded
+        # evidence or enter the explicit HUMAN checkpoint.
         return GateDecision(
-            stage=stage, passed=True, feedback_route=None,
+            stage=stage, passed=False, feedback_route="EXPLORE",
             evidence_requests=[g.description for g in actionable_gaps],
             pending_requests=pending,
             context_version=cv,
             artifact_id=gate_artifact_id,
             route_reason=(
-                "passed_with_unresolved_evidence"
+                "evidence_gap_requires_l3_recovery"
                 if actionable_gaps or missing_sources
                 else "checks_passed"
             ),

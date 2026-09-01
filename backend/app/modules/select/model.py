@@ -19,6 +19,9 @@ class AllocationAssignment(BaseModel):
     target_id: str
     candidate_id: str = ""
     source_parcels: list[str] = Field(default_factory=list)
+    resource_refs: list[str] = Field(default_factory=list)
+    representation_refs: list[str] = Field(default_factory=list)
+    geometry_ref: str = ""
     status: Literal["assigned", "unplaced", "deferred", "action"]
     reason: str = ""
 

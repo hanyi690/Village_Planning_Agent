@@ -75,27 +75,31 @@ def build_portfolio_decision(
                 )
             )
             continue
+        selected_key = str(
+            getattr(selected, "selected_bsm", "")
+            or getattr(selected, "selected_candidate_id", "")
+            or getattr(selected, "candidate_id", "")
+            or ""
+        )
         if selected.status == "deferred":
             output.append(
                 AllocationAssignment(
                     demand_id=item.demand_id,
                     target_id=item.target_id,
-                    candidate_id=str(selected.selected_bsm or ""),
+                    candidate_id=selected_key,
                     status="deferred",
                     reason=str(selected.reason or "human_deferred"),
                 )
             )
             continue
-        candidate = candidates.get(str(selected.selected_bsm)) or candidates_by_parcel.get(
-            str(selected.selected_bsm)
-        )
+        candidate = candidates.get(selected_key) or candidates_by_parcel.get(selected_key)
         if candidate is None:
             unmet.append(item.demand_id)
             output.append(
                 AllocationAssignment(
                     demand_id=item.demand_id,
                     target_id=item.target_id,
-                    candidate_id=str(selected.selected_bsm or ""),
+                    candidate_id=selected_key,
                     status="unplaced",
                     reason="selected_candidate_not_in_suitability_surface",
                 )
@@ -118,9 +122,16 @@ def build_portfolio_decision(
             AllocationAssignment(
                 demand_id=item.demand_id,
                 target_id=item.target_id,
-                candidate_id=candidate.candidate_id,
-                source_parcels=list(candidate.source_parcels),
-                status="assigned",
+                    candidate_id=candidate.candidate_id,
+                    source_parcels=list(candidate.source_parcels),
+                    resource_refs=list(getattr(candidate, "resource_refs", None) or []),
+                    representation_refs=list(getattr(candidate, "representation_refs", None) or []),
+                    geometry_ref=str(
+                        getattr(candidate, "source_ref", "")
+                        or candidate.candidate_id
+                        or ""
+                    ),
+                    status="assigned",
             )
         )
     has_deferred = any(item.status == "deferred" for item in output)

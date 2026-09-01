@@ -163,6 +163,7 @@ def _target_problem_kind(
     factors: Iterable[object],
     *,
     has_network_input: bool,
+    candidate_geometries: Iterable[object] = (),
 ) -> SolverProblemKind:
     kinds = {_clean(getattr(item, "kind", "")) for item in factors}
     evaluators = {_clean(getattr(item, "evaluator_key", "")) for item in factors}
@@ -181,7 +182,23 @@ def _target_problem_kind(
     # input actually exists (or is explicitly requested by a factor).
     if semantic_kinds & _NETWORK_TARGET_KINDS and has_network_input:
         return "network_path"
-    if semantic_kinds & _PARCEL_TARGET_KINDS:
+    # A target may be semantically a site/zone while its grounded candidate is
+    # an exact DATA feature (point/line/polygon) with resource lineage and no
+    # cadastral BSM.  Such a candidate is solved by the generic choice route;
+    # requiring a parcel resource pool here would re-introduce the retired
+    # Bundle/parcel assumption before SELECT can consume DATA.
+    candidates = list(candidate_geometries or [])
+    has_generic_exact_candidate = any(
+        not list(getattr(candidate, "source_bsms", None) or [])
+        and str(getattr(candidate, "role", "") or "") == "execution_geometry"
+        and (
+            list(getattr(candidate, "resource_refs", None) or [])
+            or list(getattr(candidate, "representation_refs", None) or [])
+        )
+        and str(getattr(candidate, "spatial_domain_kind", "") or "") == "exact_feature"
+        for candidate in candidates
+    )
+    if semantic_kinds & _PARCEL_TARGET_KINDS and not has_generic_exact_candidate:
         return "parcel_assignment"
     if candidate_selection_mode == "choose_one":
         return "single_choice"
@@ -291,6 +308,11 @@ def _compile_target_subproblem(
         factors,
         has_network_input=bool(
             problem.network_refs or _factor_network_refs(factors)
+        ),
+        candidate_geometries=(
+            item
+            for item in problem.candidate_geometries
+            if _clean(getattr(item, "target_id", "")) == target_id
         ),
     )
     required, missing = _target_required_refs(

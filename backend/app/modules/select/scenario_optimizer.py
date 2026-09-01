@@ -428,6 +428,29 @@ def _make_scenario(
             selection_mode=domain_by_target[target_id].selection_mode,
             candidate_ids=list(candidate_ids),
             binding_ref=domain_by_target[target_id].binding_ref,
+            resource_refs=sorted({
+                str(ref)
+                for candidate_id in candidate_ids
+                for ref in (getattr(candidates.get(candidate_id), "resource_refs", None) or [])
+                if str(ref).strip()
+            }),
+            representation_refs=sorted({
+                str(ref)
+                for candidate_id in candidate_ids
+                for ref in (getattr(candidates.get(candidate_id), "representation_refs", None) or [])
+                if str(ref).strip()
+            }),
+            geometry_refs=sorted({
+                str(ref)
+                for candidate_id in candidate_ids
+                for ref in [
+                    getattr(candidates.get(candidate_id), "source_ref", "")
+                    or candidate_id
+                ]
+                if str(ref).strip()
+            }),
+            operation="select_resource",
+            required_capability="read",
         )
         for target_id, candidate_ids in sorted(selected.items())
         if target_id in domain_by_target and candidate_ids

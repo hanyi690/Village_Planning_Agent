@@ -13,6 +13,7 @@ from app.core.common.context_guard import require_frozen_context
 from app.infrastructure.artifacts.runtime import store_artifact
 from app.contracts.l3.program import PlanningClaim, PlanningClaimSet
 from app.modules.l3.claim_adapter import (
+    build_l3_product_rows,
     canonical_package_intervention_id,
     classify_claims,
     compact_interventions,
@@ -62,7 +63,6 @@ def _provider_boundary_violations(claim: PlanningClaim) -> list[str]:
         "quantity",
         "quantity_unit",
         "area_range_ha",
-        "materialization_role",
         "confidence",
     )
     for field_name in scalar_fields:
@@ -467,6 +467,11 @@ def merge_program_fragments(
     )
     program.pending_grounding_claims = pending_grounding_claims
     program.claim_dispositions = claim_dispositions
+    (
+        program.target_rows,
+        program.spatial_requirement_rows,
+        program.candidate_request_rows,
+    ) = build_l3_product_rows(program.interventions)
     from app.modules.evidence.requirements import requirements_from_l3
 
     program.evidence_requirements = list(requirements_from_l3(program))
@@ -573,13 +578,63 @@ def enrich_program_from_upstream(
     return l1_constraints, l2_strategy
 
 
+def _l2_lineage_issues(
+    program: PlanningProgram,
+    strategy: L2Strategy | None,
+) -> list[ProgramIssue]:
+    """Fail closed when an L3 target is not supported by persisted L2 rows."""
+
+    if strategy is None:
+        return [
+            ProgramIssue(
+                stage="l3",
+                severity="error",
+                code="l2_lineage_artifact_missing",
+                message="L3 targets cannot be validated without the L2Strategy artifact",
+                reason="every L3 target must cite persisted L2 rows",
+                failure_scope="program",
+            )
+        ] if program.target_rows else []
+    allowed = {
+        str(value).strip()
+        for value in [
+            *[item.objective_id for item in strategy.objectives],
+            *[item.metric_id for item in strategy.metrics],
+            *[item.strategy_id for item in strategy.strategy_rules],
+            *[item.priority_id for item in strategy.priority_decisions],
+            *[item.structure_id for item in strategy.spatial_structure_intents],
+            *[item.conflict_id for item in strategy.conflict_hypotheses],
+        ]
+        if str(value).strip()
+    }
+    issues: list[ProgramIssue] = []
+    for target in program.target_rows:
+        unknown = sorted(set(target.l2_refs) - allowed)
+        if not target.l2_refs or unknown:
+            issues.append(ProgramIssue(
+                stage="l3",
+                severity="error",
+                code="l3_target_l2_lineage_invalid",
+                message=(
+                    f"target {target.target_ref} has no valid persisted L2 support"
+                ),
+                detail=(
+                    "unknown_refs=" + ",".join(unknown)
+                    if unknown
+                    else "l2_refs is empty"
+                ),
+                reason="objective/rule refs must belong to the current L2Strategy",
+                failure_scope="program",
+                dependency_scope=[target.target_ref],
+            ))
+    return issues
+
+
 async def l3_aggregate(
     state: dict[str, Any],
     *,
     base_dir: str | None = None,
 ) -> dict[str, Any]:
-    from app.infrastructure.reports.report_store import ReportStore
-
     effective_base_dir = run_tmp_root() if base_dir is None else base_dir
 
     run_id = state.get("run_id", state.get("session_id", ""))
@@ -588,24 +643,26 @@ async def l3_aggregate(
 
     require_frozen_context(state)
 
-    store = ReportStore.get_instance()
-    raw_reports = await store.get_layer_reports_with_sources(session_id, layer=3)
+    from app.infrastructure.artifacts.dimension_runtime import (
+        load_layer_dimension_products,
+    )
+
+    dimension_products, dimension_errors = load_layer_dimension_products(
+        state,
+        layer=3,
+        model_type=PlanningClaimSet,
+    )
+    raw_reports = dimension_products
 
     fragments: list[L3ProgramFragment] = []
-    for dim_key, rec in raw_reports.items():
-        rec = rec or {}
-        content = rec.get("instruction")
-        if not isinstance(content, str) or not content.strip():
-            raise ValueError(
-                f"L3 intent artifact {dim_key} is missing its typed PlanningClaimSet payload"
-            )
-        report_id = rec.get("report_id", f"rpt-{dim_key}-v1")
-        try:
-            claim_set = PlanningClaimSet.model_validate_json(content)
-        except Exception as exc:
-            raise ValueError(
-                f"L3 intent artifact {dim_key} is not a PlanningClaimSet; expected PlanningClaimSet JSON"
-            ) from exc
+    for dim_key, claim_set in dimension_products.items():
+        artifact_key = f"l3_dimension__{dim_key}"
+        raw_ref = dict(state.get("artifact_refs") or {}).get(artifact_key)
+        report_id = (
+            ArtifactDescriptor.model_validate(raw_ref).digest
+            if raw_ref
+            else artifact_key
+        )
         claims: list[PlanningClaim] = []
         boundary_issues: list[ProgramIssue] = []
         for claim in claim_set.claims:
@@ -650,6 +707,29 @@ async def l3_aggregate(
                 ),
             )
         )
+    for dim_key, detail in sorted(dimension_errors.items()):
+        fragments.append(L3ProgramFragment(
+            dimension_key=dim_key,
+            program_issues=[ProgramIssue(
+                stage="l3",
+                dimension_key=dim_key,
+                dimension_keys=[dim_key],
+                severity="error",
+                code="dimension_product_incomplete",
+                message=f"L3 dimension product is not consumable: {dim_key}",
+                detail=detail,
+                reason="typed CAS dependency product is missing, pending, or invalid",
+                failure_scope="program",
+                dependency_scope=[dim_key],
+            )],
+            omissions=[f"dimension_product_incomplete:{dim_key}"],
+            provenance=Provenance(
+                source=f"missing:{dim_key}",
+                run_id=run_id,
+                module="l3_plan",
+                trace=[f"dimension_product_incomplete:{dim_key}"],
+            ),
+        ))
 
     program = merge_program_fragments(fragments, run_id=run_id)
     program.context_version = context_version
@@ -662,6 +742,7 @@ async def l3_aggregate(
         context_fingerprint=state.get("context_fingerprint", ""),
         artifact_refs=dict(state.get("artifact_refs") or {}),
     )
+    program.program_issues.extend(_l2_lineage_issues(program, l2_strategy))
     artifact_id = f"l3-{run_id}-{branch_id}-{semantic_checksum(program)[:16]}"
     program.artifact_id = artifact_id
     from app.modules.evidence.requirements import requirements_from_l3
@@ -697,7 +778,12 @@ async def l3_aggregate(
 
     from app.workflow.stage_adapter import persist_gate_decision
 
-    gate_ref = persist_gate_decision(state, "l3", gate_decision)
+    gate_ref = persist_gate_decision(
+        state,
+        "l3",
+        gate_decision,
+        output_refs={"planning_program": ref},
+    )
 
     pkg = build_l3_review_package(
         program=program,

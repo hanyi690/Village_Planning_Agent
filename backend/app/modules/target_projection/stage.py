@@ -9,9 +9,11 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from app.infrastructure.logging import get_logger
-from app.modules.evidence.application import EvidenceFacade
 from app.workflow.stage_adapter import persist_stage_artifact
-from app.modules.target_projection.validation import evaluate_target_projection_gate
+from app.modules.target_projection.validation import (
+    evaluate_target_projection_gate,
+    validate_target_projection_boundary,
+)
 from app.workflow.stages.support import (
     _adopt_context,
     _load_ref_artifact,
@@ -38,7 +40,14 @@ def _spatial_spec_village_names(spec: Any) -> List[str]:
 
 
 def _spec_has_source_support(spec: Any, context: Any) -> bool:
-    """Require a BSM-backed gazetteer entry for named village specs."""
+    """Check named-place support without requiring a legacy BSM.
+
+    A named spatial reference is admissible when either the compatibility
+    gazetteer resolves it to a parcel or the generic DATA catalog contains a
+    source feature whose arbitrary attributes/normalized claims carry the
+    label.  The latter is important for uploaded layers that have no BSM,
+    parcel schema, or configured layer name.
+    """
     labels = _spatial_spec_village_names(spec)
     if not labels:
         return True
@@ -48,9 +57,28 @@ def _spec_has_source_support(spec: Any, context: Any) -> bool:
         if getattr(entry, "bsms", None):
             resolved_names.add(str(getattr(entry, "name", "")))
             resolved_names.update(str(alias) for alias in (getattr(entry, "aliases", []) or []))
+    catalog_names: set[str] = set()
+    catalog = getattr(context, "data_resource_catalog", None)
+    snapshot = getattr(catalog, "snapshot", None)
+    for feature in list(getattr(snapshot, "features", None) or []):
+        values = {
+            **dict(getattr(feature, "raw_attributes", None) or {}),
+            **dict(getattr(feature, "normalized_claims", None) or {}),
+        }
+        for key, value in values.items():
+            # Only name-like fields participate in place support.  Arbitrary
+            # numeric/coded attributes must not accidentally satisfy a label.
+            key_text = str(key).casefold()
+            if not any(token in key_text for token in ("name", "label", "title", "place", "地点", "名称", "别名")):
+                continue
+            if isinstance(value, (list, tuple, set)):
+                catalog_names.update(str(item).strip() for item in value if str(item).strip())
+            elif isinstance(value, str) and value.strip():
+                catalog_names.add(value.strip())
+    all_names = resolved_names | catalog_names
     return all(
-        label in resolved_names
-        or label.removesuffix("自然村").removesuffix("村") in resolved_names
+        label in all_names
+        or label.removesuffix("自然村").removesuffix("村") in all_names
         for label in labels
     )
 
@@ -66,10 +94,11 @@ def _filter_unsupported_spatial_specs(
         diagnostics.append({
             "code": "UNSUPPORTED_SPATIAL_REFERENCE",
             "intervention_id": getattr(spec, "intervention_id", ""),
+            "target_id": getattr(spec, "intervention_id", ""),
             "labels": _spatial_spec_village_names(spec),
             "message": (
-                "named village has no GIS BSM binding and no object-specific "
-                "source evidence; GROUND must resolve or route HUMAN"
+                "named place has no gazetteer or generic DATA source evidence; "
+                "GROUND must resolve or route HUMAN"
             ),
         })
     unsupported_ids = {
@@ -82,98 +111,16 @@ def _filter_unsupported_spatial_specs(
     ], diagnostics
 
 
-async def _classify_source_semantics(
-    state: Dict[str, Any],
-    context: Any,
-    source_features: dict[str, list[object]],
-    evidence: EvidenceFacade,
-) -> tuple[Any | None, dict[str, object], list[Dict[str, Any]]]:
-    """Run or replay the shared explicit source-semantic overlay."""
-    from app.contracts.evidence.source_semantic_contracts import (
-        SourceSemanticClassificationSnapshot,
-    )
-
-    items, missing_identity = evidence.describe_source_features(source_features)
-    diagnostics: list[Dict[str, Any]] = []
-    if missing_identity:
-        diagnostics.append({
-            "code": "SOURCE_FEATURE_ID_REQUIRED",
-            "message": (
-                f"{missing_identity} source feature(s) have no durable source_feature_id; "
-                "semantic binding remains unresolved"
-            ),
-        })
-    if not items:
-        return None, {}, diagnostics
-
-    cached = _load_ref_artifact(
-        state,
-        "source_semantic_classification",
-        SourceSemanticClassificationSnapshot,
-    )
-    current_snapshot_digest = str(
-        getattr(getattr(context, "data_snapshot", None), "digest", "") or ""
-    )
-    if (
-        cached is not None
-        and current_snapshot_digest
-        and cached.source_snapshot_digest
-        and cached.source_snapshot_digest != current_snapshot_digest
-    ):
-        diagnostics.append({
-            "code": "SOURCE_SEMANTIC_SNAPSHOT_MISMATCH",
-            "message": (
-                "persisted source semantic classification belongs to a different "
-                "bundle snapshot and was not reused"
-            ),
-        })
-        cached = None
-    if cached is not None:
-        try:
-            evidence.install_source_semantic_snapshot(context, cached)
-        except Exception as exc:
-            diagnostics.append({
-                "code": "SOURCE_SEMANTIC_GRAPH_REBUILD_FAILED",
-                "message": f"accepted overlay was not installed into EvidenceGraph: {exc}",
-            })
-        snapshot = cached
-        accepted = evidence.accepted_semantic_decisions(snapshot)
-    else:
-        config = state.get("config") or {}
-        enabled = state.get(
-            "source_semantic_llm_enabled",
-            config.get("source_semantic_llm_enabled"),
-        )
-        snapshot, accepted, runtime_diagnostics = await evidence.classify_source_semantics(
-            context,
-            enabled=enabled,
-            source_features=source_features,
-            classifier=state.get("source_semantic_classifier"),
-        )
-        diagnostics.extend(runtime_diagnostics)
-        return snapshot, accepted, diagnostics
-    nonaccepted = [
-        decision.source_feature_id
-        for decision in snapshot.decisions
-        if decision.status != "accepted"
-    ]
-    if nonaccepted:
-        diagnostics.append({
-            "code": "SOURCE_SEMANTIC_DECISION_NOT_ACCEPTED",
-            "message": (
-                f"{len(nonaccepted)} source feature(s) remain "
-                "ambiguous/unresolved and cannot be used for exact binding"
-            ),
-        })
-    context.source_semantic_diagnostics = list(diagnostics)
-    return snapshot, accepted, diagnostics
-
-
 async def target_projection_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Project PlanningProgram into typed spatial references for GROUND."""
+    from app.workflow.stages.support import require_upstream_gates
+
+    require_upstream_gates(
+        dict(state),
+        ("data", "kg", "evidence", "l1", "l2", "l3"),
+    )
     from app.modules.target_projection.aggregation import project_program_async
     from app.contracts.target_projection.parse_result_contracts import (
-        CompilationStatus,
         ParseDiagnostic,
     )
     from app.contracts.l3.l3_contracts import PlanningProgram
@@ -185,41 +132,12 @@ async def target_projection_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "TARGET_PROJECTION_INPUT_MISSING: planning_program artifact is required"
         )
     context = await _require_context(state)
-    evidence = EvidenceFacade()
-    source_features = evidence.collect_authoritative_source_features(context)
-    semantic_snapshot, semantic_decisions, semantic_diagnostics = await _classify_source_semantics(
-        state,
-        context,
-        source_features,
-        evidence,
-    )
-    # Stabilize context provenance only after source-semantic replay/classification
-    # has installed its snapshot-local decisions.  The same final context must
-    # be fingerprinted on the first run and on resume; adopting it before this
-    # step would make the first descriptor differ from every replay descriptor.
     context_patch = _adopt_context(state, context)
     result, specs, gate = await project_program_async(
         program,
         run_id=_run_id(state),
         context_version=str(getattr(context, "version", "")),
-        source_features=source_features,
-        source_semantic_decisions=semantic_decisions,
     )
-    if semantic_diagnostics:
-        result.diagnostics = [
-            *list(getattr(result, "diagnostics", []) or []),
-            *(ParseDiagnostic(**item) for item in semantic_diagnostics),
-        ]
-    # Design 03: IntentGraph is written by the IntentCompiler (this stage),
-    # not deferred to EXECUTE, so GROUND/EXECUTE route_prepare can read the
-    # L3 intent entities on the first pass (kg_l3_intent_mismatch guard).
-    intent = getattr(result, "typed_intent", None)
-    kg = getattr(context, "kg", None)
-    if intent is not None and kg is not None:
-        try:
-            evidence.install_intent_layer(kg, intent)
-        except Exception as exc:
-            logger.warning("[workflow:target_projection] build_intent_layer failed: %s", exc)
     original_specs = list(specs)
     specs, unsupported = _filter_unsupported_spatial_specs(specs, context)
     result.spatial_reference_specs = specs
@@ -229,6 +147,9 @@ async def target_projection_node(state: Dict[str, Any]) -> Dict[str, Any]:
     }
     if unsupported_ids:
         from app.contracts.target_projection.p1_closure import build_grounding_request
+        from app.contracts.target_projection.parse_result_contracts import (
+            TargetProjectionBypassRecord,
+        )
 
         parked_specs = [
             spec.model_copy(update={"unresolved_reason": "unsupported_source"})
@@ -256,11 +177,39 @@ async def target_projection_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 for spec in parked_specs
             ],
         ]
+        bypass_records = []
+        for spec in parked_specs:
+            target_ref = str(getattr(spec, "intervention_id", "") or "")
+            bypass_ref = (
+                f"target-projection-bypass:{target_ref}:unsupported-source"
+            )
+            bypass_records.append(TargetProjectionBypassRecord(
+                bypass_ref=bypass_ref,
+                target_ref=target_ref,
+                condition="named spatial reference lacks current source support",
+                reason_code="UNSUPPORTED_SPATIAL_REFERENCE",
+                detail=str(getattr(spec, "unresolved_reason", "") or "unsupported_source"),
+                source_refs=list(dict.fromkeys([
+                    *list(getattr(spec, "l1_fact_refs", None) or []),
+                    *list(getattr(spec, "component_fact_refs", None) or []),
+                    str(getattr(spec, "source_snapshot_ref", "") or ""),
+                ])),
+            ))
+            result.target_projection_rows = [
+                row.model_copy(update={
+                    "status": "pending_grounding",
+                    "bypass_ref": bypass_ref,
+                }) if row.target_ref == target_ref else row
+                for row in result.target_projection_rows
+            ]
+        result.bypass_records = [
+            *list(getattr(result, "bypass_records", None) or []),
+            *bypass_records,
+        ]
     if unsupported:
         diagnostics = list(getattr(result, "diagnostics", []) or [])
         diagnostics.extend(ParseDiagnostic(**item) for item in unsupported)
         result.diagnostics = diagnostics
-        result.compilation_status = CompilationStatus.NEEDS_REVIEW
         logger.warning(
             "[workflow:target_projection] parked %d spatial refs as pending unsupported requests",
             len(unsupported),
@@ -268,28 +217,13 @@ async def target_projection_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # The compiler gate is evaluated before source-semantic and authoritative
     # bundle support diagnostics are appended. Re-evaluate at the stage
     # boundary so a late spatial identity error cannot pass into GROUND.
+    validate_target_projection_boundary(result)
     gate = evaluate_target_projection_gate(
         result,
         run_id=_run_id(state),
         context_version=str(getattr(context, "version", "")),
     )
-    # Persist the semantic snapshot before TARGET_PROJECTION so its digest is
-    # part of the projection's parent lineage on the first run as well as on
-    # resume.  Writing the projection first made the payload look identical
-    # while its parent set changed on the second pass, producing a new digest
-    # and violating zero-increment replay.
     output_refs = {}
-    if semantic_snapshot is not None:
-        semantic_ref = persist_stage_artifact(
-            state,
-            "target_projection",
-            "SourceSemanticClassificationSnapshot",
-            semantic_snapshot,
-        )
-        state.setdefault("artifact_refs", {})[
-            "source_semantic_classification"
-        ] = semantic_ref
-        output_refs["source_semantic_classification"] = semantic_ref
     intent_ref = persist_stage_artifact(
         state, "target_projection", "IntentCompilationResult", result
     )

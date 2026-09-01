@@ -78,6 +78,9 @@ def build_scenario_features(
                     candidate.generation_operation or "scenario_candidate_projection"
                 ),
                 source_refs=sorted(refs),
+                resource_refs=list(candidate.resource_refs),
+                representation_refs=list(candidate.representation_refs),
+                part_ref=str(candidate.part_ref or ""),
                 source_bsms=list(candidate.source_bsms),
                 feature_bsms=list(candidate.feature_bsms),
                 source_feature_ids=list(candidate.source_feature_ids),

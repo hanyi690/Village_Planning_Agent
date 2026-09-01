@@ -82,6 +82,36 @@ def _source_geometry(
     )[0]
 
 
+def _source_geometry_for_generic(
+    target_id: str,
+    candidate: Any,
+    sources: list[CandidateGeometry],
+) -> CandidateGeometry | None:
+    """Match a non-parcel suitability row back to its GROUND geometry."""
+
+    candidate_id = str(_value(candidate, "candidate_id", "") or "")
+    refs = {
+        str(value).strip()
+        for value in (_value(candidate, "evidence_refs", None) or [])
+        if str(value).strip()
+    }
+    matches = [
+        source for source in sources
+        if str(source.target_id) == target_id
+        and (
+            str(source.candidate_id) == candidate_id
+            or str(source.source_ref or "") in refs
+            or refs.intersection(set(source.source_refs))
+        )
+    ]
+    if not matches:
+        return None
+    return sorted(
+        matches,
+        key=lambda item: (item.role != "execution_geometry", item.candidate_id),
+    )[0]
+
+
 def build_refined_candidate_catalog(
     problem: GroundedPlanningProblem | None,
     suitability_surface: Any = None,
@@ -99,11 +129,96 @@ def build_refined_candidate_catalog(
         str(item.target_id): item
         for item in list(problem.target_domains or [])
     }
+    ground_domain_status = {
+        str(item.target_id): str(item.status or "unresolved")
+        for item in list(problem.candidate_domains or [])
+    }
     for candidate in list(_value(suitability_surface, "candidates", None) or []):
         target_id = str(_value(candidate, "target_id", "") or "")
         bsm_values = [str(item) for item in (_value(candidate, "source_parcels", None) or []) if str(item)]
         wkt_text = str(_value(candidate, "available_geometry_wkt", "") or "")
-        if not target_id or len(bsm_values) != 1 or not wkt_text:
+        if not target_id or not wkt_text:
+            continue
+        if not bsm_values:
+            source = _source_geometry_for_generic(target_id, candidate, source_geometries)
+            kind = _geometry_kind(wkt_text)
+            if source is None or kind == "unknown":
+                continue
+            domain = target_meta.get(target_id)
+            expected = str(_value(domain, "expected_output_kind", "") or "") if domain else ""
+            expected = "polygon" if expected == "parcel" else expected
+            hard_feasible = bool(_value(candidate, "hard_feasible", False))
+            source_ground_resolved = ground_domain_status.get(target_id) == "resolved"
+            availability_status = str(
+                _value(candidate, "availability_status", "fully_available")
+                or "fully_available"
+            )
+            role = (
+                "execution_geometry"
+                if source_ground_resolved
+                and hard_feasible
+                and (not expected or expected == kind)
+                else "anchor_geometry" if kind == "point"
+                else "corridor_candidate" if kind == "line"
+                else "scope_geometry"
+            )
+            refined = CandidateGeometry(
+                target_id=target_id,
+                physical_project_ref=str(source.physical_project_ref or ""),
+                component_claim_refs=list(source.component_claim_refs),
+                component_fact_refs=list(source.component_fact_refs),
+                kind=kind,
+                role=role,
+                materialization_role=str(source.materialization_role or ""),
+                wkt=wkt_text,
+                eligible_geometry_wkt=str(_value(candidate, "eligible_geometry_wkt", "") or ""),
+                crs=str(_value(candidate, "geometry_crs", "") or source.crs or "EPSG:4326"),
+                source_crs=str(getattr(source, "source_crs", "") or ""),
+                source_snapshot_ref=str(getattr(source, "source_snapshot_ref", "") or ""),
+                resource_digest=str(getattr(source, "resource_digest", "") or ""),
+                operation=str(getattr(source, "operation", "") or "read"),
+                granularity=(
+                    "exact_feature"
+                    if source_ground_resolved
+                    and source.spatial_domain_kind == "exact_feature"
+                    else source.granularity
+                ),
+                spatial_domain_kind=(
+                    "exact_feature"
+                    if source_ground_resolved
+                    and source.spatial_domain_kind == "exact_feature"
+                    else source.spatial_domain_kind
+                ),
+                candidate_bbox=tuple(float(value) for value in wkt.loads(wkt_text).bounds),
+                source_ref=str(source.source_ref or ""),
+                source_refs=list(dict.fromkeys(source.source_refs)),
+                part_ref=str(getattr(source, "part_ref", "") or ""),
+                resource_refs=list(source.resource_refs),
+                representation_refs=list(source.representation_refs),
+                evidence_refs=list(dict.fromkeys([
+                    *source.evidence_refs,
+                    *list(_value(candidate, "evidence_refs", None) or []),
+                ])),
+                identity_confidence=source.identity_confidence,
+                geometry_confidence=source.geometry_confidence,
+                suitability_score=float(_value(candidate, "score", 0.0) or 0.0),
+                source_bsms=[],
+                feature_bsms=list(source.feature_bsms),
+                source_feature_ids=list(source.source_feature_ids),
+                entity_refs=list(source.entity_refs),
+                relation_refs=list(source.relation_refs),
+                l1_fact_refs=list(source.l1_fact_refs),
+                l1_snapshot_ref=source.l1_snapshot_ref,
+                bundle_snapshot_digest=source.bundle_snapshot_digest,
+                source_binding_ref=source.source_binding_ref,
+                subgeometry_operation=str(_value(candidate, "geometry_operation", "data_resource_extent") or "data_resource_extent"),
+                availability_status=availability_status if availability_status in {"fully_available", "partially_available", "fully_unavailable", "unknown"} else "unknown",
+                generation_operation="select_generic_source_refinement",
+                hard_constraint_status="passed" if hard_feasible else "deferred",
+                suitability_components=dict(_value(candidate, "score_breakdown", None) or {}),
+            )
+            if refined.candidate_id not in catalog:
+                catalog[refined.candidate_id] = refined
             continue
         source = _source_geometry(target_id, bsm_values[0], source_geometries)
         if source is None:
@@ -265,6 +380,10 @@ def build_refined_candidate_catalog(
                 or getattr(source, "crs", "")
                 or "EPSG:4326"
             ),
+            source_crs=str(getattr(source, "source_crs", "") or ""),
+            source_snapshot_ref=str(getattr(source, "source_snapshot_ref", "") or ""),
+            resource_digest=str(getattr(source, "resource_digest", "") or ""),
+            operation=str(getattr(source, "operation", "") or "read"),
             granularity=(
                 "exact_feature"
                 if materialized_kind in {"point", "line"}
@@ -290,6 +409,9 @@ def build_refined_candidate_catalog(
                 *source.source_refs,
                 str(_value(candidate, "feature_ref", "") or ""),
             ])),
+            part_ref=str(getattr(source, "part_ref", "") or ""),
+            resource_refs=list(source.resource_refs),
+            representation_refs=list(source.representation_refs),
             evidence_refs=list(dict.fromkeys([
                 *source.evidence_refs,
                 *list(_value(candidate, "evidence_refs", None) or []),
@@ -546,10 +668,12 @@ def refine_grounded_problem(
         else:
             candidate_ids = list(dict.fromkeys([*domain.candidate_ids, *additions]))
             refs = list(dict.fromkeys([*domain.candidate_geometry_refs, *additions]))
+        # Refinement creates SELECT alternatives; it does not create a new
+        # GROUND identity/representation binding.  Preserve the upstream
+        # domain status so a coarse ``candidate_only`` result cannot be
+        # promoted merely because a suitability row contains a WKT.
         status = domain.status
-        if executable_additions:
-            status = "resolved"
-        elif additions and status != "resolved":
+        if additions and status not in {"resolved", "ambiguous"}:
             status = "candidate_only"
         domains.append(domain.model_copy(update={
             "candidate_ids": candidate_ids,
@@ -573,11 +697,9 @@ def refine_grounded_problem(
         ],
         pool_id=f"select-parcel-pool:{problem.fingerprint[:16]}",
     )
-    # Refinement is a new planning-domain projection.  Recompute the target
-    # readiness from the refined geometry instead of retaining GROUND's
-    # coarse target status (which may have been ``candidate_only`` for a
-    # parcel union or corridor).  Otherwise the solver would fail closed even
-    # though SELECT has produced a source-backed executable subgeometry.
+    # Refinement may add auditable alternatives and geometry roles, but it
+    # must not rewrite GROUND's target status. A candidate-only or ambiguous
+    # identity remains blocked until GROUND emits a resolved binding.
     target_domains = []
     for target_domain in list(problem.target_domains or []):
         target_id = str(target_domain.target_id or "")
@@ -591,7 +713,6 @@ def refine_grounded_problem(
         ]
         update: dict[str, Any] = {}
         if executable:
-            update["status"] = "resolved"
             update["geometry_roles"] = list(dict.fromkeys(
                 [*target_domain.geometry_roles, *(item.role for item in executable)]
             ))

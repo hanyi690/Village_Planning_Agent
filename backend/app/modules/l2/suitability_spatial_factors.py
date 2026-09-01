@@ -171,6 +171,80 @@ def _metric_union(features: list[Any], project) -> Any:
     return unary_union(geometries) if geometries else None
 
 
+def _catalog_role_features(catalog: Any, role: str, context: Any = None) -> list[Any]:
+    """Find DATA features by generic hints instead of fixed layer names."""
+
+    snapshot = getattr(catalog, "snapshot", None)
+    if snapshot is None:
+        return []
+    tokens = {
+        "road": ("road", "道路", "transport", "highway", "street", "路"),
+        "facility": ("facility", "设施", "poi", "service", "公共服务"),
+        "hazard": ("hazard", "灾害", "危险", "flood", "landslide", "滑坡"),
+        "farmland": ("farmland", "耕地", "基本农田", "cultivated", "agriculture"),
+        "ecological": ("ecological", "生态", "redline", "保护红线", "nature"),
+    }.get(role, ())
+    result: list[Any] = []
+    for feature in list(getattr(snapshot, "features", ()) or ()):
+        kind = str(getattr(feature, "geometry_kind", "") or "").casefold()
+        if role == "road" and kind != "line":
+            continue
+        if role in {"facility", "hazard"} and kind != "point":
+            continue
+        if role in {"farmland", "ecological"} and kind != "polygon":
+            continue
+        attrs = getattr(feature, "raw_attributes", {}) or {}
+        decision = None
+        decisions = getattr(context, "source_semantic_decisions", None) if context is not None else None
+        if isinstance(decisions, dict):
+            decision = decisions.get(str(getattr(feature, "source_feature_ref", "") or ""))
+        decision_type = str(
+            getattr(decision, "semantic_type", "")
+            if decision is not None
+            else ""
+        ).casefold()
+        if decision_type in {"road", "road_segment", "道路"} and role == "road":
+            result.append(feature)
+            continue
+        if decision_type in {"facility", "service", "设施", "服务点"} and role == "facility":
+            result.append(feature)
+            continue
+        if decision_type in {"hazard", "灾害", "危险"} and role == "hazard":
+            result.append(feature)
+            continue
+        if decision_type in {"farmland", "耕地", "基本农田"} and role == "farmland":
+            result.append(feature)
+            continue
+        if decision_type in {"ecological", "生态", "redline"} and role == "ecological":
+            result.append(feature)
+            continue
+        haystack = " ".join(
+            [str(getattr(feature, "layer_ref", "") or ""), *(str(key) for key in attrs), *(str(value) for value in attrs.values())]
+        ).casefold()
+        if any(str(token).casefold() in haystack for token in tokens):
+            result.append(feature)
+    return result
+
+
+def _catalog_metric_union(features: list[Any]) -> Any:
+    """Project each DATA feature from its declared CRS into EPSG:3857."""
+
+    geometries = []
+    from pyproj import Transformer
+
+    for feature in features:
+        try:
+            geometry = shape(getattr(feature, "geometry", None) or {})
+            crs = str(getattr(feature, "source_crs", "EPSG:4326") or "EPSG:4326")
+            project = Transformer.from_crs(crs, "EPSG:3857", always_xy=True).transform
+            geometry = transform(project, geometry)
+            if not geometry.is_empty and geometry.is_valid:
+                geometries.append(geometry)
+        except Exception:
+            continue
+    return unary_union(geometries) if geometries else None
+
+
 def _distance_score(distance_m: float, preferred_m: float) -> float:
     return 1.0 / (1.0 + max(distance_m, 0.0) / preferred_m)
 
@@ -184,7 +258,40 @@ class SpatialFactorIndex:
         workspace = getattr(context, "workspace", None)
         metadata = getattr(workspace, "metadata", None)
         self.crs = str(getattr(metadata, "crs", "") or "")
+        catalog = getattr(context, "data_resource_catalog", None)
+        catalog_features = list(
+            getattr(getattr(catalog, "snapshot", None), "features", ()) or ()
+        )
         self.diagnostics: list[str] = []
+        if self.crs.casefold() in {"mixed", "unknown", "none", "null"}:
+            # A DATA catalog may contain per-feature CRS declarations.  The
+            # dynamic catalog path transforms each feature independently; a
+            # valid first CRS is only needed for compatibility Bundle fallback
+            # and for evaluating a caller-supplied parcel geometry.
+            self.crs = next(
+                (
+                    str(getattr(feature, "source_crs", "") or "")
+                    for feature in list(getattr(workspace, "iter_source_features", lambda: [])() or [])
+                    if str(getattr(feature, "source_crs", "") or "").strip().casefold()
+                    not in {"mixed", "unknown", "none", "null"}
+                ),
+                "EPSG:4326",
+            )
+        if not self.crs:
+            # Catalog-only contexts have no Bundle metadata.  Use a declared
+            # feature CRS instead of making generic DATA depend on a workspace.
+            self.crs = next(
+                (
+                    str(getattr(feature, "source_crs", "") or "")
+                    for feature in catalog_features
+                    if str(getattr(feature, "source_crs", "") or "").strip()
+                    and str(getattr(feature, "source_crs", "") or "")
+                    .strip()
+                    .casefold()
+                    not in {"mixed", "unknown", "none", "null"}
+                ),
+                "",
+            )
         self.project = None
         self.roads = None
         self.facilities = None
@@ -197,25 +304,40 @@ class SpatialFactorIndex:
         except Exception:
             self.diagnostics.append("SPATIAL_FACTOR_CRS_INVALID")
             return
-        self.roads = _metric_union(
-            _features(getattr(workspace, "lines", None), "roads_current"),
-            self.project,
+        catalog_available = getattr(catalog, "snapshot", None) is not None
+        dynamic = {
+            role: _catalog_role_features(catalog, role, context)
+            for role in ("road", "facility", "hazard", "farmland", "ecological")
+        }
+        self.roads = (
+            _catalog_metric_union(dynamic["road"])
+            if catalog_available
+            else _metric_union(_features(getattr(workspace, "lines", None), "roads_current"), self.project)
         )
-        self.facilities = _metric_union(
-            _features(getattr(workspace, "points", None), "facilities_current"),
-            self.project,
+        self.facilities = (
+            _catalog_metric_union(dynamic["facility"])
+            if catalog_available
+            else None
         )
-        self.hazards = _metric_union(
-            _features(getattr(workspace, "points", None), "hazard_points"),
-            self.project,
+        if not catalog_available:
+            self.facilities = _metric_union(
+                _features(getattr(workspace, "points", None), "facilities_current"),
+                self.project,
+            )
+        self.hazards = (
+            _catalog_metric_union(dynamic["hazard"])
+            if catalog_available
+            else _metric_union(_features(getattr(workspace, "points", None), "hazard_points"), self.project)
         )
-        self.farmland = _metric_union(
-            _features(getattr(workspace, "polygons", None), "farmland_protection"),
-            self.project,
+        self.farmland = (
+            _catalog_metric_union(dynamic["farmland"])
+            if catalog_available
+            else _metric_union(_features(getattr(workspace, "polygons", None), "farmland_protection"), self.project)
         )
-        self.ecological = _metric_union(
-            _features(getattr(workspace, "polygons", None), "ecological_redline"),
-            self.project,
+        self.ecological = (
+            _catalog_metric_union(dynamic["ecological"])
+            if catalog_available
+            else _metric_union(_features(getattr(workspace, "polygons", None), "ecological_redline"), self.project)
         )
         if self.roads is None:
             self.diagnostics.append("ROAD_ACCESS_SOURCE_MISSING")

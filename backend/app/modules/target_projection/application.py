@@ -42,14 +42,16 @@ class TargetProjectionRunResult(BaseModel):
     compilation: IntentCompilationResult
     artifact_ref: ArtifactRef
     gate_ref: ArtifactRef
+    state_patch: dict[str, Any] = Field(default_factory=dict)
 
     def to_state_patch(self) -> dict[str, Any]:
-        return {
-            "artifact_refs": {
-                "target_projection": self.artifact_ref.model_dump(mode="json"),
-                "target_projection_gate": self.gate_ref.model_dump(mode="json"),
-            }
+        patch = dict(self.state_patch)
+        patch["artifact_refs"] = {
+            **dict(patch.get("artifact_refs") or {}),
+            "target_projection": self.artifact_ref.model_dump(mode="json"),
+            "target_projection_gate": self.gate_ref.model_dump(mode="json"),
         }
+        return patch
 
 
 class TargetProjectionApplication:
@@ -73,21 +75,44 @@ class TargetProjectionApplication:
             raise RuntimeError("TARGET_PROJECTION did not commit IntentCompilationResult")
         return result
 
+    @staticmethod
+    def _validate_compilation_boundary(result: IntentCompilationResult) -> None:
+        from .validation import validate_target_projection_boundary
+
+        validate_target_projection_boundary(result)
+
     async def run(self, state: Mapping[str, Any]) -> TargetProjectionRunResult:
         request = TargetProjectionRunRequest.from_state(state)
+        from app.workflow.stages.support import require_upstream_gates
+
+        require_upstream_gates(
+            dict(state),
+            ("data", "kg", "evidence", "l1", "l2", "l3"),
+        )
         program = self.load_program(state)
+        from app.infrastructure.artifacts.runtime import validate_artifact_context
+
+        validate_artifact_context(dict(state), "planning_program", request.planning_program_ref)
         if program.context_version != request.context_version:
             raise RuntimeError("TARGET_PROJECTION input PlanningProgram context mismatch")
         from .stage import target_projection_node
 
         patch = dict(await target_projection_node(dict(state)))
         refs = {**dict(state.get("artifact_refs") or {}), **dict(patch.get("artifact_refs") or {})}
-        result = self.load({**dict(state), **patch, "artifact_refs": refs})
+        replay_state = {**dict(state), **patch, "artifact_refs": refs}
+        result = self.load(replay_state)
+        validate_artifact_context(
+            replay_state,
+            "target_projection",
+            refs.get("target_projection"),
+        )
+        self._validate_compilation_boundary(result)
         return TargetProjectionRunResult(
             request=request,
             compilation=result,
             artifact_ref=ArtifactRef.model_validate(refs["target_projection"]),
             gate_ref=ArtifactRef.model_validate(refs["target_projection_gate"]),
+            state_patch=patch,
         )
 
 
@@ -98,9 +123,7 @@ async def run_target_projection(state: Mapping[str, Any]) -> TargetProjectionRun
 async def run_target_projection_stage(state: Mapping[str, Any]) -> dict[str, Any]:
     """Workflow adapter that keeps stage orchestration behind this facade."""
 
-    from .stage import target_projection_node
-
-    return dict(await target_projection_node(dict(state)))
+    return (await TargetProjectionApplication().run(state)).to_state_patch()
 
 
 __all__ = [

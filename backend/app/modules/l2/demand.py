@@ -41,7 +41,7 @@ def derive_demand_portfolio(
             if not target_id or target_id in seen:
                 continue
             seen.add(target_id)
-            output_kind = str(getattr(target, "expected_output_kind", "parcel") or "parcel")
+            output_kind = str(getattr(target, "expected_output_kind", "polygon") or "polygon")
             quantity = None
             quantity_unit = ""
             for name, unit in (("area_ha", "ha"), ("area_ratio", "ratio"), ("width_m", "m")):

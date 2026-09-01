@@ -44,9 +44,14 @@ class SelectRunResult(BaseModel):
     scenario_set: ScenarioSet | None = None
     artifact_refs: dict[str, ArtifactRef] = Field(default_factory=dict)
     gate_ref: ArtifactRef
+    state_patch: dict[str, Any] = Field(default_factory=dict)
 
     def to_state_patch(self) -> dict[str, Any]:
-        return {"artifact_refs": {key: value.model_dump(mode="json") for key, value in self.artifact_refs.items()}}
+        patch = dict(self.state_patch)
+        patch["artifact_refs"] = {
+            key: value.model_dump(mode="json") for key, value in self.artifact_refs.items()
+        }
+        return patch
 
 
 class SelectApplication:
@@ -78,6 +83,19 @@ class SelectApplication:
 
     async def run(self, state: Mapping[str, Any]) -> SelectRunResult:
         request = SelectRunRequest.from_state(state)
+        from app.workflow.stages.support import require_upstream_gates
+
+        require_upstream_gates(
+            dict(state),
+            (
+                "data", "kg", "evidence", "l1", "l2", "l3",
+                "target_projection", "ground",
+            ),
+        )
+        from app.infrastructure.artifacts.runtime import validate_artifact_context
+
+        validate_artifact_context(dict(state), "target_projection", request.target_projection_ref)
+        validate_artifact_context(dict(state), "grounding_result", request.grounding_result_ref)
         self.load_projection(state)
         self.load_grounding(state)
         from .stage import select_node
@@ -94,6 +112,7 @@ class SelectApplication:
             scenario_set=scenario,
             artifact_refs={key: ArtifactRef.model_validate(value) for key, value in refs.items() if value},
             gate_ref=ArtifactRef.model_validate(refs["select_gate"]),
+            state_patch=patch,
         )
 
 
@@ -104,9 +123,7 @@ async def run_select(state: Mapping[str, Any]) -> SelectRunResult:
 async def run_select_stage(state: Mapping[str, Any]) -> dict[str, Any]:
     """Workflow adapter that keeps SELECT orchestration behind its facade."""
 
-    from .stage import select_node
-
-    return dict(await select_node(dict(state)))
+    return (await SelectApplication().run(state)).to_state_patch()
 
 
 __all__ = [

@@ -10,6 +10,7 @@ from typing import Any, Literal
 from pydantic import Field, model_validator
 
 from app.contracts.artifacts.contract_meta import ContractMeta
+from app.contracts.select.selection_decision import SelectionDecision
 
 
 def _canonical_json(value: object) -> str:
@@ -34,8 +35,11 @@ class ApprovedExecutionInput(ContractMeta):
     planning_program_ref: str = ""
     grounding_problem_ref: str = ""
     execution_plan_digest: str = ""
+    selection_decision_set_ref: str = Field(min_length=1)
+    selection_decision_set_digest: str = Field(min_length=1)
     target_ids: list[str] = Field(default_factory=list)
     candidate_ids: list[str] = Field(default_factory=list)
+    selection_decisions: list[SelectionDecision] = Field(default_factory=list)
     context_ref: dict[str, str] = Field(default_factory=dict)
     bundle_snapshot_digest: str = ""
     approval_status: Literal["auto", "human_approved"]
@@ -121,11 +125,25 @@ class ApprovedExecutionInput(ContractMeta):
             raise ValueError("execution plan approval fingerprint is stale")
         if str(getattr(plan, "scenario_id", "") or "") != self.scenario_id:
             raise ValueError("execution plan scenario id is stale")
+        plan_decisions = {
+            str(getattr(item, "decision_digest", "") or "")
+            for item in list(getattr(plan, "selection_decisions", None) or [])
+        }
+        approved_decisions = {
+            str(getattr(item, "decision_digest", "") or "")
+            for item in self.selection_decisions
+        }
+        if plan_decisions != approved_decisions:
+            raise ValueError("approved input selection decisions are stale")
 
     @model_validator(mode="after")
     def canonicalize_and_fingerprint(self) -> "ApprovedExecutionInput":
         self.target_ids = sorted({item for item in self.target_ids if item})
         self.candidate_ids = sorted({item for item in self.candidate_ids if item})
+        self.selection_decisions = sorted(
+            self.selection_decisions,
+            key=lambda item: (item.target_ref, item.selection_ref),
+        )
         self.context_ref = {
             str(key): str(value)
             for key, value in sorted(self.context_ref.items(), key=lambda item: str(item[0]))
@@ -135,6 +153,15 @@ class ApprovedExecutionInput(ContractMeta):
             raise ValueError("human_approved input requires approved_by")
         if self.can_execute and not self.execution_plan_digest.strip():
             raise ValueError("executable approval requires execution_plan_digest")
+        if self.can_execute and not self.selection_decisions:
+            raise ValueError("executable approval requires selection decisions")
+        decision_candidates = {
+            item.candidate_ref for item in self.selection_decisions
+        }
+        if decision_candidates != set(self.candidate_ids):
+            raise ValueError(
+                "approved candidate ids must equal selection decision coverage"
+            )
         if not self.fingerprint:
             payload = self.model_dump(mode="json", exclude={"fingerprint", "created_at", "approved_at"})
             self.fingerprint = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()

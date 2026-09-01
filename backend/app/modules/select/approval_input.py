@@ -39,6 +39,40 @@ def _selected_candidate_ids(scenario: Any) -> list[str]:
     )
 
 
+def _selection_decisions(scenario: Any) -> list[Any]:
+    """Build one generic resource decision per selected scenario member."""
+
+    from app.contracts.select.selection_decision import SelectionDecision
+
+    features = {
+        str(getattr(item, "candidate_id", "")): item
+        for item in list(getattr(scenario, "feature_intents", None) or [])
+        if str(getattr(item, "candidate_id", "") or "").strip()
+    }
+    decisions: list[SelectionDecision] = []
+    for selection in list(getattr(scenario, "target_selections", None) or []):
+        for candidate_id in list(getattr(selection, "candidate_ids", None) or []):
+            feature = features.get(str(candidate_id))
+            if feature is None:
+                continue
+            resource_refs = list(getattr(feature, "resource_refs", None) or [])
+            representation_refs = list(getattr(feature, "representation_refs", None) or [])
+            geometry_refs = list(getattr(feature, "source_refs", None) or [])
+            decisions.append(SelectionDecision(
+                selection_ref=f"selection:{selection.target_id}:{candidate_id}",
+                target_ref=str(selection.target_id),
+                entity_ref=str((getattr(feature, "entity_refs", None) or [""])[0] or ""),
+                part_ref=str(getattr(feature, "part_ref", "") or ""),
+                representation_ref=str((representation_refs or [""])[0]),
+                resource_ref=str((resource_refs or [""])[0]),
+                geometry_ref=str((geometry_refs or [candidate_id])[0]),
+                operation=str(getattr(selection, "operation", "select") or "select"),
+                required_capability=str(getattr(selection, "required_capability", "read") or "read"),
+                evidence_refs=list(getattr(feature, "evidence_refs", None) or []),
+            ))
+    return decisions
+
+
 def build_approved_execution_input(
     *,
     scenario_set: Any,
@@ -56,6 +90,8 @@ def build_approved_execution_input(
     approval_reason: str = "",
     execution_plan_digest: str = "",
     execution_plan: Any = None,
+    selection_decision_set_ref: Any = None,
+    selection_decision_set_digest: str = "",
 ) -> ApprovedExecutionInput | None:
     """Build an executable approval only for a complete ScenarioSet member."""
 
@@ -114,6 +150,13 @@ def build_approved_execution_input(
         execution_plan_digest = execution_plan_semantic_digest(execution_plan)
     if approval_status in {"auto", "human_approved"} and not str(execution_plan_digest).strip():
         return None
+    resolved_decision_set_ref = _value(
+        selection_decision_set_ref,
+        "descriptor_digest",
+        "digest",
+    )
+    if not resolved_decision_set_ref or not str(selection_decision_set_digest).strip():
+        return None
 
     problem_fingerprint = str(
         getattr(scenario, "problem_fingerprint", "")
@@ -141,6 +184,11 @@ def build_approved_execution_input(
     )
     if approval_status == "human_approved" and not str(approved_by).strip():
         return None
+    approved_decisions = list(
+        getattr(execution_plan, "selection_decisions", None) or []
+    )
+    if not approved_decisions:
+        return None
     return ApprovedExecutionInput(
         approval_id=str(approval_id),
         scenario_set_ref=_value(scenario_set_ref, "descriptor_digest", "digest")
@@ -157,8 +205,11 @@ def build_approved_execution_input(
         planning_program_ref=_value(planning_program_ref, "descriptor_digest", "digest"),
         grounding_problem_ref=str(grounding_problem_ref or problem_fingerprint),
         execution_plan_digest=str(execution_plan_digest or ""),
+        selection_decision_set_ref=resolved_decision_set_ref,
+        selection_decision_set_digest=str(selection_decision_set_digest),
         target_ids=target_ids,
         candidate_ids=_selected_candidate_ids(scenario),
+        selection_decisions=approved_decisions,
         context_ref=refs,
         bundle_snapshot_digest=str(bundle_snapshot_digest or ""),
         approval_status=approval_status,

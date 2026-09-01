@@ -28,6 +28,48 @@ def evaluate_l2_gate(
     cv = context_version or strategy.context_version
     gate_artifact_id = "gate-l2-" + (strategy.artifact_id or "0")
 
+    incomplete_dimensions = [
+        issue for issue in strategy.strategy_issues
+        if issue.code == "dimension_product_incomplete" and issue.severity == "error"
+    ]
+    if incomplete_dimensions:
+        pending_requests: list[PendingRequest] = []
+        for issue in incomplete_dimensions:
+            dimension = issue.message.rsplit(":", 1)[-1].strip() or "unknown"
+            artifact_key = f"l2_dimension__{dimension}"
+            recovery = RecoveryPointer(
+                item_id=dimension,
+                item_kind="artifact_input",
+                source_stage="l2",
+                return_stage="l2",
+                source_artifact_key=artifact_key,
+                source_artifact_ref="",
+                source_input_refs=["artifact:l1_snapshot"],
+                missing_requirements=["completed typed L2 dimension product"],
+                expected_artifact_key=artifact_key,
+                reason_code="dimension_product_incomplete",
+            )
+            pending_requests.append(PendingRequest(
+                request_id=f"pr-l2-dimension-{dimension}",
+                stage="l2",
+                request_type="dimension_product_recovery",
+                context={
+                    "producer_dimension": dimension,
+                    "message": issue.message,
+                    "detail": issue.detail or "",
+                },
+                recovery=recovery,
+            ))
+        return GateDecision(
+            stage=stage,
+            passed=False,
+            feedback_route="HUMAN",
+            pending_requests=pending_requests,
+            context_version=cv,
+            artifact_id=gate_artifact_id,
+            route_reason="typed_dimension_product_incomplete",
+        )
+
     if (
         not strategy.development_goals
         and not strategy.implementation_priorities
@@ -152,18 +194,17 @@ def evaluate_l2_gate(
                     recovery=recovery,
                 )
             )
-        # A usable partial strategy may advance with an explicit evidence
-        # deficit.  Keep every recovery request on the gate so the missing
-        # input remains visible to downstream stages; only the structural
-        # failures handled above block L2.
+        # Evidence gaps are still recoverable at L2, but a partial strategy
+        # must not advance to L3.  EXPLORE is handled immediately by the
+        # workflow and the affected dimensions are re-dispatched.
         return GateDecision(
-            stage=stage, passed=True, feedback_route=None,
+            stage=stage, passed=False, feedback_route="EXPLORE",
             evidence_requests=[g.description for g in actionable_gaps],
             pending_requests=pending,
             context_version=cv,
             artifact_id=gate_artifact_id,
             route_reason=(
-                "passed_with_unresolved_evidence"
+                "evidence_gap_requires_l2_recovery"
                 if actionable_gaps or missing_sources
                 else "checks_passed"
             ),

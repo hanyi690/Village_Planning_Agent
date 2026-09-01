@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.functional_validators import AfterValidator
 
 from app.contracts.artifacts.contract_meta import ContractMeta
@@ -20,6 +20,13 @@ from app.contracts.evidence.requirement_contracts import EvidenceRequirement
 from app.contracts.json_container import decode_json_container
 
 from app.contracts.l1.l1_contracts import EvidenceGap
+
+
+# Provider calls are row-oriented and bounded.  The aggregate may contain
+# more rows after merging dimensions, but one LLM response must stay small.
+_MAX_PROVIDER_ROWS = 8
+_MAX_PROVIDER_REFS = 12
+_MAX_PROVIDER_TOTAL_ROWS = 32
 
 
 def _clean_text(value: Any) -> str:
@@ -65,6 +72,12 @@ def _source_feature_ref(value: Any) -> str:
         "bundle:facilities_current:",
         "feature:",
         "source:",
+        "source-record://",
+        "source-geometry://",
+        "upload:",
+        "resource:",
+        "representation:",
+        "data:",
         "poi:",
     )
     if not text.startswith(allowed_prefixes):
@@ -188,7 +201,7 @@ class StrictL2Model(BaseModel):
 
 class StrategyConflict(StrictL2Model):
     description: str
-    between: list[str] = Field(default_factory=list)
+    between: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
     severity: Severity
 
 
@@ -211,8 +224,8 @@ class PlanningObjective(StrictL2Model):
     status: DecisionStatus
     scope: TypedScope | None = None
     target_year: str = ""
-    source_fact_refs: list[L1FactRef] = Field(default_factory=list)
-    constraint_refs: list[str] = Field(default_factory=list)
+    source_fact_refs: list[L1FactRef] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
+    constraint_refs: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
     rationale: str = ""
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
@@ -244,8 +257,8 @@ class TargetMetric(StrictL2Model):
     direction: MetricDirection
     status: DecisionStatus
     baseline_ref: str = ""
-    objective_refs: list[str] = Field(default_factory=list)
-    source_fact_refs: list[L1FactRef] = Field(default_factory=list)
+    objective_refs: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
+    source_fact_refs: list[L1FactRef] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
     target_year: str = ""
     rationale: str = ""
 
@@ -263,13 +276,13 @@ class StrategyRule(StrictL2Model):
     strategy_id: str = Field(min_length=1)
     statement: str = ""
     action: TypedStrategyAction | None = None
-    objective_refs: list[str] = Field(default_factory=list)
-    target_refs: list[str] = Field(default_factory=list)
+    objective_refs: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
+    target_refs: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
     strength: StrategyStrength
     scope: TypedScope | None = None
     phase: TypedPhase | None = None
-    prerequisite_refs: list[str] = Field(default_factory=list)
-    source_fact_refs: list[L1FactRef] = Field(default_factory=list)
+    prerequisite_refs: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
+    source_fact_refs: list[L1FactRef] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
     rationale: str = ""
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
@@ -314,7 +327,7 @@ class PriorityDecision(StrictL2Model):
 
     priority_id: str = Field(min_length=1)
     rank: int | None = None
-    strategy_refs: list[str] = Field(default_factory=list)
+    strategy_refs: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
     statement: str = ""
     rationale: str = ""
 
@@ -328,9 +341,9 @@ class SpatialStructureIntent(StrictL2Model):
     statement: str = ""
     scope: TypedScope | None = None
     relation_kind: TypedRelationKind | None = None
-    objective_refs: list[str] = Field(default_factory=list)
-    source_fact_refs: list[L1FactRef] = Field(default_factory=list)
-    grounding_requirements: list[TypedGroundingRequirement] = Field(default_factory=list)
+    objective_refs: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
+    source_fact_refs: list[L1FactRef] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
+    grounding_requirements: list[TypedGroundingRequirement] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
 
     _validate_structure_id = field_validator("structure_id", mode="before")(_nonempty_id)
 
@@ -368,8 +381,8 @@ class ConflictHypothesis(StrictL2Model):
 
     conflict_id: str = Field(min_length=1)
     description: str = ""
-    objective_refs: list[str] = Field(default_factory=list)
-    strategy_refs: list[str] = Field(default_factory=list)
+    objective_refs: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
+    strategy_refs: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
     severity: Severity
     resolution: str = ""
 
@@ -393,15 +406,42 @@ class L2DecisionSet(StrictL2Model):
 
     schema_version: Literal["2.0"] = "2.0"
     dimension_key: str = ""
-    objectives: list[PlanningObjective] = Field(default_factory=list)
-    metrics: list[TargetMetric] = Field(default_factory=list)
-    strategies: list[StrategyRule] = Field(default_factory=list)
-    priorities: list[PriorityDecision] = Field(default_factory=list)
-    spatial_structures: list[SpatialStructureIntent] = Field(default_factory=list)
-    conflicts: list[ConflictHypothesis] = Field(default_factory=list)
-    evidence_gaps: list[L2EvidenceGap] = Field(default_factory=list)
-    source_refs: list[str] = Field(default_factory=list)
-    diagnostics: list[str] = Field(default_factory=list)
+    objectives: list[PlanningObjective] = Field(default_factory=list, max_length=_MAX_PROVIDER_ROWS)
+    metrics: list[TargetMetric] = Field(default_factory=list, max_length=_MAX_PROVIDER_ROWS)
+    strategies: list[StrategyRule] = Field(default_factory=list, max_length=_MAX_PROVIDER_ROWS)
+    priorities: list[PriorityDecision] = Field(default_factory=list, max_length=_MAX_PROVIDER_ROWS)
+    spatial_structures: list[SpatialStructureIntent] = Field(default_factory=list, max_length=_MAX_PROVIDER_ROWS)
+    conflicts: list[ConflictHypothesis] = Field(default_factory=list, max_length=_MAX_PROVIDER_ROWS)
+    evidence_gaps: list[L2EvidenceGap] = Field(default_factory=list, max_length=_MAX_PROVIDER_ROWS)
+    source_refs: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
+    diagnostics: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_ROWS)
+
+    @model_validator(mode="after")
+    def bound_provider_page(self) -> "L2DecisionSet":
+        row_count = sum(
+            len(getattr(self, field_name))
+            for field_name in (
+                "objectives",
+                "metrics",
+                "strategies",
+                "priorities",
+                "spatial_structures",
+                "conflicts",
+                "evidence_gaps",
+            )
+        )
+        if row_count > _MAX_PROVIDER_TOTAL_ROWS:
+            raise ValueError(
+                "one L2 provider page may contain at most "
+                f"{_MAX_PROVIDER_TOTAL_ROWS} decision rows"
+            )
+        if any(item.kind == "goal" or item.target_year for item in self.objectives):
+            raise ValueError("L2 may emit constraints/opportunities, not planning targets")
+        if any(item.value is not None or item.target_year for item in self.metrics):
+            raise ValueError("L2 metrics are evaluation dimensions, not target values")
+        if any(item.target_refs for item in self.strategies):
+            raise ValueError("L2 rules cannot bind planning target refs")
+        return self
 
     @field_validator("source_refs", "diagnostics", mode="before")
     @classmethod

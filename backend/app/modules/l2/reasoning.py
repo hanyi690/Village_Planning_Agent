@@ -32,7 +32,7 @@ from app.workflow.validation.l1_fact_catalog import (
 )
 from app.workflow.validation.l2_boundary import normalize_l2_decision_boundary
 from app.infrastructure.logging import get_logger
-from app.infrastructure.evidence_runtime.dimension_runtime import (
+from app.modules.evidence.dimension_facade import (
     publish_dimension_complete,
     publish_dimension_delta,
     publish_dimension_start,
@@ -120,13 +120,14 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         dim_key,
         cfg,
         dim_layer,
+        state=state,
     )
     same_layer_deps = tuple(getattr(cfg, "depends_on", ()) or ())
     layer1_deps = tuple(getattr(cfg, "layer_depends_on", ()) or ())
-    missing_same = [key for key in same_layer_deps if key in dependency_context.missing_keys]
-    if missing_same:
+    missing_direct = list(dependency_context.missing_keys)
+    if missing_direct:
         raise RuntimeError(
-            f"维度 {dim_key} 的同层依赖产物缺失: {', '.join(missing_same)}"
+            f"维度 {dim_key} 的 typed CAS 依赖产物缺失: {', '.join(missing_direct)}"
         )
     same_layer_contexts = (
         dependency_context.render_for_prompt(
@@ -229,22 +230,25 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     decision_system = (
         f"【L2 typed decision pass; dimension_key={dim_key}】\n"
         "你负责把给定的事实和规划背景转成 L2DecisionSet。只填写声明的 typed response "
-        "contract，不生成 Markdown、标题、表格或 report_body。只写有依据的目标、指标、策略、"
-        "优先级、空间结构意图、冲突假设和证据缺口。空间结构只表达语义范围、关系和"
+        "contract，不生成 Markdown、标题、表格或 report_body。只写有依据的约束、规则、"
+        "服务范围、评价维度、冲突假设和证据缺口。空间结构只表达服务范围、关系和"
         "GROUND 所需前置条件，不生成坐标、WKT、GeoJSON、BSM 或最终选址。\n"
         "各对象的 ID 必须在本次输出内唯一，引用只能指向本次输出内已经存在的对象 ID；"
         "响应只能包含 schema_version、dimension_key、objectives、metrics、strategies、"
         "priorities、spatial_structures、conflicts、evidence_gaps、source_refs、diagnostics；"
-        "schema_version 固定为 2.0，所有数组都必须按 schema 使用数组类型。PlanningObjective.kind 只能是"
-        "goal/constraint/opportunity，PlanningObjective.status 只能是 observed/proposed/required；"
+        "schema_version 固定为 2.0，所有数组都必须按 schema 使用数组类型。兼容字段 objectives "
+        "只承载 constraint/opportunity，禁止 kind=goal 且 target_year 必须为空；"
+        "PlanningObjective.status 只能是 observed/proposed/required；"
         "TargetMetric.direction 只能是 increase/decrease/maintain/range/unknown，"
         "TargetMetric.status 只能是 observed/proposed/required；StrategyRule.strength 只能是"
         "hard/soft/proposed；conflicts 和 evidence_gaps 的 severity 只能是 info/warning/error。\n"
-        "没有证据时不要把对象标记为 observed；规划结论标记 proposed，无法支持的对象省略，"
-        "并可用 evidence_gaps 记录缺口。规划建议指标必须标记 proposed，不能伪装为现状事实。"
-        "TargetMetric.metric_id 是当前输出对象的本地 ID，不是 fact_id；TargetMetric.value 只能是"
-        "数值、数字字符串或空值，不能写指标名称、定性标签或单位。"
-        "数组字段始终返回 JSON 数组；没有内容时返回空数组。"
+        "所有约束、规则、服务范围和评价维度都必须引用 allowed_l1_facts；没有证据时省略，"
+        "并用 evidence_gaps 记录缺口。兼容字段 metrics 只承载评价维度，value 必须为 null，"
+        "target_year 必须为空；strategies.target_refs 必须为空。不得在 L2 创建规划目标、"
+        "候选或具体空间绑定。"
+        "数组字段始终返回 JSON 数组；没有内容时返回空数组。当前维度每个数组最多 8 行，"
+        "所有决策数组合计最多 32 行，每行引用最多 12 个 ref；只返回当前维度的最小 rows，不要把其他维度、完整规划方案、"
+        "大段报告或嵌套对象一次性塞入响应。超出上限必须省略并写入 evidence_gaps/diagnostics。"
    ) + "\n\n" + _l2_fact_reference_rules(l1_fact_audit) + (
         "\n\n" + _l2_fact_reference_final_guardrail(l1_fact_audit)
     )
@@ -537,12 +541,45 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         dim_key, dim_layer, len(llm_response), next_version, is_revision,
     )
 
+    from app.infrastructure.artifacts.dimension_runtime import (
+        dependency_product_keys,
+        persist_dimension_product,
+    )
+    from app.infrastructure.artifacts.fingerprint import semantic_checksum
+
+    product_input_digest = "sha256:" + semantic_checksum({
+        "context_version": state.get("context_version", ""),
+        "l1_fact_catalog": l1_fact_audit.get("catalog_digest", ""),
+        "dependencies": [
+            {
+                "dimension": item.dimension_key,
+                "layer": item.layer,
+                "digest": item.report_id,
+            }
+            for item in dependency_context.artifacts
+        ],
+    })
+    product_key, product_ref = persist_dimension_product(
+        state,
+        layer=2,
+        dimension_key=dim_key,
+        status="completed",
+        product=decision_set,
+        dependency_product_refs=dependency_product_keys(
+            dependency_context.artifacts
+        ),
+        evidence_gap_refs=(item.gap_id for item in decision_set.evidence_gaps),
+        input_digest=product_input_digest,
+        diagnostics=decision_set.diagnostics,
+    )
+
     # 10. State update - accumulate into pending_reports, reducer handles merge
     result = {
         "messages": [AIMessage(content=llm_response, metadata={"dimension_key": dim_key})],
         "completed_dimensions": {phase_key: [dim_key]},
         "pending_reports": [pending_report],
         "layer_char_counts": {dim_layer: len(llm_response)},
+        "artifact_refs": {product_key: product_ref},
     }
 
     # 立即写入 DB，使并行节点可通过 DB 回退路径获取依赖报告
@@ -732,8 +769,8 @@ def _load_l1_fact_section(
                     for candidate in catalog_records
                     if candidate.label
                 ],
-                max_rows=48,
-                max_chars=12000,
+                max_rows=32,
+                max_chars=6200,
             )
             lines.append(
                 f"【L1 对 {dimension_key} 的上游事实（由依赖树选定；可引用但不是规划决定）】"
@@ -763,7 +800,7 @@ def _load_l1_fact_section(
                     for item in scoped_locations
                 ],
                 max_rows=24,
-                max_chars=9000,
+                max_chars=6200,
             )
             lines.append(
                 f"【L1 对 {dimension_key} 的上游地点事实（来自 L1Snapshot artifact；"
@@ -818,8 +855,8 @@ def _l2_fact_reference_rules(audit: Dict[str, Any]) -> str:
                 "uncertainty",
             ),
             selectable_facts,
-            max_rows=48,
-            max_chars=12000,
+            max_rows=32,
+            max_chars=6200,
         )
         lines.append(fact_table)
         lines.append(
@@ -969,7 +1006,128 @@ def _build_l2_report_synthesis_prompt(
     decision_set: L2DecisionSet,
 ) -> str:
     """Build the independent human-report projection prompt for L2."""
-    decision_json = decision_set.model_dump_json(ensure_ascii=False)
+    from app.infrastructure.context_runtime import build_bounded_table
+
+    def joined(values: Any) -> str:
+        return ",".join(str(value) for value in (values or []) if str(value).strip())
+
+    rows: list[dict[str, Any]] = []
+    for item in decision_set.objectives:
+        rows.append({
+            "row_type": "objective",
+            "row_id": item.objective_id,
+            "statement": item.statement,
+            "value": "",
+            "status": item.status,
+            "semantic_type": item.kind,
+            "scope": item.scope or "",
+            "phase_or_year": item.target_year,
+            "source_fact_refs": joined(item.source_fact_refs),
+            "dependency_refs": joined(item.constraint_refs),
+            "note": item.rationale,
+        })
+    for item in decision_set.metrics:
+        rows.append({
+            "row_type": "metric",
+            "row_id": item.metric_id,
+            "statement": item.name,
+            "value": "" if item.value is None else f"{item.value} {item.unit}".strip(),
+            "status": item.status,
+            "semantic_type": item.direction,
+            "scope": "",
+            "phase_or_year": item.target_year,
+            "source_fact_refs": joined(item.source_fact_refs),
+            "dependency_refs": joined(item.objective_refs),
+            "note": item.rationale,
+        })
+    for item in decision_set.strategies:
+        rows.append({
+            "row_type": "strategy",
+            "row_id": item.strategy_id,
+            "statement": item.statement,
+            "value": "",
+            "status": item.strength,
+            "semantic_type": item.action or "",
+            "scope": item.scope or "",
+            "phase_or_year": item.phase or "",
+            "source_fact_refs": joined(item.source_fact_refs),
+            "dependency_refs": joined([*item.objective_refs, *item.prerequisite_refs]),
+            "note": item.rationale,
+        })
+    for item in decision_set.priorities:
+        rows.append({
+            "row_type": "priority",
+            "row_id": item.priority_id,
+            "statement": item.statement,
+            "value": "" if item.rank is None else item.rank,
+            "status": "",
+            "semantic_type": "priority",
+            "scope": "",
+            "phase_or_year": "",
+            "source_fact_refs": "",
+            "dependency_refs": joined(item.strategy_refs),
+            "note": item.rationale,
+        })
+    for item in decision_set.spatial_structures:
+        rows.append({
+            "row_type": "spatial_structure",
+            "row_id": item.structure_id,
+            "statement": item.statement,
+            "value": joined(item.grounding_requirements),
+            "status": "",
+            "semantic_type": item.relation_kind or "",
+            "scope": item.scope or "",
+            "phase_or_year": "",
+            "source_fact_refs": joined(item.source_fact_refs),
+            "dependency_refs": joined(item.objective_refs),
+            "note": "",
+        })
+    for item in decision_set.conflicts:
+        rows.append({
+            "row_type": "conflict",
+            "row_id": item.conflict_id,
+            "statement": item.description,
+            "value": "",
+            "status": item.severity,
+            "semantic_type": "conflict",
+            "scope": "",
+            "phase_or_year": "",
+            "source_fact_refs": "",
+            "dependency_refs": joined([*item.objective_refs, *item.strategy_refs]),
+            "note": item.resolution,
+        })
+    for item in decision_set.evidence_gaps:
+        rows.append({
+            "row_type": "evidence_gap",
+            "row_id": item.gap_id,
+            "statement": item.description,
+            "value": item.required_fact,
+            "status": item.severity,
+            "semantic_type": "gap",
+            "scope": item.dimension,
+            "phase_or_year": "",
+            "source_fact_refs": "",
+            "dependency_refs": "",
+            "note": "",
+        })
+    _, decision_table = build_bounded_table(
+        (
+            "row_type",
+            "row_id",
+            "statement",
+            "value",
+            "status",
+            "semantic_type",
+            "scope",
+            "phase_or_year",
+            "source_fact_refs",
+            "dependency_refs",
+            "note",
+        ),
+        rows,
+        max_rows=32,
+        max_chars=6200,
+    )
     return (
         f"【L2 report synthesis pass; dimension_key={dimension_key}】\n"
         "你只负责生成人类规划人员阅读的规划思路正文，输出 L2ReportOutput。"
@@ -977,7 +1135,8 @@ def _build_l2_report_synthesis_prompt(
         "不得新增目标、指标、数量、位置、关系、空间身份、来源事实或执行几何。"
         "空数组表示本维度没有该类内容，不得用模板或常识补写。"
         "只返回 report_body 字段，不返回决策 JSON、Markdown 代码围栏或其他根字段。\n\n"
-        f"【validated L2DecisionSet】\n{decision_json}\n\n"
+        "【validated L2 decision rows; bounded table】\n"
+        f"{decision_table}\n\n"
         "请将已验证的决策组织为连贯、简洁、可供人阅读的规划思路正文。"
     )
 

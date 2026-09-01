@@ -31,40 +31,26 @@ def _scenario_card(scenario: Any) -> dict[str, Any]:
     return {
         "scenario_id": str(getattr(scenario, "scenario_id", "") or ""),
         "status": str(getattr(scenario, "status", "") or ""),
-        "target_selections": [
-            {
-                "target_id": str(getattr(selection, "target_id", "") or ""),
-                "selection_mode": str(
-                    getattr(selection, "selection_mode", "") or ""
-                ),
-                "candidate_ids": [
-                    str(value)
-                    for value in list(getattr(selection, "candidate_ids", None) or [])[:16]
-                ],
-            }
+        "target_selections": "; ".join(
+            f"{getattr(selection, 'target_id', '')}:{getattr(selection, 'selection_mode', '')}:"
+            f"{','.join(str(value) for value in list(getattr(selection, 'candidate_ids', None) or [])[:16])}:"
+            f"resources={','.join(str(value) for value in list(getattr(selection, 'resource_refs', None) or [])[:8])}:"
+            f"representations={','.join(str(value) for value in list(getattr(selection, 'representation_refs', None) or [])[:8])}"
             for selection in list(getattr(scenario, "target_selections", None) or [])[:32]
-        ],
-        "objective_vector": {
-            str(key): float(value)
-            for key, value in list(
-                (getattr(scenario, "objective_vector", None) or {}).items()
-            )[:16]
-        },
-        "metrics": {
-            str(key): float(value)
-            for key, value in list(
-                (getattr(scenario, "metrics", None) or {}).items()
-            )[:16]
-        },
-        "findings": [
-            {
-                "code": str(getattr(finding, "code", "") or ""),
-                "severity": str(getattr(finding, "severity", "") or ""),
-                "relation_id": str(getattr(finding, "relation_id", "") or ""),
-                "target_id": str(getattr(finding, "target_id", "") or ""),
-            }
+        ),
+        "objective_vector": "; ".join(
+            f"{key}={value}"
+            for key, value in list((getattr(scenario, "objective_vector", None) or {}).items())[:16]
+        ),
+        "metrics": "; ".join(
+            f"{key}={value}"
+            for key, value in list((getattr(scenario, "metrics", None) or {}).items())[:16]
+        ),
+        "findings": "; ".join(
+            f"{getattr(finding, 'code', '')}:{getattr(finding, 'severity', '')}:"
+            f"{getattr(finding, 'target_id', '')}:{getattr(finding, 'relation_id', '')}"
             for finding in list(getattr(scenario, "findings", None) or [])[:24]
-        ],
+        ),
     }
 
 
@@ -145,7 +131,7 @@ async def _reason_select_scenario(
             for item in descriptors
         ],
         max_rows=32,
-        max_chars=12000,
+        max_chars=6200,
     )
     prompt = "\n".join((
         render_candidate_selection_contract(item.candidate_id for item in descriptors),
@@ -309,6 +295,15 @@ def _apply_repair_directives(plan_intent: Any, compilation: Any) -> Any:
 
 async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """SELECT node: grounded problem -> ScenarioSet/approval-bound plan."""
+    from app.workflow.stages.support import require_upstream_gates
+
+    require_upstream_gates(
+        dict(state),
+        (
+            "data", "kg", "evidence", "l1", "l2", "l3",
+            "target_projection", "ground",
+        ),
+    )
     from app.modules.select.select_gate import evaluate_scenario_select_gate
     from app.contracts.delivery.deferral_contracts import DeferralLedger
     from app.contracts.ground.grounding_contracts import GroundingResult
@@ -423,7 +418,6 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     suitability_grounding = grounding
     try:
         async with asyncio.timeout(max(600, int(GIS_TIMEOUT) * 20)):
-            from app.data.catalog import DataCatalog
             from app.infrastructure.paths import session_run_dir
 
             suitability_surface = await asyncio.to_thread(
@@ -431,7 +425,14 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 suitability_grounding,
                 context,
                 plan_intent=plan_intent,
-                catalog=DataCatalog(),
+                # DATA is the only source authority.  Passing a newly
+                # constructed legacy DataCatalog here used to discard the
+                # session's normalized uploads and made terrain/source
+                # resolution depend on Bundle layer names.  The terrain
+                # resolver accepts both the generic catalog and the narrow
+                # compatibility adapter when a legacy context is explicitly
+                # in use.
+                catalog=getattr(context, "data_resource_catalog", None),
                 cache_dir=session_run_dir(_run_id(state)) / "terrain-evidence",
             )
     except TimeoutError as exc:
@@ -711,20 +712,81 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         build_execution_plan_draft,
     )
     execution_plan = None
+    selection_decision_set = None
+    selection_decision_set_ref = None
     if scenario is not None and str(getattr(scenario, "status", "")) == "complete":
-        execution_plan = build_execution_plan_draft(
-            scenario_set,
-            scenario,
-            plan_intent,
-            problem,
-            run_id=_run_id(state),
-            context_version=_context_version(state),
-            context_fingerprint=str(state.get("context_fingerprint") or ""),
+        from app.modules.select.resource_binding import (
+            SelectionBindingError,
+            build_selection_decision_set,
         )
+
+        try:
+            selection_decision_set = build_selection_decision_set(
+                scenario,
+                problem,
+                getattr(context, "data_resource_catalog", None),
+            )
+            selection_decision_set_ref = persist_stage_artifact(
+                artifact_state,
+                "select",
+                "SelectionDecisionSet",
+                selection_decision_set,
+                artifact_key="selection_decisions",
+            )
+            if selection_decision_set_ref:
+                artifact_refs["selection_decisions"] = selection_decision_set_ref
+                output_refs["selection_decisions"] = selection_decision_set_ref
+            execution_plan = build_execution_plan_draft(
+                scenario_set,
+                scenario,
+                plan_intent,
+                problem,
+                selection_decision_set=selection_decision_set,
+                run_id=_run_id(state),
+                context_version=_context_version(state),
+                context_fingerprint=str(state.get("context_fingerprint") or ""),
+            )
+        except SelectionBindingError as exc:
+            logger.warning(
+                "[workflow:select] resource binding failed closed codes=%s",
+                sorted({str(item.get("code") or "") for item in exc.diagnostics}),
+            )
+            diagnostic_ref = persist_stage_artifact(
+                artifact_state,
+                "select",
+                "SelectionBindingDiagnostics",
+                {"diagnostics": exc.diagnostics},
+                artifact_key="selection_binding_diagnostics",
+            )
+            if diagnostic_ref:
+                artifact_refs["selection_binding_diagnostics"] = diagnostic_ref
+                output_refs["selection_binding_diagnostics"] = diagnostic_ref
+        except ValueError as exc:
+            diagnostic_ref = persist_stage_artifact(
+                artifact_state,
+                "select",
+                "SelectionBindingDiagnostics",
+                {
+                    "diagnostics": [{
+                        "code": "selection_execution_plan_binding_invalid",
+                        "exception_type": type(exc).__name__,
+                    }]
+                },
+                artifact_key="selection_binding_diagnostics",
+            )
+            if diagnostic_ref:
+                artifact_refs["selection_binding_diagnostics"] = diagnostic_ref
+                output_refs["selection_binding_diagnostics"] = diagnostic_ref
     if approval_candidate_kwargs is not None and execution_plan is not None:
         approved_input_candidate = build_approved_execution_input(
             **approval_candidate_kwargs,
             execution_plan=execution_plan,
+            selection_decision_set_ref=selection_decision_set_ref,
+            selection_decision_set_digest=(
+                selection_decision_set.decision_set_digest
+                if selection_decision_set is not None
+                else ""
+            ),
         )
         if approved_input_candidate is not None:
             execution_plan = bind_approved_execution_plan(
@@ -753,6 +815,7 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         solver_subproblem_plan=solver_subproblem_plan,
         planning_task_graph=task_graph,
         readiness=readiness,
+        selection_decision_set=selection_decision_set,
     )
     if execution_plan is not None:
         plan_ref = persist_stage_artifact(

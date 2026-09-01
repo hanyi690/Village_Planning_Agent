@@ -6,7 +6,6 @@ artifact.  It never interprets report prose, headings, bullets, or keywords.
 """
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from app.core.common.context_guard import require_frozen_context
@@ -269,8 +268,6 @@ async def l2_aggregate(
     *,
     base_dir: str = ".run-tmp",
 ) -> dict[str, Any]:
-    from app.infrastructure.reports.report_store import ReportStore
-
     run_id = state.get("run_id", state.get("session_id", ""))
     session_id = state.get("session_id", run_id)
     context_version = state.get("context_version", "")
@@ -278,6 +275,7 @@ async def l2_aggregate(
     require_frozen_context(state)
 
     known_l1_fact_ids: set[str] = set()
+    l1_load_error = ""
     try:
         from app.infrastructure.artifacts.runtime import load_artifact
 
@@ -287,29 +285,38 @@ async def l2_aggregate(
             if hasattr(l1_snapshot, "model_dump")
             else l1_snapshot
         )
-        if isinstance(payload, dict):
-            known_l1_fact_ids = {
-                str(item.get("fact_id") or "").strip()
-                for item in (payload.get("fact_records") or [])
-                if isinstance(item, dict) and str(item.get("fact_id") or "").strip()
-            }
+        if not isinstance(payload, dict):
+            raise TypeError("L1 snapshot payload is not a typed object")
+        known_l1_fact_ids = {
+            str(item.get("fact_id") or "").strip()
+            for item in (payload.get("fact_records") or [])
+            if isinstance(item, dict) and str(item.get("fact_id") or "").strip()
+        }
     except Exception as exc:  # fail closed below when refs are present
+        l1_load_error = f"{type(exc).__name__}: {exc}"
         logger.warning("[l2_aggregate] unable to load L1 fact identity set: %s", exc)
 
     l1_fact_catalog = build_l1_fact_catalog(
         {"fact_id": value} for value in known_l1_fact_ids
     )
 
-    store = ReportStore.get_instance()
-    raw_reports = await store.get_layer_reports_with_sources(session_id, layer=2)
+    from app.infrastructure.artifacts.dimension_runtime import (
+        load_layer_dimension_products,
+    )
 
+    dimension_products, dimension_errors = load_layer_dimension_products(
+        state,
+        layer=2,
+        model_type=L2DecisionSet,
+    )
+    raw_reports = dimension_products
     decision_sets: list[L2DecisionSet] = []
-    for dim_key, rec in raw_reports.items():
-        rec = rec or {}
-        instruction = rec.get("instruction", "") or ""
+    for dim_key, typed_decision in dimension_products.items():
         try:
-            payload = instruction if isinstance(instruction, dict) else json.loads(instruction)
-            decision = _normalize_decision_set(payload, dimension_key=dim_key)
+            decision = _normalize_decision_set(
+                typed_decision,
+                dimension_key=dim_key,
+            )
             decision = normalize_l2_decision_boundary(
                 decision,
                 catalog=l1_fact_catalog,
@@ -321,14 +328,40 @@ async def l2_aggregate(
                 known_l1_fact_ids=set(l1_fact_catalog.usable_allowed_fact_ids),
             )
             decision_sets.append(decision)
-        except Exception as exc:  # noqa: BLE001 - one dimension must not break the aggregate
-            logger.warning(
-                "[l2_aggregate] typed decision rejected for dim=%s: %s",
-                dim_key,
-                str(exc).splitlines()[0][:1000],
-            )
+        except Exception as exc:
+            dimension_errors[dim_key] = f"{type(exc).__name__}: {exc}"
 
     strategy = merge_decision_sets(decision_sets, run_id=run_id)
+    if l1_load_error:
+        strategy.strategy_issues.append(StrategyIssue(
+            stage="l2",
+            severity="error",
+            code="l1_fact_catalog_unavailable",
+            message="L2 cannot validate its exact L1 fact dependency closure",
+            detail=l1_load_error,
+        ))
+        strategy.evidence_gaps.append(EvidenceGap(
+            gap_id="l2:l1-fact-catalog:unavailable",
+            dimension="shared",
+            description="Authoritative L1 fact identities could not be loaded",
+            required_fact="restore the l1_snapshot CAS artifact and retry L2",
+            severity="error",
+        ))
+    for dim_key, detail in sorted(dimension_errors.items()):
+        strategy.strategy_issues.append(StrategyIssue(
+            stage="l2",
+            severity="error",
+            code="dimension_product_incomplete",
+            message=f"L2 dimension product is not consumable: {dim_key}",
+            detail=detail,
+        ))
+        strategy.evidence_gaps.append(EvidenceGap(
+            gap_id=f"l2:dimension:{dim_key}:product",
+            dimension=dim_key,
+            description="typed L2 dimension product is missing, pending, or invalid",
+            required_fact="rerun the exact L2 dimension product or request HUMAN review",
+            severity="error",
+        ))
     strategy.context_version = context_version
     branch_id = str(state.get("branch_id") or "main")
     artifact_id = f"l2-{run_id}-{branch_id}-{semantic_checksum(strategy)[:16]}"
@@ -360,7 +393,12 @@ async def l2_aggregate(
 
     from app.workflow.stage_adapter import persist_gate_decision
 
-    gate_ref = persist_gate_decision(state, "l2", gate_decision)
+    gate_ref = persist_gate_decision(
+        state,
+        "l2",
+        gate_decision,
+        output_refs={"l2_strategy": ref},
+    )
 
     pkg = build_l2_review_package(
         strategy=strategy,

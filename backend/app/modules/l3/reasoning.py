@@ -27,7 +27,7 @@ from app.config import get_dimension_config
 from app.contracts.events import SSEEventType
 from app.core.settings import LLM_STREAM_TIMEOUT
 from app.infrastructure.logging import get_logger
-from app.infrastructure.evidence_runtime.dimension_runtime import (
+from app.modules.evidence.dimension_facade import (
     publish_dimension_complete,
     publish_dimension_delta,
     publish_dimension_start,
@@ -43,6 +43,7 @@ from app.infrastructure.evidence_runtime.dimension_runtime import (
 from app.modules.evidence.application import EvidenceFacade
 from app.infrastructure.llm.dependency_context import load_dependency_context
 from app.infrastructure.llm.prompts.detailed import get_dimension_prompt as get_layer3_prompt
+from app.contracts.l2.l2_contracts import L2Strategy
 from app.contracts.l3.program import PlanningClaimSet
 from app.modules.l1.dimension_contracts import render_dimension_semantic_contract
 from app.workflow.recovery import schedule_dimension_retry
@@ -234,6 +235,7 @@ async def _cached_claim_only_generation(
     source_fact_ids: Iterable[str] = (),
     spatial_source_fact_ids: Iterable[str] = (),
     allowed_evidence_refs: Iterable[str] = (),
+    allowed_l2_refs: Iterable[str] = (),
 ):
     """Generate or resume the claims-only L3 projection."""
 
@@ -243,6 +245,9 @@ async def _cached_claim_only_generation(
     )
     normalized_evidence_refs = tuple(
         sorted({str(item).strip() for item in allowed_evidence_refs if str(item).strip()})
+    )
+    normalized_l2_refs = tuple(
+        sorted({str(item).strip() for item in allowed_l2_refs if str(item).strip()})
     )
 
     cache_key = _projection_cache_key(
@@ -254,6 +259,7 @@ async def _cached_claim_only_generation(
             "source_fact_ids": list(normalized_source_ids),
             "spatial_source_fact_ids": list(normalized_spatial_ids),
             "allowed_evidence_refs": list(normalized_evidence_refs),
+            "allowed_l2_refs": list(normalized_l2_refs),
         },
     )
     path = _projection_cache_path(session_id, dimension_key, cache_key, "claims")
@@ -266,6 +272,7 @@ async def _cached_claim_only_generation(
                     source_fact_ids=normalized_source_ids,
                     spatial_source_fact_ids=normalized_spatial_ids,
                     allowed_evidence_refs=normalized_evidence_refs,
+                    allowed_l2_refs=normalized_l2_refs,
                 )
                 original = item.model_dump(mode="python")
                 if sanitized != original:
@@ -299,6 +306,7 @@ def _persist_validated_claims(
     source_fact_ids: Iterable[str] = (),
     spatial_source_fact_ids: Iterable[str] = (),
     allowed_evidence_refs: Iterable[str] = (),
+    allowed_l2_refs: Iterable[str] = (),
 ) -> None:
     response_model, normalized_source_ids, normalized_spatial_ids = _l3_claim_schema(
         source_fact_ids,
@@ -306,6 +314,9 @@ def _persist_validated_claims(
     )
     normalized_evidence_refs = tuple(
         sorted({str(item).strip() for item in allowed_evidence_refs if str(item).strip()})
+    )
+    normalized_l2_refs = tuple(
+        sorted({str(item).strip() for item in allowed_l2_refs if str(item).strip()})
     )
 
     cache_key = _projection_cache_key(
@@ -317,6 +328,7 @@ def _persist_validated_claims(
             "source_fact_ids": list(normalized_source_ids),
             "spatial_source_fact_ids": list(normalized_spatial_ids),
             "allowed_evidence_refs": list(normalized_evidence_refs),
+            "allowed_l2_refs": list(normalized_l2_refs),
         },
     )
     _write_projection_cache(
@@ -447,6 +459,25 @@ def _l3_fact_catalog(
         return empty_l1_fact_catalog()
 
 
+def _l2_reference_catalog(state: Dict[str, Any]) -> tuple[str, ...]:
+    """Load the persisted L2 row identities accepted by this L3 pass."""
+
+    from app.infrastructure.artifacts.runtime import load_artifact
+
+    strategy = load_artifact(dict(state), "l2_strategy", L2Strategy)
+    if strategy is None:
+        return ()
+    refs = [
+        *[item.objective_id for item in strategy.objectives],
+        *[item.metric_id for item in strategy.metrics],
+        *[item.strategy_id for item in strategy.strategy_rules],
+        *[item.priority_id for item in strategy.priority_decisions],
+        *[item.structure_id for item in strategy.spatial_structure_intents],
+        *[item.conflict_id for item in strategy.conflict_hypotheses],
+    ]
+    return tuple(sorted({str(value).strip() for value in refs if str(value).strip()}))
+
+
 def _typed_l1_fact_evidence(
     state: Dict[str, Any],
     dimension_key: str,
@@ -506,7 +537,7 @@ def _typed_l1_fact_evidence(
             ("mention", "normalized_name", "role", "dimension_key", "spatial_hint", "related_mentions", "evidence_refs", "source_report_ref"),
             rows,
             max_rows=24,
-            max_chars=9000,
+            max_chars=6200,
         )
         return "【已审计 L1 spatial location facts】\n" + table
 
@@ -554,7 +585,7 @@ def _typed_l1_fact_evidence(
         ("fact_id", "statement", "fact_kind", "dimension_key", "semantic_type", "subject_scope", "attributes", "source_refs", "source_feature_ids", "source_snapshot_ref"),
         rows,
         max_rows=32,
-        max_chars=12000,
+        max_chars=6200,
     )
     return (
         "【已审计 L1 planning facts】\n"
@@ -638,6 +669,7 @@ def _sanitize_l3_provider_component(
     allowed_evidence_refs: Iterable[str] = (),
     allowed_claim_families: Iterable[str] | None = None,
     allowed_grounding_requirements: Iterable[str] | None = None,
+    allowed_l2_refs: Iterable[str] = (),
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Close provider refs and rough-intent vocabulary without adding meaning.
 
@@ -704,6 +736,23 @@ def _sanitize_l3_provider_component(
         if str(item).strip()
     }
     diagnostics: list[str] = []
+    l2_allowed = {
+        str(item).strip() for item in allowed_l2_refs if str(item).strip()
+    }
+    for field_name in ("objective_refs", "constraint_refs"):
+        emitted = [
+            str(item).strip()
+            for item in (payload.get(field_name) or [])
+            if str(item).strip()
+        ]
+        kept = list(dict.fromkeys(item for item in emitted if item in l2_allowed))
+        dropped = sorted(set(emitted) - set(kept))
+        payload[field_name] = kept
+        if dropped:
+            diagnostics.append(
+                f"WARNING[l3_l2_ref_closed_set] {claim_id}: dropped {field_name} "
+                f"outside the persisted L2 row catalog: {dropped}"
+            )
     refs = [str(item).strip() for item in (payload.get("source_fact_refs") or []) if str(item).strip()]
     kept_refs = list(dict.fromkeys(item for item in refs if item in allowed))
     dropped_refs = sorted(set(refs) - set(kept_refs))
@@ -805,6 +854,7 @@ def _normalize_claim_components(
     source_fact_ids: Iterable[str] = (),
     spatial_source_fact_ids: Iterable[str] = (),
     allowed_evidence_refs: Iterable[str] = (),
+    allowed_l2_refs: Iterable[str] = (),
 ) -> tuple[Any, PlanningClaimSet]:
     """Close provider values, then convert components into strict claims."""
 
@@ -828,6 +878,7 @@ def _normalize_claim_components(
             allowed_evidence_refs=allowed_evidence_refs,
             allowed_claim_families=allowed_claim_families,
             allowed_grounding_requirements=allowed_grounding_requirements,
+            allowed_l2_refs=allowed_l2_refs,
         )
         if payload is None:
             diagnostics.extend(component_diagnostics)
@@ -856,13 +907,21 @@ def _normalize_claim_components(
     lineaged_claims: list[Any] = []
     lineage_diagnostics: list[str] = []
     for claim in claim_set.claims:
-        if _claim_lineage_present(claim):
+        l2_lineage_present = bool(claim.objective_refs or claim.constraint_refs)
+        if _claim_lineage_present(claim) and (
+            claim.planning_role != "spatial_intervention" or l2_lineage_present
+        ):
             lineaged_claims.append(claim)
             continue
         claim_id = str(getattr(claim, "claim_id", "claim") or "claim")
+        reason = (
+            "no persisted L2 objective/rule reference was provided"
+            if _claim_lineage_present(claim) and not l2_lineage_present
+            else "no closed L1 fact or Evidence Runtime reference was provided"
+        )
         lineage_diagnostics.append(
             f"ERROR[claim_lineage_missing] {claim_id}: claim was quarantined because "
-            "no closed L1 fact or Evidence Runtime reference was provided"
+            + reason
         )
     claim_set = claim_set.model_copy(
         update={
@@ -938,6 +997,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         if fact_catalog.is_unambiguous
         else ()
     )
+    allowed_l2_refs = _l2_reference_catalog(state)
 
     # 2. Unified typed evidence retrieval (REPORT/L1/KG/BUNDLE/RAG adapters).
     evidence_trace: dict[str, Any] = {}
@@ -965,13 +1025,14 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         dim_key,
         cfg,
         dim_layer,
+        state=state,
     )
     same_layer_deps = tuple(getattr(cfg, "depends_on", ()) or ())
     layer2_deps = tuple(getattr(cfg, "phase_depends_on", ()) or ())
-    missing_same = [key for key in same_layer_deps if key in dependency_context.missing_keys]
-    if missing_same:
+    missing_direct = list(dependency_context.missing_keys)
+    if missing_direct:
         raise RuntimeError(
-            f"维度 {dim_key} 的同层依赖产物缺失: {', '.join(missing_same)}"
+            f"维度 {dim_key} 的 typed CAS 依赖产物缺失: {', '.join(missing_direct)}"
         )
     same_layer_contexts = (
         dependency_context.render_for_prompt(
@@ -1059,6 +1120,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             source_fact_ids=source_fact_ids,
             spatial_source_fact_ids=spatial_source_fact_ids,
             allowed_evidence_refs=allowed_evidence_refs,
+            allowed_l2_refs=allowed_l2_refs,
         )
         draft_set, claim_set = _normalize_claim_components(
             dimension_key=dim_key,
@@ -1066,6 +1128,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             source_fact_ids=source_fact_ids,
             spatial_source_fact_ids=spatial_source_fact_ids,
             allowed_evidence_refs=allowed_evidence_refs,
+            allowed_l2_refs=allowed_l2_refs,
         )
         semantic_feedback = _spatial_claim_evidence_errors(
             state,
@@ -1082,6 +1145,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 source_fact_ids=source_fact_ids,
                 spatial_source_fact_ids=spatial_source_fact_ids,
                 allowed_evidence_refs=allowed_evidence_refs,
+                allowed_l2_refs=allowed_l2_refs,
             )
             draft_set, claim_set = _normalize_claim_components(
                 dimension_key=dim_key,
@@ -1089,6 +1153,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 source_fact_ids=source_fact_ids,
                 spatial_source_fact_ids=spatial_source_fact_ids,
                 allowed_evidence_refs=allowed_evidence_refs,
+                allowed_l2_refs=allowed_l2_refs,
             )
             semantic_feedback = _spatial_claim_evidence_errors(
                 state,
@@ -1110,6 +1175,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             source_fact_ids=source_fact_ids,
             spatial_source_fact_ids=spatial_source_fact_ids,
             allowed_evidence_refs=allowed_evidence_refs,
+            allowed_l2_refs=allowed_l2_refs,
         )
         # Do not ask the provider to paraphrase claims. A second prose call
         # can introduce entities or quantities that were not in the validated
@@ -1328,6 +1394,37 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             }],
         }
 
+    from app.infrastructure.artifacts.dimension_runtime import (
+        dependency_product_keys,
+        persist_dimension_product,
+    )
+    from app.infrastructure.artifacts.fingerprint import semantic_checksum
+
+    product_input_digest = "sha256:" + semantic_checksum({
+        "context_version": state.get("context_version", ""),
+        "l1_fact_catalog": fact_catalog.digest,
+        "dependencies": [
+            {
+                "dimension": item.dimension_key,
+                "layer": item.layer,
+                "digest": item.report_id,
+            }
+            for item in dependency_context.artifacts
+        ],
+    })
+    product_key, product_ref = persist_dimension_product(
+        state,
+        layer=3,
+        dimension_key=dim_key,
+        status="completed",
+        product=claim_set,
+        dependency_product_refs=dependency_product_keys(
+            dependency_context.artifacts
+        ),
+        input_digest=product_input_digest,
+        diagnostics=claim_set.diagnostics,
+    )
+
     await publish_dimension_delta(
         session_id,
         dim_key,
@@ -1354,6 +1451,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "completed_dimensions": {phase_key: [dim_key]},
         "pending_reports": [pending_report],
         "layer_char_counts": {dim_layer: len(llm_response)},
+        "artifact_refs": {product_key: product_ref},
     }
 
     # L3 维度步骤 Report（供 positioning-trace 面板定位）

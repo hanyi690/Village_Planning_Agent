@@ -257,20 +257,17 @@ class L3RoughClaimDraft(BaseModel):
             try:
                 decoded = _decode_json_container(value)
             except (TypeError, ValueError, json.JSONDecodeError):
-                decoded = value
-            value = decoded if isinstance(decoded, list) else [decoded]
+                raise ValueError("L3 rough-claim list field must decode to a list")
+            if not isinstance(decoded, list):
+                raise ValueError("L3 rough-claim list field must decode to a list")
+            value = decoded
         elif value is None:
             return []
         elif not isinstance(value, list):
-            value = [value]
-        return [
-            item
-            if isinstance(item, str)
-            else json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
-            if isinstance(item, (dict, list, tuple, set))
-            else str(item)
-            for item in value
-        ]
+            raise ValueError("L3 rough-claim list field must be a flat list")
+        if any(not isinstance(item, str) for item in value):
+            raise ValueError("L3 rough-claim list rows may contain strings only")
+        return [item.strip() for item in value if item.strip()]
 
 class L3RoughClaimOutput(BaseModel):
     """Top-level L3 provider envelope before strict domain projection."""
@@ -390,6 +387,13 @@ class PlanningClaimDraft(BaseModel):
     quantity: float | None = None
     quantity_unit: str | None = None
     intervention_action: PlanningActionDraft = "new"
+    materialization_role: Literal[
+        "land_use_assignment",
+        "functional_overlay",
+        "protection_overlay",
+        "restoration_overlay",
+        "site_footprint",
+    ] | None = None
     road_parameters: RoadPlanningParametersDraft | None = None
     linear_parameters: LinearAssetPlanningParametersDraft | None = None
     facility_parameters: FacilityPlanningParametersDraft | None = None
@@ -553,6 +557,14 @@ def rough_claim_to_planning_claim_draft(
             payload["planning_role"] = role if role in allowed_roles else "non_spatial_action"
         else:
             payload["planning_role"] = "spatial_intervention"
+    materialization_roles = {
+        "restoration_overlay": "restoration_overlay",
+        "protection_overlay": "protection_overlay",
+        "site_area": "site_footprint",
+        "land_use_assignment": "land_use_assignment",
+    }
+    if component_kind in materialization_roles:
+        payload["materialization_role"] = materialization_roles[component_kind]
     if not payload.get("claim_id"):
         identity = {
             "dimension_key": dimension_key,
@@ -1434,12 +1446,15 @@ def normalize_claim_draft_set(
                 area_range_ha=area_range_ha,
                 intervention_action=intervention_action,
                 materialization_role=(
-                    polygon_parameters.materialization_role
-                    if polygon_parameters is not None
-                    else (
-                        "site_footprint"
-                        if category == "site_area" and output in {"parcel", "polygon"}
-                        else None
+                    raw.materialization_role
+                    or (
+                        polygon_parameters.materialization_role
+                        if polygon_parameters is not None
+                        else (
+                            "site_footprint"
+                            if category == "site_area" and output in {"parcel", "polygon"}
+                            else None
+                        )
                     )
                 ),
                 road_parameters=road_parameters,

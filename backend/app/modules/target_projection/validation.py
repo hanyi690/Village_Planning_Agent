@@ -9,11 +9,71 @@ Routes:
 """
 from __future__ import annotations
 
+from typing import Any
+
 from app.contracts.target_projection.parse_result_contracts import (
     CompilationStatus,
     IntentCompilationResult,
 )
 from app.contracts.workflow.workflow_contracts import GateDecision
+
+
+def validate_target_projection_boundary(result: IntentCompilationResult) -> None:
+    """Reject concrete binding/materialization state before TARGET persistence."""
+
+    forbidden = {
+        "entity_ref",
+        "existing_entity_ref",
+        "start_entity_ref",
+        "end_entity_ref",
+        "representation_ref",
+        "resource_ref",
+        "geometry_ref",
+        "geometry",
+        "geometry_wkt",
+        "anchor",
+        "anchors",
+        "candidate_id",
+        "candidate_ids",
+        "candidate_bsms",
+        "candidate_refs",
+        "bsm",
+        "bsms",
+        "scenario",
+        "scenario_id",
+        "approval",
+        "approval_id",
+    }
+
+    def present(value: Any) -> bool:
+        return value not in (None, "", [], {}, ())
+
+    def visit(value: Any, path: str = "target_projection") -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if str(key).casefold() in forbidden and present(child):
+                    raise RuntimeError(
+                        f"TARGET_PROJECTION contains forbidden binding {path}.{key}"
+                    )
+                visit(child, f"{path}.{key}")
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                visit(child, f"{path}[{index}]")
+
+    visit(result.model_dump(mode="json"))
+    row_refs = {item.target_ref for item in result.target_projection_rows}
+    for row in result.target_projection_rows:
+        if row.route_to != "ground":
+            raise RuntimeError("TARGET_PROJECTION may only route targets to GROUND")
+    bypass_by_ref = {item.bypass_ref: item for item in result.bypass_records}
+    for row in result.target_projection_rows:
+        if not row.bypass_ref:
+            continue
+        bypass = bypass_by_ref.get(row.bypass_ref)
+        if bypass is None or bypass.target_ref != row.target_ref:
+            raise RuntimeError("TARGET_PROJECTION bypass lineage is incomplete")
+    if any(item.target_ref not in row_refs for item in result.bypass_records):
+        raise RuntimeError("TARGET_PROJECTION bypass refers to an unknown target")
 
 
 def _is_empty_intent(result: IntentCompilationResult) -> bool:
@@ -127,4 +187,4 @@ def evaluate_target_projection_gate(
     )
 
 
-__all__ = ["evaluate_target_projection_gate"]
+__all__ = ["evaluate_target_projection_gate", "validate_target_projection_boundary"]

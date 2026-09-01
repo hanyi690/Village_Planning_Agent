@@ -185,6 +185,7 @@ def evaluate_scenario_select_gate(
     solver_subproblem_plan: Any = None,
     planning_task_graph: Any = None,
     readiness: SolverReadiness | None = None,
+    selection_decision_set: Any = None,
 ) -> GateDecision:
     """PASS only a complete feasible member with executable approval."""
     issues: list[str] = []
@@ -217,6 +218,8 @@ def evaluate_scenario_select_gate(
             issues.append("scenario_not_feasible_member")
     if approved_input is None or not approved_input.can_execute:
         issues.append("approval_not_ready")
+    if selection_decision_set is None:
+        issues.append("selection_resource_binding_incomplete")
     if planning_task_graph is not None and any(
         str(getattr(task, "status", "") or "") in {"blocked", "failed"}
         for task in (getattr(planning_task_graph, "tasks", None) or ())

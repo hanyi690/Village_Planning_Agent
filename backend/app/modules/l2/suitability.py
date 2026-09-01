@@ -36,6 +36,32 @@ _OVERLAY_ROLES = frozenset(
 )
 
 
+def _geometry_kind_from_wkt(wkt_text: str) -> str:
+    """Normalize a WKT geometry kind without imposing a source schema."""
+
+    try:
+        from shapely import wkt as shapely_wkt
+
+        kind = str(shapely_wkt.loads(str(wkt_text or "")).geom_type).casefold()
+    except Exception:
+        return "unknown"
+    if kind in {"point", "multipoint"}:
+        return "point"
+    if kind in {"linestring", "multilinestring"}:
+        return "line"
+    if kind in {"polygon", "multipolygon"}:
+        return "polygon"
+    return "unknown"
+
+
+def _field_value(item: object, name: str, default: object = None) -> object:
+    """Read a typed or mapping-backed value without imposing a model shape."""
+
+    if isinstance(item, dict):
+        return item.get(name, default)
+    return getattr(item, name, default)
+
+
 def _factor_record(
     factor_code: SuitabilityFactorCode,
     *,
@@ -260,8 +286,63 @@ def build_suitability_surface(
         )
         reasons.extend(hard_reasons)
         hard_constraint_factors.extend(deferred_factors)
-        if not candidate.source_parcels:
-            reasons.append("no_source_parcel")
+        # A context-free caller may still provide an exact DATA geometry.
+        # BSM is a legacy cadastral identity, not a prerequisite for a
+        # candidate.  Only reject candidates when neither parcel identity nor
+        # an executable geometry/source reference is present.
+        if not candidate.source_parcels and not (
+            str(candidate.available_geometry_wkt or "").strip()
+            or str(getattr(candidate.geometry, "wkt", "") or "").strip()
+            or list(getattr(candidate.geometry, "resource_refs", None) or [])
+            or list(getattr(candidate.geometry, "source_refs", None) or [])
+        ):
+            reasons.append("candidate_spatial_resource_missing")
+        candidate_geometry = getattr(candidate, "geometry", None)
+        candidate_wkt = str(
+            candidate.available_geometry_wkt
+            or getattr(candidate_geometry, "wkt", "")
+            or ""
+        )
+        candidate_kind = _geometry_kind_from_wkt(candidate_wkt)
+        expected_kind = str(
+            _field_value(target, "expected_output_kind", "")
+            or _field_value(target, "output_kind", "")
+            or ""
+        ).casefold()
+        if expected_kind == "parcel":
+            expected_kind = "polygon"
+        if expected_kind and candidate_kind != "unknown" and candidate_kind != expected_kind:
+            reasons.append(
+                f"candidate_geometry_kind_mismatch:{candidate_kind}!={expected_kind}"
+            )
+        geometry_area_ha = float(
+            getattr(candidate_geometry, "planning_area_ha", None)
+            or getattr(candidate_geometry, "source_area_ha", None)
+            or getattr(candidate, "available_area_ha", None)
+            or 0.0
+        )
+        source_area_ha = float(
+            getattr(candidate, "source_area_ha", None)
+            or getattr(candidate_geometry, "source_area_ha", None)
+            or geometry_area_ha
+            or 0.0
+        )
+        coverage_ratio = (
+            max(0.0, min(1.0, geometry_area_ha / source_area_ha))
+            if source_area_ha > 0
+            else None
+        )
+        availability_status = str(
+            getattr(candidate_geometry, "availability_status", "")
+            or "fully_available"
+        )
+        if availability_status not in {
+            "fully_available",
+            "partially_available",
+            "fully_unavailable",
+            "unknown",
+        }:
+            availability_status = "unknown"
         if explicit_suitability is None:
             diagnostics.setdefault(target_id or "__unbound__", []).append("no_suitability_evaluator")
         evaluation_trace.append(
@@ -292,7 +373,21 @@ def build_suitability_surface(
                 evidence_refs=list(candidate.evidence_refs),
                 hard_constraint_factors=hard_constraint_factors,
                 evaluation_trace=evaluation_trace,
-                available_geometry_wkt=candidate.available_geometry_wkt,
+                available_geometry_wkt=candidate_wkt,
+                eligible_geometry_wkt=candidate_wkt if hard_feasible and not reasons else "",
+                available_area_ha=geometry_area_ha,
+                source_area_ha=source_area_ha,
+                coverage_ratio=coverage_ratio,
+                geometry_operation="data_resource_extent" if not candidate.source_parcels else "bundle_extent",
+                geometry_crs=str(getattr(candidate_geometry, "crs", "") or "EPSG:4326"),
+                availability_status=availability_status,
+                eligible_area_ha=geometry_area_ha if hard_feasible and not reasons else 0.0,
+                excluded_area_ha=(
+                    max(source_area_ha - geometry_area_ha, 0.0)
+                    if source_area_ha > 0
+                    else None
+                ),
+                feature_ref=str(getattr(candidate_geometry, "source_ref", "") or ""),
             )
         )
     for issue in tuple(getattr(grounding_result, "unresolved", ()) or ()):
@@ -337,10 +432,21 @@ def _build_evidence_suitability_surface(
         cache_dir=cache_dir,
     )
     spatial_index = SpatialFactorIndex(context, active_policy)
-    parcel_by_bsm = {
-        str(getattr(parcel, "bsm", "") or ""): parcel
-        for parcel in list(context.current_parcels() or [])
-    }
+    # Do not touch the legacy current-parcels accessor for a catalog-only
+    # request.  It is needed only when at least one candidate explicitly
+    # carries a source BSM and adjacency must be evaluated.
+    has_parcel_candidates = any(
+        bool(getattr(candidate, "source_parcels", None) or [])
+        for candidate in tuple(getattr(grounding_result, "candidates", ()) or ())
+    )
+    parcel_by_bsm = (
+        {
+            str(getattr(parcel, "bsm", "") or ""): parcel
+            for parcel in list(context.current_parcels() or [])
+        }
+        if has_parcel_candidates
+        else {}
+    )
     candidates: list[SuitabilityCandidate] = []
     diagnostics: dict[str, list[str]] = {}
     target_by_id = _target_by_id(plan_intent)
@@ -424,8 +530,144 @@ def _build_evidence_suitability_surface(
             fallback_role_trace,
         ) = _role_policy_artifacts(materialization_role)
         source_bsms = list(getattr(source, "source_parcels", None) or [])
+        # Generic DATA features (roads, facilities, water, uploaded polygons)
+        # are valid SELECT inputs even when no parcel BSM exists.  They must
+        # not be routed through the parcel terrain adapter, which would turn
+        # an otherwise executable source geometry into a synthetic
+        # ``parcel-not-found`` failure.
         if not source_bsms:
-            source_bsms = [""]
+            source_geometry = getattr(source, "geometry", None)
+            generic_wkt = str(
+                getattr(source, "available_geometry_wkt", "")
+                or getattr(source_geometry, "wkt", "")
+                or ""
+            ).strip()
+            generic_kind = str(getattr(source_geometry, "kind", "") or "").casefold()
+            if generic_kind not in {"point", "line", "polygon", "multipatch"}:
+                try:
+                    from shapely import wkt as shapely_wkt
+
+                    parsed_kind = str(shapely_wkt.loads(generic_wkt).geom_type).casefold()
+                    generic_kind = (
+                        "point" if parsed_kind in {"point", "multipoint"}
+                        else "line" if parsed_kind in {"linestring", "multilinestring"}
+                        else "polygon" if parsed_kind in {"polygon", "multipolygon"}
+                        else "unknown"
+                    )
+                except Exception:
+                    generic_kind = "unknown"
+            hard = getattr(source, "hard_constraint_result", None)
+            hard_passed = bool(getattr(hard, "passed", False)) if hard is not None else False
+            generic_reasons: list[str] = []
+            if not target_id:
+                generic_reasons.append("candidate_not_target_bound")
+            if generic_kind == "unknown" or not generic_wkt:
+                generic_reasons.append("generic_source_geometry_missing_or_invalid")
+            if hard is None:
+                generic_reasons.append("hard_constraints_pending")
+            elif not hard_passed:
+                generic_reasons.append(
+                    str(getattr(hard, "violation_detail", "hard_constraints_not_passed") or "hard_constraints_not_passed")
+                )
+            expected_kind = str(
+                _field_value(target, "expected_output_kind", "")
+                or _field_value(target, "output_kind", "")
+                or ""
+            ).casefold()
+            if expected_kind == "parcel":
+                expected_kind = "polygon"
+            if expected_kind and generic_kind != "unknown" and generic_kind != expected_kind:
+                generic_reasons.append(
+                    f"candidate_geometry_kind_mismatch:{generic_kind}!={expected_kind}"
+                )
+            generic_reasons = list(dict.fromkeys(generic_reasons))
+            generic_score = getattr(source_geometry, "suitability_score", None)
+            if generic_score is None:
+                generic_score = getattr(source, "suitability_score", None)
+            generic_score = max(0.0, min(1.0, float(generic_score or 0.0)))
+            generic_refs = list(dict.fromkeys([
+                *(getattr(source, "evidence_refs", None) or []),
+                *(getattr(source_geometry, "source_refs", None) or []),
+                str(getattr(source_geometry, "source_ref", "") or ""),
+            ]))
+            generic_refs = [str(item) for item in generic_refs if str(item).strip()]
+            if not generic_refs:
+                generic_refs = [f"candidate:{getattr(source, 'site_id', '') or target_id}"]
+            geometry_area_ha = float(
+                getattr(source_geometry, "planning_area_ha", None)
+                or getattr(source_geometry, "source_area_ha", None)
+                or getattr(source, "available_area_ha", None)
+                or 0.0
+            )
+            source_area_ha = float(
+                getattr(source, "source_area_ha", None)
+                or getattr(source_geometry, "source_area_ha", None)
+                or geometry_area_ha
+                or 0.0
+            )
+            coverage_ratio = (
+                max(0.0, min(1.0, geometry_area_ha / source_area_ha))
+                if source_area_ha > 0
+                else None
+            )
+            availability_status = str(
+                getattr(source_geometry, "availability_status", "")
+                or "fully_available"
+            )
+            if availability_status not in {
+                "fully_available",
+                "partially_available",
+                "fully_unavailable",
+                "unknown",
+            }:
+                availability_status = "unknown"
+            generic_score_breakdown = {
+                "source_geometry": generic_score,
+            }
+            candidates.append(
+                SuitabilityCandidate(
+                    candidate_id=str(getattr(source, "site_id", "") or target_id),
+                    target_id=target_id,
+                    source_parcels=[],
+                    materialization_role=normalized_role,
+                    role_policy_key=(str(role_policy.policy_key) if role_policy is not None else ""),
+                    materialization_role_policy=(
+                        dict(role_policy.factor_policies) if role_policy is not None else {}
+                    ),
+                    score=generic_score,
+                    score_breakdown=generic_score_breakdown,
+                    hard_feasible=hard_passed and not generic_reasons,
+                    exclusion_reasons=generic_reasons,
+                    evidence_refs=generic_refs,
+                    hard_constraint_factors=[],
+                    evaluation_trace=[
+                        {
+                            "step": "geometry_prepared",
+                            "materialization_role": normalized_role,
+                            "geometry_source": "candidate_geometry",
+                            "result": "ok" if generic_kind != "unknown" else "invalid",
+                        }
+                    ],
+                    available_geometry_wkt=generic_wkt,
+                    eligible_geometry_wkt=generic_wkt if hard_passed and not generic_reasons else "",
+                    available_area_ha=geometry_area_ha,
+                    source_area_ha=source_area_ha,
+                    coverage_ratio=coverage_ratio,
+                    geometry_operation="data_resource_extent",
+                    geometry_crs=str(getattr(source_geometry, "crs", "") or "EPSG:4326"),
+                    geometry_diagnostics=[],
+                    availability_status=availability_status,
+                    eligible_area_ha=geometry_area_ha if hard_passed and not generic_reasons else 0.0,
+                    excluded_area_ha=(
+                        max(source_area_ha - geometry_area_ha, 0.0)
+                        if source_area_ha > 0
+                        else None
+                    ),
+                    policy_ref="",
+                    feature_ref=str(getattr(source_geometry, "source_ref", "") or ""),
+                )
+            )
+            continue
         for raw_bsm in source_bsms:
             bsm = str(raw_bsm or "")
             parcel = parcel_by_bsm.get(bsm)

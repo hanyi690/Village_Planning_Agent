@@ -19,6 +19,7 @@ from app.contracts.ports.road_planner import RoadPlannerPort
 from app.contracts.ports.semantic_query import SemanticQueryPort
 from app.contracts.ports.spatial_query import SpatialQueryPort
 from app.contracts.ports.zone_allocator import ZoneAllocatorPort
+from app.contracts.ports.world_model import WorldModelCommitPort, WorldModelPort
 
 
 @dataclass
@@ -33,5 +34,7 @@ class PlanningPorts:
     bundle_assembly: BundleAssemblyPort | None = None
     zone_allocator: ZoneAllocatorPort | None = None
     road_planner: RoadPlannerPort | None = None
+    world_model: WorldModelPort | None = None
+    world_model_commit: WorldModelCommitPort | None = None
 
 __all__ = ["PlanningPorts"]

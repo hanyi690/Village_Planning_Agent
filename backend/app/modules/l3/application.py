@@ -52,15 +52,17 @@ class L3RunResult(BaseModel):
     artifact_ref: ArtifactRef
     gate_ref: ArtifactRef
     review_id: str = ""
+    state_patch: dict[str, Any] = Field(default_factory=dict)
 
     def to_state_patch(self) -> dict[str, Any]:
-        return {
-            "artifact_refs": {
-                "planning_program": self.artifact_ref.model_dump(mode="json"),
-                "l3_gate": self.gate_ref.model_dump(mode="json"),
-            },
-            "l3_review_id": self.review_id,
+        patch = dict(self.state_patch)
+        patch["artifact_refs"] = {
+            **dict(patch.get("artifact_refs") or {}),
+            "planning_program": self.artifact_ref.model_dump(mode="json"),
+            "l3_gate": self.gate_ref.model_dump(mode="json"),
         }
+        patch["l3_review_id"] = self.review_id
+        return patch
 
 
 class L3Application:
@@ -105,11 +107,109 @@ class L3Application:
     def load(self, state: Mapping[str, Any]) -> PlanningProgram:
         return self._load(state, "planning_program", PlanningProgram)
 
+    @staticmethod
+    def _validate_program_boundary(
+        program: PlanningProgram,
+        l2: L2Strategy,
+    ) -> None:
+        """Validate the reloaded L3 artifact, not the in-memory aggregate."""
+
+        forbidden = {
+            "entity_ref",
+            "geometry_ref",
+            "geometry",
+            "geometry_wkt",
+            "candidate_id",
+            "candidate_ids",
+            "bsm",
+            "bsms",
+            "scenario",
+            "scenario_id",
+            "approval",
+            "approval_id",
+            "affected_parcel_refs",
+            "source_feature_refs",
+            "area_range_ha",
+            "service_population",
+            "road_parameters",
+            "linear_parameters",
+            "facility_parameters",
+            "axis_parameters",
+            "polygon_parameters",
+            "site_area_parameters",
+        }
+
+        def present(value: Any) -> bool:
+            return value not in (None, "", [], {}, ())
+
+        def visit(value: Any, path: str = "planning_program") -> None:
+            if isinstance(value, dict):
+                if (
+                    str(value.get("object_ref_kind") or "") == "entity"
+                    and present(value.get("object_ref"))
+                ):
+                    raise RuntimeError(
+                        f"L3 artifact contains a concrete entity binding at {path}.object_ref"
+                    )
+                for key, child in value.items():
+                    if str(key).casefold() in forbidden and present(child):
+                        raise RuntimeError(
+                            f"L3 artifact contains forbidden field {path}.{key}"
+                        )
+                    visit(child, f"{path}.{key}")
+            elif isinstance(value, list):
+                for index, child in enumerate(value):
+                    visit(child, f"{path}[{index}]")
+
+        visit(program.model_dump(mode="json"))
+        target_refs = {item.target_ref for item in program.target_rows}
+        intervention_refs = {
+            item.target_id or item.intervention_id
+            for item in program.interventions
+        }
+        if target_refs != intervention_refs:
+            raise RuntimeError("L3 target rows do not close over admitted interventions")
+        if {item.target_ref for item in program.spatial_requirement_rows} != target_refs:
+            raise RuntimeError("L3 spatial requirement rows do not close over targets")
+        request_by_ref = {
+            item.request_ref: item for item in program.candidate_request_rows
+        }
+        if set(request_by_ref) != {
+            item.candidate_request_ref for item in program.target_rows
+        }:
+            raise RuntimeError("L3 candidate request refs do not close over targets")
+        allowed_l2_refs = {
+            str(value).strip()
+            for value in [
+                *[item.objective_id for item in l2.objectives],
+                *[item.metric_id for item in l2.metrics],
+                *[item.strategy_id for item in l2.strategy_rules],
+                *[item.priority_id for item in l2.priority_decisions],
+                *[item.structure_id for item in l2.spatial_structure_intents],
+                *[item.conflict_id for item in l2.conflict_hypotheses],
+            ]
+            if str(value).strip()
+        }
+        for target in program.target_rows:
+            if not target.l2_refs or not set(target.l2_refs).issubset(allowed_l2_refs):
+                raise RuntimeError(
+                    f"L3 target {target.target_ref} has stale or missing L2 refs"
+                )
+
     async def run(self, state: Mapping[str, Any]) -> L3RunResult:
         request = L3RunRequest.from_state(state)
-        self.require_l2_pass(state)
+        from app.workflow.stages.support import require_upstream_gates
+
+        require_upstream_gates(
+            dict(state),
+            ("data", "kg", "evidence", "l1", "l2"),
+        )
         l1 = self.load_l1(state)
         l2 = self.load_l2(state)
+        from app.infrastructure.artifacts.runtime import validate_artifact_context
+
+        validate_artifact_context(dict(state), "l1_snapshot", request.l1_snapshot_ref)
+        validate_artifact_context(dict(state), "l2_strategy", request.l2_strategy_ref)
         if l1.context_version != request.context_version:
             raise RuntimeError("L3 input L1Snapshot context version mismatch")
         if l2.context_version != request.context_version:
@@ -124,12 +224,19 @@ class L3Application:
         }
         replay_state = {**dict(state), **patch, "artifact_refs": refs}
         program = self.load(replay_state)
+        validate_artifact_context(
+            replay_state,
+            "planning_program",
+            refs.get("planning_program"),
+        )
+        self._validate_program_boundary(program, l2)
         return L3RunResult(
             request=request,
             program=program,
             artifact_ref=ArtifactRef.model_validate(refs["planning_program"]),
             gate_ref=ArtifactRef.model_validate(refs["l3_gate"]),
             review_id=str(patch.get("l3_review_id") or ""),
+            state_patch=patch,
         )
 
 
@@ -138,9 +245,20 @@ async def run_l3(state: Mapping[str, Any]) -> L3RunResult:
 
 
 async def analyze_l3_dimension(state: Mapping[str, Any]) -> dict[str, Any]:
+    from app.workflow.stages.support import require_upstream_gates
+
+    require_upstream_gates(
+        dict(state),
+        ("data", "kg", "evidence", "l1", "l2"),
+    )
     from .reasoning import analyze_l3_dimension as run_dimension
 
-    return await run_dimension(dict(state))
+    result = await run_dimension(dict(state))
+    from app.infrastructure.artifacts.dimension_runtime import (
+        ensure_dimension_product_patch,
+    )
+
+    return ensure_dimension_product_patch(state, result, layer=3)
 
 
 __all__ = [

@@ -28,9 +28,9 @@ from app.contracts.target_projection.parse_result_contracts import (
     CompilationStatus,
     IntentCompilationResult,
     ParseDiagnostic,
+    TargetProjectionRow,
 )
 from app.contracts.artifacts.provenance import Provenance, SemanticMetadata
-from app.contracts.evidence.identity_contracts import EvidenceObservation, GroundedEntityBinding
 from app.contracts.ground.spatial_reference_contracts import SpatialReferenceSpec
 from app.modules.l3.claim_adapter import admission_reasons_for_intervention
 from app.modules.target_projection.intent_graph_compiler import compile_intent_graph_v2
@@ -95,6 +95,69 @@ def _assign_target_packages(
         })
         for intervention in interventions
     ]
+
+
+def _project_l3_target_rows(
+    program: PlanningProgram,
+) -> tuple[list[TargetProjectionRow], list[ParseDiagnostic]]:
+    """Consume the flat L3 products without inventing bindings or geometry."""
+
+    target_by_ref = {item.target_ref: item for item in program.target_rows}
+    request_by_ref = {
+        item.request_ref: item for item in program.candidate_request_rows
+    }
+    intervention_refs = {
+        item.target_id or item.intervention_id
+        for item in program.interventions
+    }
+    diagnostics: list[ParseDiagnostic] = []
+    if set(target_by_ref) != intervention_refs:
+        diagnostics.append(ParseDiagnostic(
+            diagnostic_id="target-projection-l3-row-closure",
+            severity="error",
+            code="L3_TARGET_ROWS_MISSING",
+            message="flat L3 target rows do not close over admitted interventions",
+            field_path="target_rows",
+        ))
+        return [], diagnostics
+    rows: list[TargetProjectionRow] = []
+    for target_ref in sorted(target_by_ref):
+        target = target_by_ref[target_ref]
+        request = request_by_ref.get(target.candidate_request_ref)
+        if request is None or request.target_ref != target_ref:
+            diagnostics.append(ParseDiagnostic(
+                diagnostic_id=f"target-projection-candidate-request-{target_ref}",
+                severity="error",
+                code="L3_CANDIDATE_REQUEST_MISSING",
+                message="L3 target has no matching candidate request row",
+                field_path="candidate_request_rows",
+                target_id=target_ref,
+            ))
+            continue
+        rows.append(TargetProjectionRow(
+            projection_ref=f"target-projection:{target_ref}",
+            target_ref=target_ref,
+            target_type=target.claim_family,
+            operation=target.operation,
+            entity_type_requirements=list(request.entity_type_requirements),
+            representation_type_requirements=list(
+                request.representation_type_requirements
+            ),
+            representation_purpose=target.representation_purpose,
+            required_capabilities=list(target.required_capabilities),
+            constraint_refs=list(target.constraint_refs),
+            l2_refs=list(target.l2_refs),
+            source_fact_refs=list(target.source_fact_refs),
+            evidence_refs=list(dict.fromkeys([
+                *target.evidence_refs,
+                *request.evidence_refs,
+            ])),
+            candidate_request_ref=target.candidate_request_ref,
+            status=(
+                "ready" if request.status == "ready" else "pending_grounding"
+            ),
+        ))
+    return rows, diagnostics
 
 
 def _intent_graph_diagnostic_severity(item: str, intent_graph: object) -> str:
@@ -647,10 +710,6 @@ def compile_program_deterministic(
     run_id: str = "",
     context_version: str = "",
     program_ref: str = "",
-    observations: list[EvidenceObservation] | None = None,
-    bindings: list[GroundedEntityBinding] | None = None,
-    source_features: dict[str, list[object]] | None = None,
-    source_semantic_decisions: dict[str, object] | None = None,
 ) -> tuple[IntentCompilationResult, list, list[ParseDiagnostic]]:
     """Deterministically extract a compile result from an L3 PlanningProgram.
 
@@ -673,11 +732,12 @@ def compile_program_deterministic(
             ])
         },
     )
+    target_projection_rows, target_row_diags = _project_l3_target_rows(
+        admitted_program
+    )
     intent = _build_intent(admitted_program)
     intent_graph = compile_intent_graph_v2(
         admitted_program,
-        observations=observations,
-        bindings=bindings,
     )
     pending_claims = list(program.pending_grounding_claims)
     intent_graph = intent_graph_with_pending_claims(intent_graph, pending_claims)
@@ -691,10 +751,6 @@ def compile_program_deterministic(
     )
     specs, spec_diags = map_interventions_to_specs(
         admitted_program.interventions,
-        observations=observations or (),
-        bindings=bindings or (),
-        source_features=source_features or {},
-        source_semantic_decisions=source_semantic_decisions or {},
     )
     physical_projects = build_physical_project_assembly(
         admitted_program.interventions,
@@ -755,7 +811,19 @@ def compile_program_deterministic(
     pending_grounding_requests = [
         request for _spec, request in pending_pairs
     ] + pending_claim_requests
-    diagnostics = _build_diagnostics(program, spec_diags)
+    pending_target_refs = {
+        str(request.target_ref or "")
+        for request in pending_grounding_requests
+        if str(request.target_ref or "")
+    }
+    target_projection_rows = [
+        row.model_copy(update={"status": "pending_grounding"})
+        if row.target_ref in pending_target_refs
+        else row
+        for row in target_projection_rows
+    ]
+    diagnostics = _build_diagnostics(admitted_program, spec_diags)
+    diagnostics.extend(target_row_diags)
     diagnostics.extend(
         ParseDiagnostic(
             diagnostic_id=f"grounding-request-pending-{request.request_id}",
@@ -853,6 +921,7 @@ def compile_program_deterministic(
         physical_projects=physical_projects,
         grounding_requests=grounding_requests,
         pending_grounding_requests=pending_grounding_requests,
+        target_projection_rows=target_projection_rows,
     )
     from app.modules.evidence.requirements import (
         requirements_from_l3,

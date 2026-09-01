@@ -11,20 +11,12 @@ from typing import Iterable
 from app.contracts.l3.program import PlanningClaim
 from app.contracts.l3.l3_contracts import (
     ClaimDisposition,
+    L3CandidateRequestRow,
+    L3SpatialRequirementRow,
+    L3TargetRow,
     PlanningIntervention,
     ProgramIssue,
 )
-
-
-_PARAMETER_FIELDS = {
-    "facility": "facility_parameters",
-    "axis": "axis_parameters",
-    "road": "road_parameters",
-    "zone": "polygon_parameters",
-    "restoration": "polygon_parameters",
-    "protection": "polygon_parameters",
-    "site_area": "site_area_parameters",
-}
 
 
 def canonical_package_intervention_id(
@@ -57,6 +49,7 @@ def is_admitted_intervention(intervention: PlanningIntervention) -> bool:
         intervention.planning_role == "spatial_intervention"
         and intervention.admission_reason == "typed_spatial_claim_ready"
         and intervention.claim_refs
+        and (intervention.objective_refs or intervention.constraints)
         and (
             intervention.evidence_refs
             or intervention.source_fact_refs
@@ -99,15 +92,6 @@ def admission_reasons_for_intervention(
             reasons.append(f"claim {claim.claim_id} asset kind does not match intervention")
         if expected_role != (intervention.materialization_role or ""):
             reasons.append(f"claim {claim.claim_id} materialization role does not match intervention")
-    parameter_field = _PARAMETER_FIELDS.get(intervention.category, "")
-    if intervention.category == "road" and intervention.asset_kind != "road":
-        parameter_field = "linear_parameters"
-    if parameter_field == "site_area_parameters":
-        parameter_present = intervention.site_area_parameters is not None
-    else:
-        parameter_present = bool(parameter_field and getattr(intervention, parameter_field, None) is not None)
-    if not parameter_present:
-        reasons.append("admitted intervention is missing its typed parameter block")
     return list(dict.fromkeys(reasons))
 
 
@@ -133,67 +117,16 @@ def _issue(
     )
 
 
-def _typed_parameter_present(claim: PlanningClaim) -> bool:
-    field_name = _PARAMETER_FIELDS.get(claim.suggested_category)
-    if field_name == "road_parameters" and claim.asset_kind != "road":
-        field_name = "linear_parameters"
-    if field_name == "site_area_parameters":
-        return claim.site_area_parameters is not None
-    return bool(field_name and getattr(claim, field_name, None) is not None)
-
-
-def _typed_locator_present(claim: PlanningClaim) -> bool:
-    if claim.location_hints or claim.affected_parcel_refs:
-        return True
-    if claim.source_fact_refs:
-        return True
-    for parameter_name in ("road_parameters", "linear_parameters", "axis_parameters"):
-        parameters = getattr(claim, parameter_name, None)
-        if parameters is not None and any(
-            getattr(parameters, field, None)
-            for field in ("alignment_refs", "reference_features", "connects")
-        ):
-            return True
-    return False
-
-
-def _typed_completion_present(claim: PlanningClaim) -> bool:
-    parameters = getattr(
-        claim,
-        _PARAMETER_FIELDS.get(claim.suggested_category, ""),
-        None,
-    )
-    if claim.suggested_category == "road" and claim.asset_kind != "road":
-        parameters = claim.linear_parameters
-    if claim.suggested_category == "site_area":
-        parameters = claim.site_area_parameters
-    if parameters is None:
-        return False
-    if claim.suggested_category == "facility":
-        return bool(parameters.facility_type.strip())
-    if claim.suggested_category == "axis":
-        return bool(
-            parameters.direction.strip()
-            or parameters.reference_features
-            or parameters.connects
-        )
-    if claim.suggested_category in {"road", "site_area"}:
-        return bool(
-            getattr(parameters, "action", "")
-            and (
-                getattr(parameters, "alignment_refs", None)
-                or getattr(parameters, "connects", None)
-                or getattr(parameters, "site_type", "")
-                or getattr(parameters, "footprint_area_m2", None)
-                or getattr(parameters, "length_m", None)
-            )
-        )
-    return True
-
-
 def _effective_materialization_role(claim: PlanningClaim) -> str:
     if claim.materialization_role:
         return claim.materialization_role
+    derived = {
+        "site_area": "site_footprint",
+        "protection": "protection_overlay",
+        "restoration": "restoration_overlay",
+    }.get(claim.suggested_category, "")
+    if derived:
+        return derived
     parameters = claim.polygon_parameters
     return str(getattr(parameters, "materialization_role", "") or "")
 
@@ -204,30 +137,19 @@ def _admission_reasons(claim: PlanningClaim) -> list[str]:
         return reasons
     if claim.suggested_output_kind == "action":
         reasons.append("spatial intervention cannot use action output")
-    if not _typed_parameter_present(claim):
-        reasons.append("the category-specific typed parameter block is missing")
-    elif not _typed_completion_present(claim):
-        reasons.append("typed action/completion semantics are incomplete")
     if (
         claim.suggested_category in {"site_area", "zone", "restoration", "protection"}
         and not _effective_materialization_role(claim)
     ):
         reasons.append("materialization_role is required for this spatial category")
-    if not _typed_locator_present(claim):
-        reasons.append("locator, candidate, or source-feature reference is missing")
+    if not (claim.objective_refs or claim.constraint_refs):
+        reasons.append("L2 objective/rule lineage is missing")
     if not (claim.evidence_refs or claim.source_fact_refs or claim.source_refs):
         reasons.append("evidence/source-fact lineage is missing")
     return reasons
 
 
 _PENDING_REQUIREMENTS_BY_REASON = {
-    "project_package_ref is required": "project_package_ref",
-    "the category-specific typed parameter block is missing": "typed_parameter_block",
-    "typed action/completion semantics are incomplete": "typed_parameter_values",
-    "materialization_role is required for this spatial category": "materialization_role",
-    "locator, candidate, or source-feature reference is missing": (
-        "locator_or_candidate_or_source_feature_reference"
-    ),
     "evidence/source-fact lineage is missing": "evidence_or_source_lineage",
 }
 
@@ -339,7 +261,7 @@ def interventions_from_claims(
     dimension_key: str = "",
     issues: list[ProgramIssue] | None = None,
 ) -> list[PlanningIntervention]:
-    """Admit only explicitly typed, evidence-lined spatial interventions."""
+    """Admit semantic, evidence-lined targets without doing GROUND work."""
     interventions: list[PlanningIntervention] = []
     issue_list = issues if issues is not None else []
     for claim in claims:
@@ -386,11 +308,14 @@ def interventions_from_claims(
         spatial_requirements = {
             "location": "、".join(claim.location_hints),
             "location_hints": list(claim.location_hints),
-            "affected_parcel_refs": list(claim.affected_parcel_refs),
-            "source_feature_refs": list(claim.affected_parcel_refs),
             "source_fact_refs": list(claim.source_fact_refs),
-            "source_refs": list(claim.source_refs),
-            "spatial_evidence_status": "l1_fact_bound" if claim.source_fact_refs else "evidence_bound",
+            "grounding_requirements": list(
+                getattr(claim.spatial_requirements, "grounding_requirements", None)
+                or []
+            ),
+            "spatial_evidence_status": (
+                "l1_fact_referenced" if claim.source_fact_refs else "evidence_referenced"
+            ),
             "admitted_dimension": effective_dimension,
         }
         declared_spatial_requirements = claim.spatial_requirements
@@ -421,17 +346,6 @@ def interventions_from_claims(
                     *[str(value) for value in relation.get("source_claim_refs", []) if str(value).strip()],
                     claim.claim_id,
                 ]))
-        # An explicit source-parcel locator is also a typed shared-resource
-        # fact for parcel-backed site footprints.  Preserve it for TARGET
-        # projection instead of leaving the compiler to rediscover coupling
-        # from candidate geometry after alternatives have already been lost.
-        if claim.affected_parcel_refs and claim.suggested_category in {"site_area", "zone"}:
-            parcel_refs = list(dict.fromkeys(
-                str(ref) for ref in claim.affected_parcel_refs if str(ref).strip()
-            ))
-            spatial_requirements["parcel_membership_refs"] = parcel_refs
-            if materialization_role in {"site_footprint", "land_use_assignment"}:
-                spatial_requirements["shared_resource_refs"] = parcel_refs
         interventions.append(
             PlanningIntervention(
                 intervention_id=intervention_id,
@@ -471,6 +385,127 @@ def interventions_from_claims(
             )
         )
     return interventions
+
+
+def build_l3_product_rows(
+    interventions: list[PlanningIntervention],
+) -> tuple[
+    list[L3TargetRow],
+    list[L3SpatialRequirementRow],
+    list[L3CandidateRequestRow],
+]:
+    """Project admitted interventions into the flat authoritative L3 rows."""
+
+    targets: list[L3TargetRow] = []
+    requirements: list[L3SpatialRequirementRow] = []
+    requests: list[L3CandidateRequestRow] = []
+    for intervention in interventions:
+        target_ref = intervention.target_id or intervention.intervention_id
+        l2_refs = list(dict.fromkeys([
+            *intervention.objective_refs,
+            *intervention.constraints,
+        ]))
+        evidence_refs = list(dict.fromkeys([
+            *intervention.evidence_refs,
+            *intervention.source_refs,
+        ]))
+        source_fact_refs = list(dict.fromkeys(intervention.source_fact_refs))
+        spatial = dict(intervention.spatial_requirements or {})
+        location_hints = list(dict.fromkeys(
+            str(value)
+            for value in spatial.get("location_hints", [])
+            if str(value).strip()
+        ))
+        declared_grounding = list(dict.fromkeys(
+            str(value)
+            for value in spatial.get("grounding_requirements", [])
+            if str(value).strip()
+        ))
+        category = intervention.category
+        if category == "facility":
+            representation_type = "point"
+            purpose = "point_location"
+            capabilities = ["facility.placement"]
+            entity_types = ["facility", "site"]
+            defaults = ["place_binding", "candidate_geometry", "demand_points"]
+        elif category == "road":
+            representation_type = "line"
+            purpose = "centerline"
+            capability = (
+                "road.construction"
+                if intervention.asset_kind == "road"
+                else f"linear.{intervention.asset_kind}"
+            )
+            capabilities = [capability]
+            entity_types = ["road", "linear_network"]
+            defaults = ["place_binding", "candidate_geometry", "network_snapshot", "topology"]
+        elif category == "axis":
+            representation_type = "line"
+            purpose = "corridor"
+            capabilities = ["axis.construction"]
+            entity_types = ["planning_axis", "linear_network"]
+            defaults = ["place_binding", "candidate_geometry", "network_snapshot", "topology"]
+        else:
+            representation_type = "polygon"
+            purpose = str(intervention.materialization_role or "")
+            capabilities = ["land.design"]
+            entity_types = ["site", "zone", "parcel"]
+            defaults = ["place_binding", "candidate_geometry", "parcel_membership", "topology"]
+        if not purpose:
+            raise ValueError(
+                f"L3 target {target_ref} has no representation purpose"
+            )
+        grounding = list(dict.fromkeys([*declared_grounding, *defaults]))
+        candidate_request_ref = f"candidate-request:{target_ref}"
+        requirement_ref = f"spatial-requirement:{target_ref}"
+        targets.append(L3TargetRow(
+            target_ref=target_ref,
+            claim_family=category,
+            subject_text=intervention.problem_addressed or intervention.name,
+            operation=intervention.intervention_action,
+            representation_purpose=purpose,
+            required_capabilities=capabilities,
+            constraint_refs=list(intervention.constraints),
+            l2_refs=l2_refs,
+            evidence_refs=evidence_refs,
+            source_fact_refs=source_fact_refs,
+            candidate_request_ref=candidate_request_ref,
+        ))
+        requirements.append(L3SpatialRequirementRow(
+            requirement_ref=requirement_ref,
+            target_ref=target_ref,
+            representation_type=representation_type,
+            representation_purpose=purpose,
+            operation=intervention.intervention_action,
+            location_hints=location_hints,
+            grounding_requirements=grounding,
+            required_capabilities=capabilities,
+            l2_refs=l2_refs,
+            evidence_refs=list(dict.fromkeys([*evidence_refs, *source_fact_refs])),
+        ))
+        requests.append(L3CandidateRequestRow(
+            request_ref=candidate_request_ref,
+            target_ref=target_ref,
+            entity_type_requirements=entity_types,
+            representation_type_requirements=[representation_type],
+            representation_purpose=purpose,
+            operation=intervention.intervention_action,
+            query_terms=list(dict.fromkeys([
+                intervention.name,
+                category,
+                *([intervention.asset_kind] if intervention.asset_kind != "none" else []),
+            ])),
+            location_hints=location_hints,
+            constraint_refs=list(intervention.constraints),
+            l2_refs=l2_refs,
+            evidence_refs=list(dict.fromkeys([*evidence_refs, *source_fact_refs])),
+            status=(
+                "ready"
+                if location_hints or source_fact_refs
+                else "pending_location_evidence"
+            ),
+        ))
+    return targets, requirements, requests
 
 
 def _merge_values(first: list[str], second: Iterable[str]) -> list[str]:
@@ -620,12 +655,12 @@ def compact_interventions(interventions: list[PlanningIntervention]) -> tuple[li
                 code="direct_intervention_not_admitted",
                 message="intervention is diagnostic-only until claim admission succeeds",
                 detail=intervention.intervention_id,
-                reason="missing explicit role/package/admission/evidence lineage",
+                reason="missing explicit role/L2/admission/evidence lineage",
             )
         )
     interventions = admitted
     relation_aliases = _relation_endpoint_aliases(interventions)
-    groups: dict[tuple[str, str, str, str, str], list[PlanningIntervention]] = defaultdict(list)
+    groups: dict[tuple[str, str, str, str, str, str], list[PlanningIntervention]] = defaultdict(list)
     for intervention in interventions:
         key = (
             intervention.project_package_ref,
@@ -633,6 +668,7 @@ def compact_interventions(interventions: list[PlanningIntervention]) -> tuple[li
             intervention.expected_output_kind,
             intervention.asset_kind,
             intervention.materialization_role or "",
+            "" if intervention.project_package_ref else intervention.intervention_id,
         )
         groups[key].append(intervention)
     compacted: list[PlanningIntervention] = []
@@ -699,10 +735,8 @@ def compact_interventions(interventions: list[PlanningIntervention]) -> tuple[li
             canonical.constraints = _merge_values(canonical.constraints, member.constraints)
             for field in (
                 "location_hints",
-                "affected_parcel_refs",
-                "source_feature_refs",
                 "source_fact_refs",
-                "source_refs",
+                "grounding_requirements",
             ):
                 canonical.spatial_requirements[field] = _merge_values(
                     list(canonical.spatial_requirements.get(field, [])),
@@ -728,6 +762,7 @@ __all__ = [
     "compact_interventions",
     "admission_reasons_for_intervention",
     "is_admitted_intervention",
+    "build_l3_product_rows",
     "classify_claims",
     "interventions_from_claims",
 ]
