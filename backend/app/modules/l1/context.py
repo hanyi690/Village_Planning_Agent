@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 from app.contracts.l1.l1_contracts import (
     L1DimensionInput,
     L1DimensionPassState,
+    L1EvidenceGapInputRow,
     L1InputContext,
     L1SourceIndex,
 )
@@ -30,6 +31,7 @@ from app.modules.l1.observation_draft import (
     l1_observation_provider_model_for_dimension,
     normalize_l1_observation_provider_output,
 )
+from app.modules.l1.spatial_admission import spatial_labels
 
 
 CheckpointWriter = Callable[[dict[str, Any]], Awaitable[None] | None]
@@ -92,6 +94,7 @@ def build_l1_input_context(
     source_index_ref: Any = "",
     allowed_fact_types: tuple[str, ...] | list[str] | None = None,
     source_section_hints: tuple[str, ...] | list[str] | None = None,
+    evidence_gap_rows: tuple[L1EvidenceGapInputRow | dict[str, Any], ...] | list[L1EvidenceGapInputRow | dict[str, Any]] | None = None,
 ) -> L1InputContext:
     """Build the single dimension-level context shared by L1 input/output."""
 
@@ -119,6 +122,24 @@ def build_l1_input_context(
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
+    gap_rows = tuple(
+        item
+        if isinstance(item, L1EvidenceGapInputRow)
+        else L1EvidenceGapInputRow.model_validate({
+            key: value
+            for key, value in dict(item).items()
+            if key in L1EvidenceGapInputRow.model_fields
+        })
+        for item in (evidence_gap_rows or ())[:32]
+    )
+    gap_digest = "sha256:" + hashlib.sha256(
+        json.dumps(
+            [item.model_dump(mode="json") for item in gap_rows],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     return L1InputContext(
         session_id=str(session_id or ""),
         dimension_key=dimension_key,
@@ -127,6 +148,8 @@ def build_l1_input_context(
         source_projection_digest="sha256:" + projection_digest,
         source_page_count=len(pages),
         allowed_fact_types=tuple(allowed_fact_types or ()),
+        evidence_gap_refs=tuple(item.gap_ref for item in gap_rows),
+        evidence_gap_digest=gap_digest,
     )
 
 
@@ -134,6 +157,7 @@ def _page_input(
     context: L1InputContext,
     page_index: int,
     source_page: L1SourceIndex | None,
+    evidence_gap_rows: tuple[L1EvidenceGapInputRow, ...] = (),
 ) -> L1DimensionInput:
     """Create and validate one source-page projection from the shared context."""
 
@@ -146,6 +170,7 @@ def _page_input(
         page_index=page_index,
         page_segment_ids=segment_ids,
         source_page=source_page,
+        evidence_gap_rows=evidence_gap_rows,
     )
 
 
@@ -342,16 +367,31 @@ def _validate_observation_sources(
             diagnostics.append(f"observation_source_quarantined:{name}")
             rejected_count += 1
             continue
-        else:
-            canonical_refs = list(
-                dict.fromkeys(
-                    [
-                        *observation.source_refs,
-                        *(segment.source_ref for segment in matched),
-                    ]
-                )
+        source_text = _canonical_source_text(
+            "".join(str(getattr(segment, "text", "") or "") for segment in matched)
+        )
+        unsupported_labels = [
+            label
+            for label in spatial_labels(observation)
+            if _canonical_source_text(label) not in source_text
+        ]
+        if unsupported_labels:
+            diagnostics.extend(
+                "observation_spatial_label_not_source_backed:"
+                + str(label).strip()[:80]
+                for label in unsupported_labels
             )
-            observation = observation.model_copy(update={"source_refs": canonical_refs})
+            rejected_count += 1
+            continue
+        canonical_refs = list(
+            dict.fromkeys(
+                [
+                    *observation.source_refs,
+                    *(segment.source_ref for segment in matched),
+                ]
+            )
+        )
+        observation = observation.model_copy(update={"source_refs": canonical_refs})
         validated.append(observation)
     return validated, diagnostics, rejected_count
 
@@ -524,6 +564,7 @@ async def run_l1_dimension_loop(
     max_attempts: int = 2,
     max_calls: int = 4,
     quality_feedback: str = "",
+    evidence_gap_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
 ) -> L1DimensionRunResult:
     """Run a bounded observe → report sequence.
 
@@ -546,12 +587,22 @@ async def run_l1_dimension_loop(
     source_digest = str(getattr(source_index, "source_digest", "") or "")
     source_pages = _source_pages(source_index)
     source_page_count = len(source_pages)
+    normalized_gap_rows = tuple(
+        L1EvidenceGapInputRow.model_validate({
+            key: value
+            for key, value in dict(item).items()
+            if key in L1EvidenceGapInputRow.model_fields
+        })
+        for item in (evidence_gap_rows or ())[:32]
+        if isinstance(item, dict) and str(item.get("gap_ref") or "").strip()
+    )
     if input_context is None:
         input_context = build_l1_input_context(
             dimension_key=dimension_key,
             source_index=source_index,
             allowed_fact_types=allowed_fact_types,
             source_section_hints=semantic_contract.get("source_section_hints", []) or [],
+            evidence_gap_rows=normalized_gap_rows,
         )
     else:
         if input_context.dimension_key != dimension_key:
@@ -571,6 +622,15 @@ async def run_l1_dimension_loop(
             "source_digest": source_digest,
             "source_page_count": source_page_count,
             "allowed_fact_types": allowed_fact_types,
+            "evidence_gap_refs": tuple(item.gap_ref for item in normalized_gap_rows),
+            "evidence_gap_digest": "sha256:" + hashlib.sha256(
+                json.dumps(
+                    [item.model_dump(mode="json") for item in normalized_gap_rows],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
             "input_digest": "",
         })
 
@@ -731,15 +791,17 @@ async def run_l1_dimension_loop(
         "scoped_metric 必须同时提供非空 metric/scope，demand、constraint、risk、"
         "opportunity 和 document_observation 也必须填写各自的非空语义字段；不能用"
         "description 或 semantic_type 代替缺失的分支字段。"
-        "不要按数量配额截断或扩写；逐条保留本页来源实际支持的观察，"
-        "同一来源句中的同一语义只保留一条。"
+        "一次响应最多输出 16 行扁平 observation；只保留与本维规划认知直接相关、"
+        "且本页来源明确支持的最小事实行。不要枚举背景叙述中的所有地名组合，"
+        "不要生成两两关系或嵌套对象；同一来源句中的同一语义只保留一条。"
         "共享证据字段只填来源明确支持的值；尽量提供 source_segment_ids 和 source_quote，"
         "没有直接证据就标记 uncertain，不得猜测。"
         "字符串字段没有值时使用空字符串，数组字段没有值时使用空数组，不要返回 null；"
-        "对于来源明确出现的地点或空间对象，使用 schema 已声明的 spatial_mentions 输出"
-         "独立语义工作项，并在其中使用 scope_mentions 保留名称、角色、关系和来源；"
+        "对于来源明确出现的地点或空间对象，只填写扁平列 place_names、location_role、"
+        "location_relation 和 location_source_feature_ids；每个事实保持一行；"
         "这些字段只能表达粗空间线索，不得输出坐标、几何、BSM、候选实体或任何执行字段。"
         "全村指标、诉求或政策事实不需要为了格式强行添加点位。"
+        "diagnostics 最多 8 行且每行只写一个简短代码或摘要。"
         "同一语义族内不同子类或量值必须保留可区分的 semantic_type 或 value/unit，"
         "不能压成泛化事实。\n\n"
         f"{render_dimension_semantic_contract(dimension_key, 1)}\n\n"
@@ -766,6 +828,7 @@ async def run_l1_dimension_loop(
                 input_context,
                 page_index,
                 source_pages[page_index],
+                normalized_gap_rows,
             )
             context_values = page_input.context.model_dump(mode="python")
             context_rows = [
@@ -782,8 +845,30 @@ async def run_l1_dimension_loop(
             _, page_context_table = build_bounded_table(
                 ("field", "value"),
                 context_rows,
-                max_rows=64,
+                max_rows=32,
                 max_chars=_L1_OBSERVE_PAGE_CHARS,
+            )
+            _, evidence_gap_table = build_bounded_table(
+                (
+                    "gap_ref",
+                    "subject_refs",
+                    "missing_fields",
+                    "evidence_refs",
+                    "status",
+                    "deferred_until",
+                    "failure_reason",
+                ),
+                [
+                    {
+                        **item.model_dump(mode="python"),
+                        "subject_refs": ", ".join(item.subject_refs),
+                        "missing_fields": ", ".join(item.missing_fields),
+                        "evidence_refs": ", ".join(item.evidence_refs),
+                    }
+                    for item in page_input.evidence_gap_rows
+                ],
+                max_rows=32,
+                max_chars=3200,
             )
             page_system = (
                 observe_system
@@ -795,6 +880,11 @@ async def run_l1_dimension_loop(
                 "若本页没有本维度事实，返回空 observations 数组。\n\n"
                 "【L1 source index】\n"
                 + render_l1_source_index(source_pages[page_index])
+                + "\n\n【Evidence gap table】\n"
+                + (evidence_gap_table if page_input.evidence_gap_rows else "无")
+                + "\n该表只声明待补语义和已有 refs，不能当作事实。若本页来源能补充，"
+                "输出带 source_feature_ids/source_segment_ids 的事实；否则不要猜测，"
+                "应用层会原样保留该 gap。"
             )
             try:
                 provider_output = await run_structured(

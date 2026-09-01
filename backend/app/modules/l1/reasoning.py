@@ -17,7 +17,7 @@ from app.config import get_dimension_config, get_dimension_layer, list_dimension
 from app.core.llm_config import get_llm_settings
 from app.contracts.events import SSEEventType
 from app.infrastructure.logging import get_logger
-from app.infrastructure.evidence_runtime.dimension_runtime import (
+from app.modules.evidence.dimension_facade import (
     publish_dimension_complete,
     publish_dimension_delta,
     publish_dimension_start,
@@ -155,6 +155,13 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as exc:  # source index persistence is observable but non-fatal
             _log_bounded_runtime_warning(dim_key, "L1_SOURCE_INDEX_PERSIST_FAILED", exc)
 
+    l1_evidence_gap_rows = [
+        dict(item)
+        for item in (state.get("evidence_gap_rows") or ())
+        if isinstance(item, dict)
+        and str(item.get("status") or "") != "resolved"
+        and str(item.get("deferred_until") or "l1").casefold() in {"", "l1"}
+    ][:32]
     l1_input_context = None
     if dim_layer == 1:
         from app.modules.l1.context import build_l1_input_context
@@ -165,6 +172,18 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             session_id=session_id,
             source_index_ref=source_index_ref or "",
             source_section_hints=source_section_hints,
+            evidence_gap_rows=[
+                {
+                    key: value
+                    for key, value in item.items()
+                    if key in {
+                        "gap_ref", "subject_refs", "missing_fields",
+                        "evidence_refs", "status", "deferred_until",
+                        "failure_reason",
+                    }
+                }
+                for item in l1_evidence_gap_rows
+            ],
         )
 
     # 2+3. GIS 和 RAG 并行执行（两者访问独立数据源，无逻辑依赖）
@@ -205,14 +224,15 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         dim_key,
         cfg,
         dim_layer,
+        state=state,
     )
     same_layer_deps = tuple(getattr(cfg, "depends_on", ()) or ())
     layer1_deps = tuple(getattr(cfg, "layer_depends_on", ()) or ())
     layer2_deps = tuple(getattr(cfg, "phase_depends_on", ()) or ())
-    missing_same = [key for key in same_layer_deps if key in dependency_context.missing_keys]
-    if missing_same:
+    missing_direct = list(dependency_context.missing_keys)
+    if missing_direct:
         raise RuntimeError(
-            f"维度 {dim_key} 的同层依赖产物缺失: {', '.join(missing_same)}"
+            f"维度 {dim_key} 的 typed CAS 依赖产物缺失: {', '.join(missing_direct)}"
         )
     same_layer_contexts = (
         dependency_context.render_for_prompt(
@@ -372,6 +392,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 max_attempts=max(1, int(state.get("l1_pass_max_attempts", 2) or 2)),
                 max_calls=max(1, int(state.get("l1_pass_max_calls", 4) or 4)),
                 quality_feedback=str(state.get("quality_feedback") or ""),
+                evidence_gap_rows=l1_evidence_gap_rows,
             )
             report_body = loop_result.report_body
             observations = list(loop_result.observations or [])
@@ -431,7 +452,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             }],
         }
     except Exception as e:
-        from app.infrastructure.evidence_runtime.dimension_runtime import is_provider_failure
+        from app.modules.evidence.dimension_facade import is_provider_failure
         from app.infrastructure.structured_runtime.parser import (
             structured_failure_code,
             structured_failure_summary,
@@ -613,7 +634,51 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             result["provider_resume_dimensions"] = [dim_key]
             result["quality_feedback"] = failure_feedback
 
-    # 立即写入 DB，使并行节点可通过 DB 回退路径获取依赖报告
+    if dim_layer == 1 and l1_output is not None:
+        from app.infrastructure.artifacts.dimension_runtime import (
+            dependency_product_keys,
+            persist_dimension_product,
+        )
+
+        if quality_report.get("ok", True):
+            product_status = "completed"
+            product_diagnostics = tuple(l1_diagnostics)
+        else:
+            retry_count = int(
+                (result.get("dimension_retry_counts") or {}).get(dim_key, 0)
+            )
+            retry_limit = max(0, int(state.get("dimension_retry_limit") or 0))
+            product_status = (
+                "pending" if retry_count <= retry_limit else "human_required"
+            )
+            product_diagnostics = tuple(
+                item
+                for item in (
+                    str(quality_report.get("feedback") or "").strip(),
+                    *l1_diagnostics,
+                )
+                if str(item).strip()
+            ) or ("L1 dimension quality gate did not pass",)
+        product_key, product_ref = persist_dimension_product(
+            state,
+            layer=1,
+            dimension_key=dim_key,
+            status=product_status,
+            product=l1_output,
+            dependency_product_refs=dependency_product_keys(
+                dependency_context.artifacts
+            ),
+            evidence_gap_refs=l1_output.context.evidence_gap_refs,
+            input_digest=l1_output.context.input_digest,
+            diagnostics=product_diagnostics,
+        )
+        result["artifact_refs"] = {
+            **dict(result.get("artifact_refs") or {}),
+            product_key: product_ref,
+        }
+
+    # ReportStore is audit/display only; semantic dependency consumers use the
+    # exact dimension CAS reference returned above.
     await save_report_immediate(store, pending_report)
 
     # P2: L1/L2/L3 维度步骤 Report（供 positioning-trace 面板定位）
@@ -798,7 +863,17 @@ def _l1_source_index_for_state(state: Dict[str, Any]):
                 for key, value in state.get("input_texts", {}).items()
                 if str(value or "").strip()
             }
-        return build_l1_source_index(_l1_source_inputs(input_texts))
+        data_rows: list[dict[str, Any]] = []
+        catalog = getattr(context, "data_resource_catalog", None)
+        if catalog is not None:
+            try:
+                data_rows = catalog.table_rows(limit=32)
+            except Exception:
+                data_rows = []
+        return build_l1_source_index(
+            _l1_source_inputs(input_texts),
+            data_rows=data_rows,
+        )
     except Exception as exc:  # noqa: BLE001 - source index is a bounded input
         _log_bounded_runtime_warning(
             str(state.get("dimension_key", "")),

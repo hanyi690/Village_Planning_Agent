@@ -55,6 +55,7 @@ def make_l1_fact(
     unit: str = "",
     counting_basis: str = "",
     source_refs: Iterable[Any] = (),
+    evidence_refs: Iterable[Any] = (),
     source_span: str = "",
     source_snapshot_ref: str = "",
     source_feature_ids: Iterable[Any] = (),
@@ -106,6 +107,7 @@ def make_l1_fact(
         unit=_text(unit),
         counting_basis=_text(counting_basis),
         source_refs=refs,
+        evidence_refs=_refs(evidence_refs),
         source_span=_text(source_span),
         source_snapshot_ref=_text(source_snapshot_ref),
         source_feature_ids=_refs(source_feature_ids),
@@ -133,7 +135,6 @@ def location_mention_to_l1_fact(
         statement += f"，关联={'、'.join(related_mentions[:6])}"
     refs = [
         _text(fact.source_report_ref),
-        *_refs(fact.evidence_refs),
         f"l1:snapshot:{_text(snapshot_ref)}" if _text(snapshot_ref) else "",
     ]
     return make_l1_fact(
@@ -163,6 +164,7 @@ def location_mention_to_l1_fact(
             ),
         },
         source_refs=refs,
+        evidence_refs=fact.evidence_refs,
         source_span=fact.source_span,
         source_snapshot_ref=snapshot_ref,
     )
@@ -189,13 +191,16 @@ def evidence_fact_to_l1_fact(
     source_kind = _text(fields.get("source_kind")).casefold()
     if source_kind in {"kg", "kg_canonical", "canonical_kg"}:
         fact_kind = "kg_canonical_fact"
-    elif source_kind in {"gis", "bundle", "bundle_geometry", "gis_layer"}:
+    elif source_kind in {
+        "gis", "bundle", "bundle_geometry", "gis_layer", "data_resource_catalog",
+    }:
         fact_kind = "gis_observation"
     else:
         fact_kind = "document_observation"
     if spatial_only and source_kind not in {
         "kg", "kg_canonical", "canonical_kg",
         "gis", "bundle", "bundle_geometry", "gis_layer",
+        "data_resource_catalog",
     }:
         return None
     refs = [
@@ -232,6 +237,10 @@ def evidence_fact_to_l1_fact(
         unit=_text(fields.get("unit")),
         counting_basis=_text(fields.get("counting_basis")),
         source_refs=refs,
+        evidence_refs=[
+            _text(getattr(fact, "fact_id", "")),
+            *_refs(getattr(fact, "related_fact_refs", None) or []),
+        ],
         source_span=_text(getattr(fact, "evidence_span", "")),
         source_snapshot_ref=source_snapshot,
         source_feature_ids=feature_ids,

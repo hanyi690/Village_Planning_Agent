@@ -122,6 +122,10 @@ def _ground_bindings(
             append(f"endpoint:{target_id}", "entity", fragment)
         if target_id and str(getattr(item, "geometry_ref", "") or "").strip():
             append(f"geometry:{target_id}", "geometry", fragment)
+        if target_id and str(getattr(item, "representation_ref", "") or "").strip():
+            append(f"representation:{target_id}", "representation", fragment)
+        if target_id and str(getattr(item, "resource_ref", "") or "").strip():
+            append(f"resource:{target_id}", "resource", fragment)
     for index, network_ref in enumerate(list(getattr(problem, "network_refs", None) or [])):
         value = str(network_ref or "").strip()
         if value:

@@ -82,13 +82,88 @@ class GroundedCandidateDomain(BaseModel):
 class GroundingBinding(BaseModel):
     binding_id: str
     target_id: str
+    candidate_ref: str = ""
     entity_ref: str = ""
+    # KG identity and DATA geometry are separate bindings.  ``geometry_ref``
+    # may point to an exact source feature while these fields preserve the
+    # representation/resource selected from the DATA catalog.
+    part_ref: str = ""
+    representation_ref: str = ""
+    resource_ref: str = ""
     geometry_ref: str = ""
+    geometry_kind: str = "unknown"
+    materialization_role: str = ""
+    source_snapshot_ref: str = ""
+    source_feature_refs: list[str] = Field(default_factory=list)
+    crs: str = ""
+    resource_digest: str = ""
+    ambiguity: str = ""
+    diagnostics: list[str] = Field(default_factory=list)
+    hard_constraint_status: str = "unknown"
+    availability_status: str = "unknown"
+    status: Literal["resolved", "candidate_only", "ambiguous", "unresolved"] = "unresolved"
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     evidence_refs: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def canonicalize_refs(self) -> "GroundingBinding":
         self.evidence_refs = _sorted_strings(self.evidence_refs)
+        self.source_feature_refs = _sorted_strings(self.source_feature_refs)
+        self.diagnostics = _sorted_strings(self.diagnostics)
+        if self.status == "resolved":
+            required = {
+                "binding_id": self.binding_id,
+                "target_id": self.target_id,
+                "candidate_ref": self.candidate_ref,
+                "entity_ref": self.entity_ref,
+                "part_ref": self.part_ref,
+                "representation_ref": self.representation_ref,
+                "resource_ref": self.resource_ref,
+                "geometry_ref": self.geometry_ref,
+                "materialization_role": self.materialization_role,
+                "source_snapshot_ref": self.source_snapshot_ref,
+                "crs": self.crs,
+                "resource_digest": self.resource_digest,
+            }
+            missing = sorted(
+                field_name
+                for field_name, value in required.items()
+                if not str(value or "").strip()
+            )
+            if len(self.source_feature_refs) != 1:
+                missing.append("source_feature_refs")
+            if self.geometry_kind == "unknown":
+                missing.append("geometry_kind")
+            if self.confidence is None or self.confidence <= 0.0:
+                missing.append("confidence")
+            if not self.evidence_refs:
+                missing.append("evidence_refs")
+            if self.hard_constraint_status != "passed":
+                missing.append("hard_constraint_status")
+            if self.availability_status not in {
+                "fully_available",
+                "partially_available",
+            }:
+                missing.append("availability_status")
+            authority_refs = [
+                self.representation_ref,
+                self.resource_ref,
+                self.geometry_ref,
+                *self.source_feature_refs,
+            ]
+            if any(
+                value.startswith("external-observation:")
+                or ":external-observation:" in value
+                for value in authority_refs
+            ):
+                missing.append("local_data_authority")
+            if self.ambiguity:
+                missing.append("ambiguity")
+            if missing:
+                raise ValueError(
+                    "resolved grounding binding is incomplete: "
+                    + ", ".join(sorted(set(missing)))
+                )
         return self
 
 

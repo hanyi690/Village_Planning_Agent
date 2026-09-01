@@ -101,8 +101,18 @@ def _source_segments(
     return segments
 
 
-def build_l1_source_index(input_texts: dict[str, str] | None) -> L1SourceIndex:
-    """Build a format-neutral source index without producing semantic rows."""
+def build_l1_source_index(
+    input_texts: dict[str, str] | None,
+    *,
+    data_rows: list[dict[str, object]] | None = None,
+) -> L1SourceIndex:
+    """Build a format-neutral source index without producing semantic rows.
+
+    ``data_rows`` is a bounded DATA catalog projection.  It is rendered as a
+    source table and indexed like any other source segment; no fixed Bundle
+    layer or field is required, and the raw geometry payload never enters the
+    LLM page.
+    """
 
     raw_sources = {
         str(key or "").strip(): str(value or "")
@@ -118,9 +128,23 @@ def build_l1_source_index(input_texts: dict[str, str] | None) -> L1SourceIndex:
         f"ignored_source:{key}:not_l1_fact_source"
         for key in sorted(set(raw_sources).difference(sources))
     ]
+    data_text = ""
+    if data_rows:
+        columns = (
+            "source_feature_ref", "layer_ref", "geometry_kind", "source_crs",
+            "feature_digest", "attribute_keys", "attribute_preview", "validity_status",
+        )
+        _, data_text = build_bounded_table(
+            columns,
+            data_rows,
+            max_rows=32,
+            max_chars=6200,
+        )
     canonical_source = "\n\n".join(
         f"{key}\n{sources[key]}" for key in sorted(sources)
     )
+    if data_text:
+        canonical_source = f"{canonical_source}\n\ndata_catalog\n{data_text}"
     index = L1SourceIndex(
         source_documents=[f"input:{key}" for key in sorted(sources)],
         source_digest=_source_digest(canonical_source),
@@ -129,6 +153,10 @@ def build_l1_source_index(input_texts: dict[str, str] | None) -> L1SourceIndex:
     for source_key, source in sources.items():
         digest = _source_digest(source)
         index.source_segments.extend(_source_segments(source_key, source, digest))
+    if data_text:
+        digest = _source_digest(data_text)
+        index.source_documents.append("input:data_catalog")
+        index.source_segments.extend(_source_segments("data_catalog", data_text, digest))
     if not index.source_segments:
         index.diagnostics.append("no_nonempty_source_segments")
     return index

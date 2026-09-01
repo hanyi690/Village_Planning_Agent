@@ -94,6 +94,10 @@ class CandidateGeometry(BaseModel):
     # It is distinct from ``wkt`` when a large parcel is subdivided.
     eligible_geometry_wkt: str = ""
     crs: str = "EPSG:4326"
+    source_crs: str = ""
+    source_snapshot_ref: str = ""
+    resource_digest: str = ""
+    operation: str = "read"
     granularity: GeometryGranularity = "none"
     spatial_domain_kind: SpatialDomainKind = "unknown"
     candidate_bbox: tuple[float, float, float, float] | None = None
@@ -102,6 +106,9 @@ class CandidateGeometry(BaseModel):
     coverage_ratio: float | None = Field(default=None, ge=0, le=1)
     source_ref: str = ""
     source_refs: list[str] = Field(default_factory=list)
+    part_ref: str = ""
+    resource_refs: list[str] = Field(default_factory=list)
+    representation_refs: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     identity_confidence: float | None = Field(default=None, ge=0, le=1)
     geometry_confidence: float | None = Field(default=None, ge=0, le=1)
@@ -138,6 +145,18 @@ class CandidateGeometry(BaseModel):
         if self.source_ref and self.source_ref not in self.source_refs:
             self.source_refs = [*self.source_refs, self.source_ref]
         self.source_refs = sorted({item for item in self.source_refs if item})
+        self.resource_refs = sorted({
+            str(item) for item in self.resource_refs
+            if str(item).strip()
+        })
+        self.representation_refs = sorted({
+            str(item) for item in self.representation_refs
+            if str(item).strip()
+        })
+        self.resource_refs = sorted({
+            *self.resource_refs,
+            *(item for item in self.source_refs if str(item).startswith("resource:")),
+        })
         self.evidence_refs = sorted({item for item in self.evidence_refs if item})
         self.component_claim_refs = sorted({
             str(item) for item in self.component_claim_refs if str(item).strip()
@@ -172,6 +191,9 @@ class CandidateGeometry(BaseModel):
                 "coverage_ratio": self.coverage_ratio,
                 "source_ref": self.source_ref,
                 "source_refs": self.source_refs,
+                "part_ref": self.part_ref,
+                "resource_refs": self.resource_refs,
+                "representation_refs": self.representation_refs,
                 "source_bsms": self.source_bsms,
                 "feature_bsms": self.feature_bsms,
                 "source_feature_ids": self.source_feature_ids,
@@ -259,16 +281,29 @@ class CandidateGeometry(BaseModel):
             self.grounding_ready
             and self.role == "execution_geometry"
             and bool(self.wkt)
-            and self.availability_status != "fully_unavailable"
-            # A parcel candidate without an availability proof must not be
-            # widened back to its complete cadastral extent. Exact feature
-            # geometries may remain executable when availability is unknown;
-            # parcel extents/sets require explicit clipping or availability.
-            and not (
-                self.availability_status == "unknown"
-                and self.kind == "polygon"
-                and self.spatial_domain_kind in {"parcel_extent", "parcel_set"}
-            )
+            # A geometry string is only a materialization value.  The
+            # executable authority must be a DATA representation backed by a
+            # loadable resource.  This prevents a legacy bundle/provider
+            # geometry from being promoted to SELECT merely because it has a
+            # valid WKT and a non-zero confidence.
+            and bool(self.target_id)
+            and len(self.entity_refs) == 1
+            and bool(self.part_ref)
+            and len(self.resource_refs) == 1
+            and len(self.representation_refs) == 1
+            and len(self.source_feature_ids) == 1
+            and bool(self.materialization_role)
+            and bool(self.evidence_refs)
+            and bool(self.source_snapshot_ref)
+            and bool(self.resource_digest)
+            and bool(self.crs)
+            and self.granularity == "exact_feature"
+            and self.spatial_domain_kind == "exact_feature"
+            and self.hard_constraint_status == "passed"
+            and self.availability_status in {
+                "fully_available",
+                "partially_available",
+            }
             and not self.uncertainty_reason.startswith("duplicate_bsm_geometry_identity")
         )
 

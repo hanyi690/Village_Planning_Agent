@@ -292,16 +292,29 @@ def _ground_retry_target_ids(result: Any) -> set[str]:
     """
 
     target_ids: set[str] = set()
+    # A target domain is the aggregate readiness decision for a target.  A
+    # single target can legitimately have several candidate representations
+    # (for example a point locator and a polygon footprint); once one of those
+    # representations is DATA-bound and the target domain is resolved, a
+    # candidate-only sibling must not force another retrieval/LLM wave.
+    problem = getattr(result, "problem", None)
+    resolved_target_ids = {
+        str(getattr(domain, "target_id", "") or "").strip()
+        for domain in list(getattr(problem, "target_domains", None) or [])
+        if str(getattr(domain, "status", "unresolved") or "unresolved") == "resolved"
+        and str(getattr(domain, "target_id", "") or "").strip()
+    }
     for issue in list(getattr(result, "unresolved", None) or []):
         target_id = str(getattr(issue, "related_artifact_id", "") or "").strip()
-        if target_id:
+        if target_id and target_id not in resolved_target_ids:
             target_ids.add(target_id)
-    problem = getattr(result, "problem", None)
     for collection_name in ("target_domains", "candidate_domains"):
         for domain in list(getattr(problem, collection_name, None) or []):
+            target_id = str(getattr(domain, "target_id", "") or "").strip()
+            if target_id in resolved_target_ids:
+                continue
             if str(getattr(domain, "status", "unresolved") or "unresolved") == "resolved":
                 continue
-            target_id = str(getattr(domain, "target_id", "") or "").strip()
             if target_id:
                 target_ids.add(target_id)
     return target_ids
@@ -312,18 +325,27 @@ def _ground_target_statuses(result: Any) -> dict[str, str]:
 
     statuses: dict[str, str] = {}
     problem = getattr(result, "problem", None)
-    for collection_name in ("target_domains", "candidate_domains"):
-        for domain in list(getattr(problem, collection_name, None) or []):
-            target_id = str(getattr(domain, "target_id", "") or "").strip()
-            if not target_id:
-                continue
-            status = str(getattr(domain, "status", "unresolved") or "unresolved")
-            if statuses.get(target_id) == "resolved":
-                continue
-            statuses[target_id] = status
+    # ``target_domains`` already folds multiple representations into one
+    # target-level decision (resolved wins when any exact DATA binding is
+    # available).  Do not recompute a worse status from a candidate-only
+    # sibling in ``candidate_domains``; doing so made the retry loop oscillate
+    # even though the target was executable.
+    for domain in list(getattr(problem, "target_domains", None) or []):
+        target_id = str(getattr(domain, "target_id", "") or "").strip()
+        if target_id:
+            statuses[target_id] = str(
+                getattr(domain, "status", "unresolved") or "unresolved"
+            )
+    for domain in list(getattr(problem, "candidate_domains", None) or []):
+        target_id = str(getattr(domain, "target_id", "") or "").strip()
+        if not target_id or target_id in statuses:
+            continue
+        statuses[target_id] = str(
+            getattr(domain, "status", "unresolved") or "unresolved"
+        )
     for issue in list(getattr(result, "unresolved", None) or []):
         target_id = str(getattr(issue, "related_artifact_id", "") or "").strip()
-        if target_id and statuses.get(target_id) != "resolved":
+        if target_id:
             statuses[target_id] = "unresolved"
     return statuses
 
@@ -417,19 +439,20 @@ async def _retrieve_ground_evidence_packets(
                                     "仅返回可验证的来源证据，不生成新身份或几何"
                                 ),
                                 kind="spatial",
-                                source_families=("bundle", "kg"),
+                                source_families=("data", "gis", "kg"),
                                 scope=tuple(scopes),
                                 spatial_granularity="feature",
                                 allowed_inference="exact",
                                 evidence_role="grounding_candidate_resolution",
                                 success_condition="返回可验证的空间候选和来源定位",
+                                metadata={"selection_cardinality": "one"},
                             )
                         ]
                     result = await EvidenceApplication().retrieve(
                         requirements,
-                        EvidenceContext(
+                        EvidenceContext.from_runtime_context(
+                            context,
                             session_id=session_id,
-                            village_name=str(getattr(context, "village_name", "") or ""),
                             run_id=f"{session_id}:ground:r{round_index}",
                             stage="GROUND",
                             dimension_key="location",
@@ -526,7 +549,7 @@ async def _retrieve_ground_gap_evidence(
             producer_stage="GROUND",
             statement=statement,
             kind="claim",
-            source_families=("report", "bundle", "kg", "gis", "rag", "external"),
+            source_families=("report", "data", "kg", "gis", "rag", "external"),
             scope=("facilities", "parcels", "roads", "waters", "zones"),
             allowed_inference="exact",
             evidence_role="grounding_gap_resolution",
@@ -543,9 +566,9 @@ async def _retrieve_ground_gap_evidence(
     try:
         result = await EvidenceApplication().retrieve(
             requirements,
-            EvidenceContext(
+            EvidenceContext.from_runtime_context(
+                context,
                 session_id=session_id,
-                village_name=str(getattr(context, "village_name", "") or ""),
                 run_id=f"{session_id}:ground:gap",
                 stage="GROUND",
                 dimension_key="location",
@@ -608,6 +631,15 @@ async def _retrieve_ground_gap_evidence(
 
 async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """GROUND node: specs + context -> GroundingResult + gate."""
+    from app.workflow.stages.support import require_upstream_gates
+
+    require_upstream_gates(
+        dict(state),
+        (
+            "data", "kg", "evidence", "l1", "l2", "l3",
+            "target_projection",
+        ),
+    )
     from app.modules.ground.application import ground_aggregate
     from app.modules.ground.validation import evaluate_ground_gate
     from app.contracts.target_projection.parse_result_contracts import IntentCompilationResult
@@ -1156,16 +1188,28 @@ def _target_metadata_from_compilation(
     """Expose target output semantics to GROUND without parsing free text."""
 
     metadata: Dict[str, Dict[str, str]] = {}
+    for row in list(getattr(compilation, "target_projection_rows", None) or []):
+        target_id = str(getattr(row, "target_ref", "") or "").strip()
+        if not target_id:
+            continue
+        metadata.setdefault(target_id, {})["representation_purpose"] = str(
+            getattr(row, "representation_purpose", "") or ""
+        ).strip()
     nodes = getattr(intent_graph, "nodes", None)
     if nodes:
         for node in nodes:
             target_id = str(getattr(node, "target_id", "") or "")
             target_kind = str(getattr(node, "target_kind", "unknown") or "unknown")
             if target_id:
-                metadata[target_id] = {
+                metadata.setdefault(target_id, {}).update({
                     "target_kind": target_kind,
                     "expected_output_kind": _expected_output_for_target_kind(target_kind),
-                }
+                })
+                node_role = str(
+                    getattr(node, "materialization_role", "") or ""
+                ).strip()
+                if node_role:
+                    metadata[target_id]["materialization_role"] = node_role
 
     intent = getattr(compilation, "typed_intent", None)
     for field_name, target_kind, expected_output_kind in (
@@ -1183,13 +1227,23 @@ def _target_metadata_from_compilation(
                 else getattr(target, "target_id", "")
             )
             if target_id:
-                metadata.setdefault(
+                entry = metadata.setdefault(
                     target_id,
                     {
                         "target_kind": target_kind,
                         "expected_output_kind": expected_output_kind,
                     },
                 )
+                entry.setdefault("target_kind", target_kind)
+                entry.setdefault("expected_output_kind", expected_output_kind)
+                target_role = str(
+                    target.get("materialization_role", "")
+                    if isinstance(target, dict)
+                    else getattr(target, "materialization_role", "")
+                    or ""
+                ).strip()
+                if target_role:
+                    entry["materialization_role"] = target_role
     for claim in list(getattr(compilation, "pending_grounding_claims", None) or []):
         category = str(getattr(claim, "suggested_category", "") or "")
         target_kind = {
@@ -1208,15 +1262,18 @@ def _target_metadata_from_compilation(
         }.get(category, "action")
         target_id = str(getattr(claim, "claim_id", "") or "").strip()
         if target_id and target_kind != "action":
-            metadata.setdefault(
-                target_id,
-                {
-                    "target_kind": target_kind,
-                    "expected_output_kind": str(
-                        getattr(claim, "suggested_output_kind", "") or "unknown"
-                    ),
-                },
-            )
+                metadata.setdefault(
+                    target_id,
+                    {
+                        "target_kind": target_kind,
+                        "expected_output_kind": str(
+                            getattr(claim, "suggested_output_kind", "") or "unknown"
+                        ),
+                        "materialization_role": str(
+                            getattr(claim, "materialization_role", "") or ""
+                        ),
+                    },
+                )
     return metadata
 
 

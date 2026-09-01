@@ -9,8 +9,12 @@ from typing import Any, Literal
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from app.contracts.artifacts.classification_ref import ClassificationRef
+from app.contracts.artifacts.ref import ArtifactRef
 from app.contracts.artifacts.contract_meta import ContractMeta, StageIssue
-from app.contracts.evidence.evidence_contracts import EvidenceSource
+from app.contracts.evidence.evidence_contracts import (
+    EvidenceGapResolution,
+    EvidenceSource,
+)
 from app.contracts.evidence.requirement_contracts import EvidenceRequirement
 from app.contracts.target_projection.parse_result_contracts import ParseDiagnostic
 from app.contracts.target_projection.parsing_contracts import CompilerTrace
@@ -108,6 +112,7 @@ class LocationMentionDraft(BaseModel):
     role: str = "unknown"
     scope_mentions: list[LocationScopeMention] = Field(default_factory=list)
     relation: str = ""
+    related_mentions: list[str] = Field(default_factory=list)
     instance_label: str = ""
     instance_count: str = ""
     resolution_state: Literal[
@@ -131,6 +136,7 @@ class LocationMentionDraft(BaseModel):
         for field_name in (
             "scope_mentions",
             "aliases",
+            "related_mentions",
             "source_feature_ids",
             "source_segment_ids",
             "source_refs",
@@ -164,11 +170,14 @@ class LocationMention(BaseModel):
     canonical identity are produced only by retrieval/GROUND.
     """
 
+    mention_kind: Literal["target", "place", "anchor_request"] = "target"
+    work_item_ref: str = ""
     mention: str
     normalized_name: str
     role: str = "unknown"
     target_name: str = ""
     aliases: list[str] = Field(default_factory=list)
+    relation: str = ""
     spatial_hint: str = ""
     related_mentions: list[str] = Field(default_factory=list)
     scopes: list[LocationScopeMention] = Field(default_factory=list)
@@ -186,6 +195,7 @@ class LocationMention(BaseModel):
     dimension_key: str = ""
     source_span: str = ""
     evidence_refs: list[str] = Field(default_factory=list)
+    evidence_artifact_refs: list[ArtifactRef] = Field(default_factory=list)
     source_feature_ids: list[str] = Field(default_factory=list)
     confidence: float = 0.0
 
@@ -201,6 +211,7 @@ class LocationMention(BaseModel):
             "aliases",
             "related_mentions",
             "evidence_refs",
+            "evidence_artifact_refs",
             "source_feature_ids",
         ):
             if payload.get(field_name) is None:
@@ -266,6 +277,7 @@ class L1Fact(BaseModel):
     unit: str = ""
     counting_basis: str = ""
     source_refs: list[str] = Field(default_factory=list, min_length=1)
+    evidence_refs: list[str] = Field(default_factory=list)
     source_span: str = ""
     source_snapshot_ref: str = ""
     source_feature_ids: list[str] = Field(default_factory=list)
@@ -284,6 +296,37 @@ class EvidenceGap(BaseModel):
     description: str
     required_fact: str = ""
     severity: str = "warning"  # "info" | "warning" | "error"
+    subject_ref: str = ""
+    requirement_id: str = ""
+    outcome_status: Literal[
+        "open",
+        "partial",
+        "insufficient",
+        "human_required",
+        "failed",
+        "not_available",
+    ] = "open"
+    reason_codes: list[str] = Field(default_factory=list)
+    candidate_total: int = Field(default=0, ge=0)
+    candidate_identity_total: int = Field(default=0, ge=0)
+    ambiguity_status: Literal[
+        "resolved",
+        "multiple",
+        "unresolved",
+    ] = "unresolved"
+    coverage_stop_reason: Literal[
+        "",
+        "sufficient",
+        "source_exhausted",
+        "human_required",
+        "budget_exhausted",
+    ] = ""
+    evidence_artifact_ref: ArtifactRef | None = None
+    allowed_sources: list[str] = Field(default_factory=list)
+    retrieval_capability: str = ""
+    recovery_action: str = ""
+    recoverable: bool = True
+    recovery_generation: int = Field(default=0, ge=0)
 
 
 class L1SourceSegment(BaseModel):
@@ -340,6 +383,8 @@ class L1InputContext(BaseModel):
     source_projection_digest: str = ""
     source_page_count: int = Field(default=1, ge=1)
     allowed_fact_types: tuple[str, ...] = ()
+    evidence_gap_refs: tuple[str, ...] = ()
+    evidence_gap_digest: str = ""
     input_digest: str = ""
 
     @model_validator(mode="before")
@@ -355,6 +400,13 @@ class L1InputContext(BaseModel):
                 if str(value).strip()
             )
         )
+        payload["evidence_gap_refs"] = tuple(
+            dict.fromkeys(
+                str(value).strip()
+                for value in (payload.get("evidence_gap_refs") or ())
+                if str(value).strip()
+            )
+        )
         identity = {
             key: payload.get(key)
             for key in (
@@ -366,6 +418,8 @@ class L1InputContext(BaseModel):
                 "source_projection_digest",
                 "source_page_count",
                 "allowed_fact_types",
+                "evidence_gap_refs",
+                "evidence_gap_digest",
             )
         }
         expected = "sha256:" + hashlib.sha256(
@@ -383,6 +437,20 @@ class L1InputContext(BaseModel):
         return payload
 
 
+class L1EvidenceGapInputRow(BaseModel):
+    """Flat Evidence scheduler row exposed to one bounded L1 call."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    gap_ref: str = Field(min_length=1)
+    subject_refs: tuple[str, ...] = ()
+    missing_fields: tuple[str, ...] = ()
+    evidence_refs: tuple[str, ...] = ()
+    status: str = "open"
+    deferred_until: str = "l1"
+    failure_reason: str = ""
+
+
 class L1DimensionInput(BaseModel):
     """One bounded source-page projection sent to the L1 provider."""
 
@@ -392,11 +460,27 @@ class L1DimensionInput(BaseModel):
     page_index: int = Field(default=0, ge=0)
     page_segment_ids: tuple[str, ...] = ()
     source_page: L1SourceIndex | None = None
+    evidence_gap_rows: tuple[L1EvidenceGapInputRow, ...] = ()
 
     @model_validator(mode="after")
     def validate_page_projection(self) -> "L1DimensionInput":
         if self.page_index >= self.context.source_page_count:
             raise ValueError("L1 page_index is outside the input context")
+        gap_payload = [
+            item.model_dump(mode="json") for item in self.evidence_gap_rows
+        ]
+        gap_digest = "sha256:" + hashlib.sha256(
+            json.dumps(
+                gap_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if self.context.evidence_gap_digest and gap_digest != self.context.evidence_gap_digest:
+            raise ValueError("L1 evidence gap rows do not match the input context")
+        if tuple(item.gap_ref for item in self.evidence_gap_rows) != self.context.evidence_gap_refs:
+            raise ValueError("L1 evidence gap refs do not match the input context")
         if self.source_page is None:
             if self.page_segment_ids:
                 raise ValueError("L1 page_segment_ids require a source_page")
@@ -453,6 +537,10 @@ class L1Snapshot(ContractMeta):
     issues: list[StageIssue] = Field(default_factory=list)
     opportunities: list[str] = Field(default_factory=list)
     evidence_gaps: list[EvidenceGap] = Field(default_factory=list)
+    evidence_resolutions: list[EvidenceGapResolution] = Field(
+        default_factory=list
+    )
+    evidence_artifact_refs: list[ArtifactRef] = Field(default_factory=list)
     sources: list[EvidenceSource] = Field(default_factory=list)
     classification_refs: list[ClassificationRef] = Field(default_factory=list)
     dimension_provenance: list[Provenance] = Field(default_factory=list)
@@ -475,7 +563,6 @@ class L1Snapshot(ContractMeta):
 L1LocationFact = LocationMention
 L1SpatialMention = LocationMentionDraft
 
-
 __all__ = [
     "L1Snapshot",
     "LocationMention",
@@ -487,6 +574,7 @@ __all__ = [
     "L1SourceSegment",
     "L1SourceIndex",
     "L1InputContext",
+    "L1EvidenceGapInputRow",
     "L1DimensionInput",
     "L1DimensionPassState",
 ]

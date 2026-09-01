@@ -14,6 +14,20 @@ logger = get_logger(__name__)
 
 _HINT_SEPARATORS = frozenset("、，,；;/ \t\n\r")
 _HINT_SUFFIXES = ("自然村", "村", "组", "一带", "沿线", "两岸", "附近", "周边", "区域")
+# Stable local predicate names are part of the spatial contract.  Keeping the
+# vocabulary here avoids importing the KG ontology into the pure spatial
+# package; adapters may use any URI namespace as long as its local name is one
+# of these values.
+_SPATIAL_PREDICATE_NAMES = frozenset({
+    "touches",
+    "nearby",
+    "connected_via_road",
+    "sfWithin",
+    "sfIntersects",
+    "sfContains",
+    "serves",
+    "derived_from",
+})
 
 
 def hint_tokens(hints: str) -> List[str]:
@@ -56,19 +70,11 @@ def hint_tokens(hints: str) -> List[str]:
 def relation_pairs(graph: Any, subject: Any) -> List[tuple[str, str]]:
     """返回 (谓词短名, 对象 URI) 列表，来自 KG 预计算空间/语义关系。"""
     try:
-        from app.infrastructure.kg.ontology import Relations
-
-        predicates = {str(p) for p in Relations.spatial()}
-        # serves/derived_from 是设施↔村、实体↔来源的关键语义关系（设计 §4.2：
-        # ``祠堂@社前村`` 走 serves/nearby 拓扑证据）。
-        predicates.update({
-            str(Relations.serves),
-            str(Relations.derived_from),
-        })
         pairs: List[tuple[str, str]] = []
         for predicate, obj in graph.predicate_objects(subject):
             pred_str = str(predicate)
-            if pred_str not in predicates:
+            local_name = pred_str.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
+            if local_name not in _SPATIAL_PREDICATE_NAMES:
                 continue
             obj_str = str(obj)
             if not obj_str.startswith("http"):

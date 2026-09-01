@@ -185,8 +185,8 @@ async def reason_ground_candidates(
                 _candidate_card(candidate, descriptor.candidate_id)
                 for candidate, descriptor in zip(target_candidates, descriptors)
             ],
-            max_rows=max(1, len(descriptors)),
-            max_chars=18000,
+            max_rows=min(32, max(1, len(descriptors))),
+            max_chars=6200,
         )
         blocks.append(
             "\n".join((
@@ -371,7 +371,7 @@ async def reason_l1_location_candidates(
             "descriptors": descriptors,
             "refs": refs,
         })
-    if len(tasks) <= 1:
+    if not tasks:
         return {}
 
     # Keep each provider request bounded while still amortizing one call over
@@ -395,16 +395,17 @@ async def reason_l1_location_candidates(
                 }
                 for descriptor in task["descriptors"]
             ],
-            max_rows=max(1, len(task["descriptors"])),
-            max_chars=10000,
+            max_rows=min(32, max(1, len(task["descriptors"]))),
+            max_chars=6200,
         )
-        task["prompt_text"] = "\n".join((
+        task_text = "\n".join((
             f"任务 decision_id={task['decision_id']}",
             f"input_digest={task['input_digest']}",
             "允许的候选证据表：",
             candidate_table,
         ))
-        if current and (len(current) >= 6 or current_chars + len(task_text) > 24000):
+        task["prompt_text"] = task_text
+        if current and (len(current) >= 6 or current_chars + len(task_text) > 6200):
             groups.append(current)
             current = []
             current_chars = 0
@@ -415,6 +416,7 @@ async def reason_l1_location_candidates(
 
     decisions: dict[str, dict[str, Any]] = {
         task["input_digest"]: {
+            "observation_id": task["observation_id"],
             "status": "ambiguous",
             "selected_candidate_id": "",
             "input_digest": task["input_digest"],
@@ -493,6 +495,7 @@ async def reason_l1_location_candidates(
                 logger.warning("[ground] L1 batch decision rejected: %s", type(exc).__name__)
                 continue
             decisions[task["input_digest"]] = {
+                "observation_id": task["observation_id"],
                 "status": decision.status,
                 "selected_candidate_id": decision.selected_candidate_id or "",
                 "input_digest": task["input_digest"],
@@ -592,8 +595,8 @@ async def prioritize_ground_targets(
             }
             for item in target_items
         ],
-        max_rows=max(1, len(target_items)),
-        max_chars=12000,
+        max_rows=min(32, max(1, len(target_items))),
+        max_chars=6200,
     )
     prompt = (
         render_ground_target_priority_contract(item["target_id"] for item in target_items)

@@ -72,9 +72,9 @@ def render_dimension_semantic_contract(
         f"GROUND 必要输入：{', '.join(contract['l3_grounding_requirements'])}\n"
         f"证据边界：{contract['spatial_authority']}\n"
         f"源段范围：{', '.join(contract.get('source_section_hints', [])) or '未指定；保持证据缺口'}\n"
-        "地点覆盖：只抽取本维度相关且在输入中明确出现的空间对象；每个对象输出"
-        "独立的 spatial_mentions 工作项，并在 scope_mentions 中保留来源明确的名称、角色和关系。"
-        "工作项没有坐标权威时保留 needs_retrieval，"
+        "地点覆盖：只抽取本维度相关且在输入中明确出现的空间对象；每个事实使用"
+        "扁平 place_names/location_role/location_relation 列保留名称、角色和关系。"
+        "地点列没有坐标权威时由本地投影标记 needs_retrieval，"
         "由 EvidenceGraph 使用 Bundle/KG 候选补足，不能在 L1 猜坐标或边界。"
     )
     if upstream_source_dimensions:

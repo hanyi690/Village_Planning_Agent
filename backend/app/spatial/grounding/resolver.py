@@ -133,6 +133,7 @@ def _authoritative_geometry_refs(
         has_source_snapshot = any(
             str(value).strip()
             for value in [
+                data.get("source_snapshot_ref"),
                 source_snapshot_ref,
                 bundle_snapshot_digest,
             ]
@@ -233,11 +234,11 @@ class SpatialResolver:
         candidate_selection_decisions: Optional[Dict[str, Any]] = None,
         budget_scope: str = "ground",
     ):
-        if not (
-            hasattr(context, "workspace")
-            and hasattr(context, "kg")
-        ):
-            raise TypeError("SpatialResolver requires a PlanningContext")
+        if not hasattr(context, "workspace"):
+            raise TypeError("SpatialResolver requires a PlanningContext workspace")
+        world_model_port = getattr(getattr(context, "ports", None), "world_model", None)
+        if not hasattr(context, "kg") and world_model_port is None:
+            raise TypeError("SpatialResolver requires a WorldModel read port")
         self.context = context
         if ground_llm_budget is None:
             from app.spatial.grounding.call_budget import get_ground_llm_budget
@@ -261,7 +262,20 @@ class SpatialResolver:
 
     @property
     def kg(self):
-        return self.context.kg
+        mode = str(getattr(self.context, "world_model_mode", "off") or "off").strip().lower()
+        if mode == "shadow" and getattr(self.context, "world_model_shadow", None) is not None:
+            shadow = self.context.world_model_shadow
+            return getattr(shadow, "read_port", shadow)
+        if mode in {"shadow", "prefer_v2", "v2_only"}:
+            port = getattr(getattr(self.context, "ports", None), "world_model", None)
+            if port is not None:
+                return port
+        kg = getattr(self.context, "kg", None)
+        if kg is None:
+            # A DATA-only composition root may intentionally omit the legacy
+            # KG attribute while still injecting the cognition port.
+            kg = getattr(getattr(self.context, "ports", None), "world_model", None)
+        return getattr(kg, "read_port", kg)
 
     @property
     def constraint_index(self):
@@ -270,6 +284,205 @@ class SpatialResolver:
     @property
     def evidence_graph(self):
         return self.context.evidence_graph
+
+    @staticmethod
+    def _catalog_query_predicates(spec: Any) -> tuple[list[str], dict[str, Any]]:
+        """Return only explicit predicates that can bound DATA recall."""
+
+        terms = [
+            str(value).strip().casefold()
+            for value in (getattr(spec, "semantic_terms", None) or [])
+            if str(value).strip()
+        ]
+        reference = getattr(spec, "reference", None)
+        if reference is not None:
+            label = str(
+                ((getattr(reference, "filter", None) or {}).get("label_contains", ""))
+                or ""
+            ).strip()
+            if label:
+                terms.append(label.casefold())
+        attr_filter = dict(getattr(spec, "attr_filter", None) or {})
+        return list(dict.fromkeys(terms)), attr_filter
+
+    def _catalog_candidate_set(self, spec: Any) -> Any:
+        """Recall geometry from DATA resources without layer/field assumptions."""
+
+        from app.contracts.ground.spatial_reference_contracts import CandidateSet, GeometryRef
+
+        # Context Runtime publishes the canonical name ``data_resource_catalog``.
+        # Keep the two short aliases as a read-only seam for direct composition
+        # and migration callers; none of them changes the DATA contract.
+        catalog = (
+            getattr(self.context, "data_resource_catalog", None)
+            or getattr(self.context, "data_catalog", None)
+            or getattr(self.context, "catalog", None)
+        )
+        snapshot = getattr(catalog, "snapshot", None)
+        if catalog is None or snapshot is None:
+            return CandidateSet()
+        candidates: list[GeometryRef] = []
+        terms, attr_filter = self._catalog_query_predicates(spec)
+        if not terms and not attr_filter:
+            return CandidateSet()
+        for feature in list(getattr(snapshot, "features", ()) or ()):
+            # DATA owns both native and normalized views.  Grounding only
+            # recalls the normalized view; a source CRS that cannot be
+            # transformed therefore remains an explicit unresolved gap.
+            geometry = getattr(feature, "normalized_geometry", None)
+            if not isinstance(geometry, dict):
+                continue
+            attrs = getattr(feature, "raw_attributes", {}) or {}
+            if attr_filter and any(str(attrs.get(key, "")) != str(value) for key, value in attr_filter.items()):
+                continue
+            if terms:
+                haystack = " ".join(
+                    [str(feature.source_feature_ref), str(feature.layer_ref)]
+                    + [str(value) for value in attrs.values() if value is not None and str(value).strip()]
+                ).casefold()
+                if not any(term in haystack for term in terms):
+                    continue
+            try:
+                from shapely.geometry import shape
+
+                parsed = shape(geometry)
+                if parsed.is_empty or not parsed.is_valid:
+                    continue
+                wkt = parsed.wkt
+            except Exception:
+                continue
+            resource_ref = f"resource:{feature.dataset_ref}:{feature.source_feature_ref}"
+            from app.spatial.representation_selection import select_representation
+
+            materialization_role = str(
+                getattr(spec, "materialization_role", "") or ""
+            ).strip()
+            purpose = {
+                "functional_overlay": "statutory_overlap",
+                "protection_overlay": "statutory_overlap",
+                "restoration_overlay": "statutory_overlap",
+                "site_footprint": "execution_geometry",
+                "land_use_assignment": "execution_geometry",
+            }.get(materialization_role, "")
+            if not purpose:
+                scope_kinds = {
+                    "roads": "line",
+                    "facilities": "point",
+                    "hazards": "point",
+                    "parcels": "polygon",
+                    "zones": "polygon",
+                    "waters": "polygon",
+                }
+                required_kind = next(
+                    (
+                        scope_kinds.get(str(scope).strip(), "")
+                        for scope in (getattr(spec, "retrieval_scopes", None) or [])
+                        if scope_kinds.get(str(scope).strip(), "")
+                    ),
+                    "",
+                )
+                purpose = {
+                    "point": "map_label",
+                    "line": "network_path",
+                    "polygon": "execution_geometry",
+                }.get(required_kind, "")
+            else:
+                required_kind = ""
+            representation = select_representation(
+                catalog,
+                feature_ref=str(feature.source_feature_ref),
+                purpose=purpose,
+                required_geometry_kind=required_kind,
+            )
+            candidates.append(GeometryRef(
+                wkt=wkt,
+                crs=str(getattr(feature, "normalized_crs", "EPSG:4326") or "EPSG:4326"),
+                source_crs=str(getattr(feature, "source_crs", "") or ""),
+                normalized_crs=str(getattr(feature, "normalized_crs", "") or ""),
+                source_snapshot_ref=str(getattr(snapshot, "snapshot_id", "") or ""),
+                content_digest=str(getattr(feature, "source_feature_digest", "") or ""),
+                source_feature_id=str(feature.source_feature_ref),
+                representation_ref=str(getattr(representation, "representation_ref", "") or ""),
+                resource_ref=resource_ref,
+                source_ref=resource_ref,
+                source_refs=[resource_ref],
+                feature_kind=str(feature.geometry_kind or "unknown"),
+            ))
+            if len(candidates) >= 64:
+                break
+        return CandidateSet(ref_geometries=candidates)
+
+    def _append_catalog_entity_lineage(
+        self,
+        candidates: Any,
+        evidence_lineage: Dict[str, Any],
+    ) -> None:
+        """Join DATA geometry candidates back to their World Model entities.
+
+        Catalog fallback is intentionally independent of EvidenceGraph.  It
+        still must not lose cognition identity, otherwise a direct generic
+        GROUND query would produce executable geometry with no WorldEntity
+        lineage.  The read port returns bounded rows in V2 and may return
+        typed entities in the legacy adapter, so access is normalized here.
+        """
+
+        finder = getattr(self.kg, "find_entities", None)
+        # In ``world_model_mode=off`` the legacy PlanningKG remains the
+        # compatibility read surface, while Context Runtime may already have
+        # projected the generic DATA catalog into the WorldModelPort.  Prefer
+        # that port when the legacy index cannot answer source-feature joins.
+        port = getattr(getattr(self.context, "ports", None), "world_model", None)
+        port_finder = getattr(port, "find_entities", None)
+        if not callable(finder) and callable(port_finder):
+            finder = port_finder
+        if not callable(finder):
+            return
+
+        def row_value(row: Any, key: str, default: Any = "") -> Any:
+            if isinstance(row, dict):
+                return row.get(key, default)
+            return getattr(row, key, default)
+
+        for reference in list(getattr(candidates, "ref_geometries", None) or []):
+            source_id = str(getattr(reference, "source_feature_id", "") or "").strip()
+            if not source_id:
+                continue
+            try:
+                entities = finder(source_feature_ref=source_id, limit=16) or []
+            except Exception:
+                entities = []
+            if not entities and callable(port_finder) and finder is not port_finder:
+                try:
+                    entities = port_finder(source_feature_ref=source_id, limit=16) or []
+                except Exception:
+                    entities = []
+            entity_refs: list[str] = []
+            part_refs: list[str] = []
+            for entity in entities:
+                entity_ref = str(row_value(entity, "entity_ref") or "").strip()
+                if entity_ref:
+                    entity_refs.append(entity_ref)
+                for part in row_value(entity, "parts", ()) or ():
+                    if str(row_value(part, "source_feature_ref") or "") != source_id:
+                        continue
+                    part_ref = str(row_value(part, "entity_part_ref") or "").strip()
+                    if part_ref:
+                        part_refs.append(part_ref)
+            entity_refs = list(dict.fromkeys(entity_refs))
+            part_refs = list(dict.fromkeys(part_refs))
+            evidence_lineage.setdefault("entity_refs", []).extend(entity_refs)
+            evidence_lineage.setdefault("part_refs", []).extend(part_refs)
+            # A DATA feature may legitimately represent more than one World
+            # Entity.  Keep that closed set on the feature; never turn its
+            # first row into a false identity decision.
+            reference.entity_refs = entity_refs
+            reference.entity_ref = entity_refs[0] if len(entity_refs) == 1 else ""
+            reference.part_refs = part_refs if len(entity_refs) == 1 else []
+            reference.part_ref = (
+                part_refs[0]
+                if len(entity_refs) == 1 and len(part_refs) == 1
+                else ""
+            )
 
     def _bundle_snapshot_digest(self) -> str:
         try:
@@ -451,6 +664,7 @@ class SpatialResolver:
                 "feature_bsms": [],
                 "source_feature_ids": [],
                 "entity_refs": [],
+                "part_refs": [],
                 "relation_refs": [],
                 "l1_fact_refs": [],
                 "l1_snapshot_ref": "",
@@ -526,6 +740,7 @@ class SpatialResolver:
                 "feature_bsms": merged_list("feature_bsms"),
                 "source_feature_ids": merged_list("source_feature_ids"),
                 "entity_refs": merged_list("entity_refs"),
+                "part_refs": merged_list("part_refs"),
                 "relation_refs": merged_list("relation_refs"),
                 "l1_fact_refs": merged_list("l1_fact_refs"),
             }
@@ -565,6 +780,7 @@ class SpatialResolver:
                 feature_bsms=merged_list("feature_bsms"),
                 source_feature_ids=merged_list("source_feature_ids"),
                 entity_refs=merged_list("entity_refs"),
+                part_refs=merged_list("part_refs"),
                 relation_refs=merged_list("relation_refs"),
                 l1_fact_refs=merged_list("l1_fact_refs"),
                 l1_snapshot_ref=(l1_snapshot_refs[0] if len(l1_snapshot_refs) == 1 else ""),
@@ -590,10 +806,13 @@ class SpatialResolver:
         evidence_search_scope: SearchScopeRef | None = None
         selection_meta: list[dict[str, Any]] = []
         selection_unresolved = False
+        catalog_terms, catalog_attr_filter = self._catalog_query_predicates(spec)
+        catalog_query_unbounded = not catalog_terms and not catalog_attr_filter
         evidence_lineage = {
             "feature_bsms": [],
             "source_feature_ids": [],
             "entity_refs": [],
+            "part_refs": [],
             "relation_refs": [],
             "l1_fact_refs": [],
             "l1_snapshot_ref": "",
@@ -768,6 +987,47 @@ class SpatialResolver:
                 and not candidates.ref_geometries
                 and not selection_unresolved
             ):
+                if catalog_query_unbounded:
+                    catalog = (
+                        getattr(self.context, "data_resource_catalog", None)
+                        or getattr(self.context, "data_catalog", None)
+                        or getattr(self.context, "catalog", None)
+                    )
+                    snapshot_ref = str(
+                        getattr(getattr(catalog, "snapshot", None), "snapshot_id", "")
+                        or getattr(spec, "source_snapshot_ref", "")
+                        or ""
+                    )
+                    if evidence_search_scope is None:
+                        evidence_search_scope = self._build_search_scope(
+                            scope_type="unknown",
+                            source="data_resource_catalog",
+                            reason="catalog_query_predicate_required",
+                            provenance_refs=list(
+                                getattr(spec, "l1_fact_refs", None) or []
+                            ),
+                            missing_requirements=[
+                                "bounded_catalog_predicate",
+                                "explicit_feature_identity",
+                            ],
+                            source_snapshot_ref=snapshot_ref,
+                            diagnostics={"catalog_full_scan_blocked": True},
+                        )
+                    provenance["path"] += "+data_resource_catalog:predicate_gap"
+                    provenance["catalog_query_gap"] = "bounded_catalog_predicate"
+                else:
+                    catalog_candidates = self._catalog_candidate_set(spec)
+                    if catalog_candidates.ref_geometries:
+                        candidates = catalog_candidates
+                        provenance["path"] += "+data_resource_catalog"
+                        self._append_catalog_entity_lineage(candidates, evidence_lineage)
+            if (
+                not candidates.bsms
+                and not candidates.ref_bsms
+                and not candidates.ref_geometries
+                and not selection_unresolved
+                and not catalog_query_unbounded
+            ):
                 port = getattr(self.context.ports, "spatial_query", None)
                 if port is not None:
                     run_id = getattr(self.context, "session_id", "") or ""
@@ -899,7 +1159,12 @@ class SpatialResolver:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[SpatialResolver] ambiguous llm resolution failed: %s", exc)
 
-        if not final_bsms and not bbox and not reference_geometries:
+        if (
+            not final_bsms
+            and not bbox
+            and not reference_geometries
+            and search_scope is None
+        ):
             # 不允许留下不可解析的引用（目标 §"不能留又不能解析"）：在 EvidenceGraph
             # 候选内做有界 LLM best-effort 判别；几何/BSM 仍来自 bundle。失败
             # 才保持 unresolved（绝不伪造几何）。
@@ -1001,15 +1266,7 @@ class SpatialResolver:
                 uncertainty_radius_m = _bbox_radius_m(bbox) if bbox else 250.0
 
         if reference_geometries:
-            geometry_types = {
-                str(getattr(ref, "feature_kind", "") or "")
-                for ref in reference_geometries
-            }
-            spatial_domain_kind = (
-                "corridor"
-                if any("line" in value for value in geometry_types)
-                else "exact_feature"
-            )
+            spatial_domain_kind = "exact_feature"
         elif final_bsms:
             spatial_domain_kind = "parcel_extent" if len(final_bsms) == 1 else "parcel_set"
         elif "+geometry:directional_bbox" in path or "+geometry:bbox" in path:
@@ -1040,6 +1297,9 @@ class SpatialResolver:
             )),
             entity_refs=list(dict.fromkeys(
                 str(item) for item in evidence_lineage["entity_refs"] if str(item).strip()
+            )),
+            part_refs=list(dict.fromkeys(
+                str(item) for item in evidence_lineage.get("part_refs", []) if str(item).strip()
             )),
             relation_refs=list(dict.fromkeys(
                 str(item)
@@ -1973,7 +2233,7 @@ class SpatialResolver:
         if packet is None or not getattr(packet, "candidate_refs", None):
             return None
         from app.contracts.ground.spatial_reference_contracts import CandidateSet
-        from app.infrastructure.evidence_runtime.evidence_graph import (
+        from app.infrastructure.ground_runtime.compatibility import (
             geometry_refs_from_evidence_packet,
         )
 
@@ -2041,7 +2301,7 @@ class SpatialResolver:
         not add coordinates or infer a geometry from a semantic mention.
         """
         from app.contracts.evidence.evidence_packet_contracts import EvidencePacket
-        from app.infrastructure.evidence_runtime.evidence_graph import (
+        from app.infrastructure.ground_runtime.compatibility import (
             _kg_relations,
             feature_ref_from_candidate,
         )
@@ -2215,16 +2475,8 @@ class SpatialResolver:
             ),
             diagnostics=dropped_reference_geometry_diagnostics,
         )
-        geometry_types = {
-            str(getattr(ref, "feature_kind", "") or "").casefold()
-            for ref in references
-        }
         if references:
-            spatial_domain_kind = (
-                "corridor"
-                if any("line" in value for value in geometry_types)
-                else "exact_feature"
-            )
+            spatial_domain_kind = "exact_feature"
         elif len(final_bsms) == 1:
             spatial_domain_kind = "parcel_extent"
         elif final_bsms:
@@ -2314,6 +2566,11 @@ class SpatialResolver:
         relation_finder = getattr(kg, "find_relations", None)
         if not callable(finder) or not callable(relation_finder):
             return
+        def row_value(row: Any, key: str, default: Any = "") -> Any:
+            if isinstance(row, dict):
+                return row.get(key, default)
+            return getattr(row, key, default)
+
         reference = getattr(spec, "reference", None)
         filters = getattr(reference, "filter", None) or {}
         label = str(filters.get("label_contains") or "").strip()
@@ -2321,9 +2578,9 @@ class SpatialResolver:
         if label:
             try:
                 anchor_refs.update(
-                    str(getattr(entity, "entity_ref", "") or "").strip()
+                    str(row_value(entity, "entity_ref") or "").strip()
                     for entity in finder(name=label, limit=50) or []
-                    if str(getattr(entity, "entity_ref", "") or "").strip()
+                    if str(row_value(entity, "entity_ref") or "").strip()
                 )
             except Exception:
                 pass
@@ -2332,9 +2589,9 @@ class SpatialResolver:
             if village_name:
                 try:
                     anchor_refs.update(
-                        str(getattr(entity, "entity_ref", "") or "").strip()
+                        str(row_value(entity, "entity_ref") or "").strip()
                         for entity in finder(name=village_name, limit=20) or []
-                        if str(getattr(entity, "entity_ref", "") or "").strip()
+                        if str(row_value(entity, "entity_ref") or "").strip()
                     )
                 except Exception:
                     pass
@@ -2358,9 +2615,9 @@ class SpatialResolver:
             except Exception:
                 entities = []
             target_refs.update(
-                str(getattr(entity, "entity_ref", "") or "").strip()
+                str(row_value(entity, "entity_ref") or "").strip()
                 for entity in entities
-                if str(getattr(entity, "entity_ref", "") or "").strip()
+                if str(row_value(entity, "entity_ref") or "").strip()
             )
         evidence_lineage["entity_refs"].extend([*anchor_refs, *target_refs])
 
@@ -2376,15 +2633,15 @@ class SpatialResolver:
                 except Exception:
                     relations = []
                 for relation in relations:
-                    predicate = str(getattr(relation, "predicate", "") or "")
+                    predicate = str(row_value(relation, "predicate") or "")
                     local_name = predicate.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
                     if local_name != predicate_name:
                         continue
-                    subject_ref = str(getattr(relation, "subject_ref", "") or "")
-                    object_ref = str(getattr(relation, "object_ref", "") or "")
+                    subject_ref = str(row_value(relation, "subject_ref") or "")
+                    object_ref = str(row_value(relation, "object_ref") or "")
                     if target_refs and not ({subject_ref, object_ref} & target_refs):
                         continue
-                    relation_id = str(getattr(relation, "relation_id", "") or "")
+                    relation_id = str(row_value(relation, "relation_id") or "")
                     if relation_id:
                         relation_ids.add(relation_id)
         evidence_lineage["relation_refs"].extend(sorted(relation_ids))
@@ -2873,7 +3130,7 @@ class SpatialResolver:
             return None
         bsms = self._filter_to_bundle(list(getattr(picked, "source_bsms", None) or []))
         from app.contracts.evidence.evidence_packet_contracts import EvidencePacket
-        from app.infrastructure.evidence_runtime.evidence_graph import (
+        from app.infrastructure.ground_runtime.compatibility import (
             feature_ref_from_candidate,
             geometry_refs_from_evidence_packet,
         )

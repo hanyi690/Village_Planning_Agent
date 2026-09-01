@@ -20,7 +20,8 @@ def is_grounding_candidate(candidate: CandidateSite) -> bool:
     Exact point/line references are valid candidates even when they do not
     resolve to a positive-area parcel.  Scope and corridor geometries remain
     candidate-only and cannot be treated as final execution geometry because
-    ``CandidateGeometry.is_executable`` only accepts the execution role.
+    ``CandidateGeometry.is_executable`` only accepts DATA-backed execution
+    representations.
     """
 
     if not bool(getattr(candidate, "candidate_materialization_allowed", True)):

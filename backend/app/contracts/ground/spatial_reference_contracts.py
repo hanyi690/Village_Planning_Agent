@@ -669,14 +669,25 @@ class GeometryRef(BaseModel):
     A target may be backed by more than one source feature (for example a
     retained set of bus stops or a set of existing road segments).  Each
     member stays separate here; callers must not union the records into an
-    executable geometry.  ``source_ref`` is the stable feature/entity
-    lineage, while ``source_bsms`` is optional parcel evidence associated with
-    that feature.
+    executable geometry. ``source_ref`` is the stable feature/entity lineage;
+    ``resource_ref`` and ``representation_ref`` identify DATA-owned resources,
+    while ``source_bsms`` is optional parcel evidence associated with that
+    feature.
     """
     wkt: str = ""
     crs: str = ""
+    source_crs: str = ""
+    normalized_crs: str = ""
+    source_snapshot_ref: str = ""
+    content_digest: str = ""
     bbox: tuple[float, float, float, float] | None = None
     source_feature_id: str = ""
+    entity_ref: str = ""
+    entity_refs: list[str] = Field(default_factory=list)
+    part_ref: str = ""
+    part_refs: list[str] = Field(default_factory=list)
+    representation_ref: str = ""
+    resource_ref: str = ""
     l1_fact_refs: list[str] = Field(default_factory=list)
     source_ref: str = ""
     source_refs: list[str] = Field(default_factory=list)
@@ -686,7 +697,13 @@ class GeometryRef(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    @field_validator("source_refs", "feature_bsms", "source_bsms")
+    @field_validator(
+        "source_refs",
+        "feature_bsms",
+        "source_bsms",
+        "entity_refs",
+        "part_refs",
+    )
     @classmethod
     def _clean_refs(cls, value: list[str]) -> list[str]:
         return list(dict.fromkeys(str(item) for item in value if str(item).strip()))
@@ -740,6 +757,7 @@ class ResolvedSpatialRef:
     feature_bsms: List[str] = field(default_factory=list)
     source_feature_ids: List[str] = field(default_factory=list)
     entity_refs: List[str] = field(default_factory=list)
+    part_refs: List[str] = field(default_factory=list)
     relation_refs: List[str] = field(default_factory=list)
     l1_fact_refs: List[str] = field(default_factory=list)
     l1_snapshot_ref: str = ""

@@ -32,6 +32,14 @@ from app.contracts.l1.l1_contracts import (
     L1InputContext,
     LocationMentionDraft,
 )
+from app.modules.l1.spatial_admission import (
+    evaluate_location_name,
+    evaluate_spatial_entity,
+)
+
+
+_MAX_PROVIDER_REFS = 12
+_MAX_PROVIDER_OBSERVATIONS = 16
 
 
 class L1SourceEvidence(BaseModel):
@@ -42,9 +50,10 @@ class L1SourceEvidence(BaseModel):
     semantic_type: str = ""
     description: str = ""
     target_name: str = ""
-    aliases: list[str] = Field(default_factory=list)
+    aliases: list[str] = Field(default_factory=list, max_length=8)
     spatial_mentions: list[LocationMentionDraft] = Field(
         default_factory=list,
+        max_length=8,
         description=(
             "Explicit semantic place/object work items from this source row; "
             "no coordinates, geometry, BSM, canonical entity IDs or candidates."
@@ -54,12 +63,12 @@ class L1SourceEvidence(BaseModel):
     value: str | int | float | None = None
     unit: str = ""
     counting_basis: str = ""
-    related_observation_ids: list[str] = Field(default_factory=list)
-    constraint_refs: list[str] = Field(default_factory=list)
-    source_feature_ids: list[str] = Field(default_factory=list)
-    source_segment_ids: list[str] = Field(default_factory=list)
+    related_observation_ids: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
+    constraint_refs: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
+    source_feature_ids: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
+    source_segment_ids: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
     source_quote: str = ""
-    source_refs: list[str] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
     confidence: float | None = None
     status: Literal["confirmed", "uncertain", "conflict", "source_exhausted"]
 
@@ -90,9 +99,9 @@ class L1SpatialLocator(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    place_names: list[str] = Field(default_factory=list)
+    place_names: list[str] = Field(default_factory=list, max_length=8)
     relation: str = ""
-    source_feature_ids: list[str] = Field(default_factory=list)
+    source_feature_ids: list[str] = Field(default_factory=list, max_length=_MAX_PROVIDER_REFS)
 
 
 class L1SpatialEntityFact(L1SourceEvidence):
@@ -106,6 +115,15 @@ class L1SpatialEntityFact(L1SourceEvidence):
         _require_non_blank
     )
 
+    @model_validator(mode="after")
+    def validate_spatial_semantics(self) -> "L1SpatialEntityFact":
+        decision = evaluate_spatial_entity(self)
+        if not decision.admitted:
+            raise ValueError(
+                f"l1_spatial_entity_not_admissible:{decision.reason_code}"
+            )
+        return self
+
 
 class L1SpatialRelationFact(L1SourceEvidence):
     fact_type: Literal["spatial_relation"]
@@ -116,6 +134,25 @@ class L1SpatialRelationFact(L1SourceEvidence):
     _validate_required_semantics = field_validator(
         "subject_ref", "predicate", "object_ref"
     )(_require_non_blank)
+
+    @model_validator(mode="after")
+    def validate_spatial_relation_terms(self) -> "L1SpatialRelationFact":
+        for field_name, value in (
+            ("subject_ref", self.subject_ref),
+            ("object_ref", self.object_ref),
+        ):
+            decision = evaluate_location_name(
+                value,
+                relation=self.predicate,
+                source_feature_ids=self.source_feature_ids,
+                source_quote=self.source_quote,
+            )
+            if not decision.admitted:
+                raise ValueError(
+                    "l1_spatial_relation_term_not_admissible:"
+                    f"{field_name}:{decision.reason_code}"
+                )
+        return self
 
 
 class L1ScopedMetricFact(L1SourceEvidence):
@@ -368,6 +405,28 @@ def _quarantine_error_paths(item: Any, exc: Exception) -> list[str]:
     return list(dict.fromkeys([*raw_paths, *[path for path in leaf_paths if path]]))
 
 
+def _quarantine_reason_codes(exc: Exception) -> list[str]:
+    """Recover stable local-admission codes without serializing provider prose."""
+
+    reasons: list[str] = []
+    errors = getattr(exc, "errors", None)
+    if callable(errors):
+        try:
+            rows = errors()
+        except Exception:
+            rows = []
+        for row in rows:
+            message = str(row.get("msg") or "")
+            reasons.extend(
+                re.findall(
+                    r"l1_(?:spatial_entity|spatial_relation_term)_not_admissible:"
+                    r"[a-z0-9_:-]+",
+                    message,
+                )
+            )
+    return list(dict.fromkeys(reasons))
+
+
 @lru_cache(maxsize=None)
 def build_l1_observation_output_model(
     allowed_fact_types: tuple[str, ...],
@@ -410,15 +469,21 @@ def build_l1_observation_output_model(
 
 
 class L1ProviderSourceEvidence(BaseModel):
-    """Provider wire evidence with tolerant transport scalar boundaries."""
+    """Flat provider wire evidence with strict field admission."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     semantic_type: str | None = None
     description: str | None = None
     target_name: str | None = None
     aliases: list[str] | None = None
-    spatial_mentions: list[LocationMentionDraft] = Field(default_factory=list)
+    place_names: list[str] = Field(default_factory=list, max_length=8)
+    location_relation: str = ""
+    location_role: str = "unknown"
+    location_source_feature_ids: list[str] = Field(
+        default_factory=list,
+        max_length=_MAX_PROVIDER_REFS,
+    )
     value: str | int | float | bool | None = None
     unit: str | None = None
     counting_basis: str | None = None
@@ -445,6 +510,8 @@ class L1ProviderSourceEvidence(BaseModel):
             "related_observation_ids",
             "constraint_refs",
             "source_feature_ids",
+            "place_names",
+            "location_source_feature_ids",
             "source_segment_ids",
             "source_refs",
         ):
@@ -452,8 +519,6 @@ class L1ProviderSourceEvidence(BaseModel):
                 payload[field_name] = _decode_json_container(payload[field_name])
             if payload.get(field_name) is None:
                 payload[field_name] = []
-        if payload.get("spatial_mentions") is None:
-            payload["spatial_mentions"] = []
         return payload
 
 
@@ -466,7 +531,7 @@ class L1ProviderObservation(L1ProviderSourceEvidence):
     # known fact_type is selected; a missing/unknown fact_type remains an
     # auditable row-level quarantine case.
     model_config = ConfigDict(
-        extra="ignore",
+        extra="forbid",
         json_schema_extra={
             "allOf": [
                 {
@@ -641,17 +706,19 @@ class L1ObservationProviderOutput(BaseModel):
     semantic output envelope as one contract.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     observations: list[L1ProviderObservation] = Field(
         default_factory=list,
+        max_length=_MAX_PROVIDER_OBSERVATIONS,
         description=(
-            "Only source-backed observation rows from the current page. Each row "
+            "At most 16 source-backed, planning-relevant rows from the current "
+            "page. Each row "
             "must satisfy the conditional required fields described on its fact_type. "
             "Rows with missing conditional fields are rejected locally, not repaired."
         ),
     )
-    diagnostics: list[str] = Field(default_factory=list)
+    diagnostics: list[str] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="before")
     @classmethod
@@ -661,14 +728,10 @@ class L1ObservationProviderOutput(BaseModel):
         if not isinstance(data, dict):
             return data
         payload = dict(data)
-        # A non-object item in the observations array is provider wire noise,
-        # not an observation.  Drop it at the wire boundary so it cannot be
-        # mistaken for a fact; the source/fact validators remain responsible
-        # for accepting or quarantining actual observation objects.
-        if isinstance(payload.get("observations"), list):
-            payload["observations"] = [
-                item for item in payload["observations"] if isinstance(item, dict)
-            ]
+        if isinstance(payload.get("observations"), list) and any(
+            not isinstance(item, dict) for item in payload["observations"]
+        ):
+            raise TypeError("L1 provider observation rows must be objects")
         if "observations" in payload:
             payload["observations"] = _normalize_sequence_container(
                 payload.get("observations", []),
@@ -853,6 +916,8 @@ def _normalize_provider_observation(
         "description",
         "target_name",
         "source_quote",
+        "location_relation",
+        "location_role",
     ):
         payload[field_name] = _provider_string(payload.get(field_name))
     for field_name in (
@@ -860,6 +925,8 @@ def _normalize_provider_observation(
         "related_observation_ids",
         "constraint_refs",
         "source_feature_ids",
+        "place_names",
+        "location_source_feature_ids",
         "source_segment_ids",
         "source_refs",
     ):
@@ -921,6 +988,127 @@ def _normalize_provider_observation(
         payload["spatial_requirement"] = "none"
     if fact_type == "constraint" and payload.get("strength") is None:
         payload["strength"] = "unknown"
+    location_feature_ids = payload.get("location_source_feature_ids") or []
+    place_names: list[str] = []
+    for place_name in payload.get("place_names") or []:
+        admission = evaluate_location_name(
+            place_name,
+            role=payload.get("location_role") or "unknown",
+            relation=payload.get("location_relation") or "",
+            source_feature_ids=location_feature_ids,
+            source_quote=payload.get("source_quote") or "",
+        )
+        if admission.admitted:
+            place_names.append(place_name)
+            continue
+        diagnostics.append(
+            f"l1_location_mention_not_admissible:{ordinal}:"
+            f"{admission.reason_code}:{_payload_digest(place_name)[:12]}"
+        )
+    payload["place_names"] = list(dict.fromkeys(place_names))
+    if fact_type in {"spatial_entity", "demand", "constraint", "risk", "opportunity"}:
+        payload["locator"] = {
+            "place_names": place_names,
+            "relation": payload.get("location_relation") or "",
+            "source_feature_ids": location_feature_ids,
+        }
+    target_label = _provider_string(
+        payload.get("target_name")
+        or payload.get("name")
+        or payload.get("subject")
+        or payload.get("demand_type")
+        or payload.get("constraint_type")
+        or payload.get("subject_ref")
+    )
+    spatial_mentions: list[dict[str, Any]] = []
+    if fact_type == "spatial_entity" and target_label:
+        spatial_mentions.append({
+            "mention_kind": "target",
+            "mention": target_label,
+            "target_name": target_label,
+            "role": payload.get("location_role") or "unknown",
+            "scope_mentions": [
+                {
+                    "name": place_name,
+                    "role": payload.get("location_role") or "unknown",
+                    "relation_to_target": payload.get("location_relation") or "located_in",
+                    "source_quote": payload.get("source_quote") or "",
+                    "source_refs": payload.get("source_refs") or [],
+                    "source_segment_ids": payload.get("source_segment_ids") or [],
+                    "confidence": payload.get("confidence") or 0.0,
+                }
+                for place_name in place_names
+            ],
+            "relation": payload.get("location_relation") or "located_in",
+            "resolution_state": "needs_retrieval",
+            "aliases": payload.get("aliases") or [],
+            "source_feature_ids": location_feature_ids,
+            "provenance": {
+                "source_refs": payload.get("source_refs") or [],
+                "source_segment_ids": payload.get("source_segment_ids") or [],
+                "source_quote": payload.get("source_quote") or "",
+            },
+        })
+    elif fact_type == "spatial_relation":
+        relation_places = list(dict.fromkeys(
+            value
+            for value in (
+                payload.get("subject_ref"),
+                payload.get("object_ref"),
+            )
+            if value
+        ))
+        for place_name in relation_places:
+            is_subject = place_name == payload.get("subject_ref")
+            spatial_mentions.append({
+                "mention_kind": "place",
+                "mention": place_name,
+                "target_name": place_name,
+                "role": payload.get("location_role") or "unknown",
+                "scope_mentions": [],
+                "relation": (
+                    payload.get("location_relation") or ""
+                    if is_subject else ""
+                ),
+                "related_mentions": [
+                    value
+                    for value in relation_places
+                    if is_subject and value != place_name
+                ],
+                "resolution_state": "needs_retrieval",
+                "aliases": [],
+                "source_feature_ids": location_feature_ids,
+                "provenance": {
+                    "source_refs": payload.get("source_refs") or [],
+                    "source_segment_ids": payload.get("source_segment_ids") or [],
+                    "source_quote": payload.get("source_quote") or "",
+                },
+            })
+    elif place_names and (
+        fact_type in {"constraint", "risk", "opportunity"}
+        or (
+            fact_type == "demand"
+            and payload.get("spatial_requirement") != "none"
+        )
+    ):
+        for place_name in dict.fromkeys(place_names):
+            spatial_mentions.append({
+                "mention_kind": "place",
+                "mention": place_name,
+                "target_name": place_name,
+                "role": payload.get("location_role") or "place",
+                "scope_mentions": [],
+                "relation": payload.get("location_relation") or "located_in",
+                "resolution_state": "needs_retrieval",
+                "aliases": [],
+                "source_feature_ids": location_feature_ids,
+                "provenance": {
+                    "source_refs": payload.get("source_refs") or [],
+                    "source_segment_ids": payload.get("source_segment_ids") or [],
+                    "source_quote": payload.get("source_quote") or "",
+                },
+            })
+    payload["spatial_mentions"] = spatial_mentions
     common_fields = {
         "fact_type",
         "semantic_type",
@@ -1145,6 +1333,7 @@ class L1ObservationPassOutput(BaseModel):
                 diagnostics.append(
                     f"l1_observation_record_invalid:{index}:{issue_count}"
                 )
+                diagnostics.extend(_quarantine_reason_codes(exc))
                 quarantined.append(
                     QuarantinedObservation(
                         ordinal=index,

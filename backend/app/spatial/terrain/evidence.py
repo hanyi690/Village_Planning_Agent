@@ -87,16 +87,44 @@ def resolve_dem_source(
             return _ResolvedTerrainSource(path=path, origin="planning_context")
 
     if catalog is not None:
-        source = catalog.find_source_by_layer_type("dem")
-        if source is not None:
-            result = source.fetch()
-            if bool(getattr(result, "success", False)):
-                catalog_path = _path_from_raster_ref(getattr(result, "data", None))
-                if not catalog_path:
-                    catalog_path = str(getattr(result, "path", "") or "")
-                path = Path(catalog_path).expanduser().resolve()
-                if path.is_file():
-                    return _ResolvedTerrainSource(path=path, origin="catalog")
+        # The legacy ``DataCatalog`` exposes a provider driver while the
+        # generic DATA catalog exposes immutable features/representations.
+        # Keep both behind this resolver instead of making SELECT construct a
+        # legacy catalog (which silently reintroduced Bundle coupling).
+        finder = getattr(catalog, "find_source_by_layer_type", None)
+        if callable(finder):
+            source = finder("dem")
+            if source is not None:
+                result = source.fetch()
+                if bool(getattr(result, "success", False)):
+                    catalog_path = _path_from_raster_ref(getattr(result, "data", None))
+                    if not catalog_path:
+                        catalog_path = str(getattr(result, "path", "") or "")
+                    path = Path(catalog_path).expanduser().resolve()
+                    if path.is_file():
+                        return _ResolvedTerrainSource(path=path, origin="catalog")
+
+        # Generic raster rows carry their path as a source attribute.  DATA
+        # does not prescribe a field name, so only accept an explicit,
+        # path-like value and never infer a file from a layer label alone.
+        snapshot = getattr(catalog, "snapshot", catalog)
+        for feature in tuple(getattr(snapshot, "features", ()) or ()):
+            if str(getattr(feature, "geometry_kind", "") or "").casefold() != "raster":
+                continue
+            attributes = getattr(feature, "raw_attributes", {}) or {}
+            candidate = (
+                attributes.get("path")
+                or attributes.get("file_path")
+                or attributes.get("raster_path")
+                or attributes.get("uri")
+                or attributes.get("source_uri")
+            )
+            candidate_path = _path_from_raster_ref(candidate)
+            if not candidate_path or "://" in candidate_path:
+                continue
+            path = Path(candidate_path).expanduser().resolve()
+            if path.is_file():
+                return _ResolvedTerrainSource(path=path, origin="data_resource_catalog")
 
     if explicit_path is not None:
         if not allowed_roots:
