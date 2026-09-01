@@ -54,6 +54,14 @@ data/
 data/gis/jintian/output/
 !backend/app/modules/gis/data/
 !backend/app/data/
+!backend/app/contracts/data/
+!backend/app/contracts/data/**
+!backend/app/modules/data/
+!backend/app/modules/data/**
+backend/app/contracts/data/**/__pycache__/
+backend/app/contracts/data/**/*.py[cod]
+backend/app/modules/data/**/__pycache__/
+backend/app/modules/data/**/*.py[cod]
 
 results/
 
@@ -157,6 +165,9 @@ backend/scripts/_chain_out.txt
 .graphify_python
 .graphify_detect.json
 .graphify_incremental.json
+.graphify_design_cached.json
+.graphify_design_detect.json
+.graphify_design_uncached.txt
 graphify-out/
 
 # Real-LLM session debug logs

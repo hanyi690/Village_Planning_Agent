@@ -14,13 +14,20 @@
   → DeliverySpatialSnapshot → API / SSE / 地图 / 导出
 ```
 
-根图入口是 `backend/app/workflow/root_graph.py`，FastAPI 入口是
+根图入口是 `backend/app/workflow/graph.py`，FastAPI 入口是
 `backend/app/main.py`。当前实现、总体设计和验收证据分开维护：
 
 - 当前代码入口、四段主图和边界：[docs/architecture/CURRENT_RUNTIME.md](docs/architecture/CURRENT_RUNTIME.md)
 - API/SSE/resume/state：[docs/architecture/API_AND_STATE.md](docs/architecture/API_AND_STATE.md)
 - 启动、RAG/embedding 退化和测试：[docs/architecture/OPERATIONS.md](docs/architecture/OPERATIONS.md)
 - 总体设计基线：[docs/design/00_SYSTEM_DESIGN.md](docs/design/00_SYSTEM_DESIGN.md)
+- 初期认知闭环的模块实现细节：[DATA](docs/design/DATA_EXECUTABLE_DESIGN.md)、
+  [L1](docs/design/01_CONTRACTS_AND_INVARIANTS.md)、[L1-GROUND](docs/design/L1_GROUND_EXECUTABLE_DESIGN.md)、
+  [Evidence](docs/design/04_EVIDENCE.md)、[Cognition/World Model](docs/design/07_COGNITIVE_WORLD_MODEL_AND_DYNAMIC_GIS.md)
+- 规划编译与接地：[Target Projection](docs/design/05_PROJECTION_AND_GROUND.md)、
+  [Planning Ground](docs/design/PLANNING_GROUND_EXECUTABLE_DESIGN.md)
+- P0/P1/P2 成熟度验收：[docs/design/acceptance/README.md](docs/design/acceptance/README.md)
+- 跨模块 Gate、写入权和增量协议：[docs/design/10_MODULE_LEVEL_EXECUTABLE_DESIGN.md](docs/design/10_MODULE_LEVEL_EXECUTABLE_DESIGN.md)
 - 当前到目标的唯一迁移清单：[docs/design/05_MIGRATION.md](docs/design/05_MIGRATION.md)
 - 生成的 API 契约：[docs/contracts/openapi-v1.json](docs/contracts/openapi-v1.json)
 - 稳定术语：[docs/reference/terminology.md](docs/reference/terminology.md)
