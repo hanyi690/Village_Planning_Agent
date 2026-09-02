@@ -65,7 +65,7 @@ class L1WorldProjectionSnapshot(ContractMeta):
     """Receipt for committing L1 identity cognition into the World Model.
 
     Observation and binding snapshots remain replay/audit sidecars.  Later
-    planning stages validate this receipt and query the bounded WorldModelPort
+    planning stages validate this receipt and query the bounded current-world
     projection; they do not deserialize those complete sidecars into prompts.
     """
 

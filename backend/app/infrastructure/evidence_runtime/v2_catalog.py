@@ -111,30 +111,16 @@ def _identity_terms(requirement: EvidenceRequirement) -> list[str]:
     return list(dict.fromkeys(values))[:8]
 
 
-def _world_model_port(context: Any) -> Any:
-    """Return the KG read surface for this V2 retrieval invocation.
-
-    In ``shadow`` mode the legacy KG remains the V1 comparison authority, but
-    this module is explicitly the V2 DATA→KG path and must query the shadow
-    World Model KG.  ``prefer_v2``/``v2_only`` use the context's normal V2
-    port.  Keeping this choice here prevents a silent cross-version identity
-    join.
-    """
-
-    mode = _text(getattr(context, "world_model_mode", "")).casefold()
-    if mode == "shadow":
-        shadow = getattr(context, "world_model_shadow", None)
-        shadow_port = getattr(shadow, "read_port", shadow)
-        if callable(getattr(shadow_port, "find_entities", None)):
-            return shadow_port
-    port = getattr(getattr(context, "ports", None), "world_model", None)
-    if port is None:
-        world_model = getattr(context, "world_model", None)
-        port = getattr(world_model, "read_port", world_model)
-    if port is None:
-        kg = getattr(context, "kg", None)
-        port = getattr(kg, "read_port", kg)
-    return port
+def _current_world_port(context: Any) -> Any:
+    """Return the only world-model capability allowed to V2 reads."""
+    current_port = getattr(context, "current_world", None)
+    if current_port is None:
+        current_port = getattr(
+            getattr(context, "ports", None),
+            "current_world",
+            None,
+        )
+    return current_port
 
 
 def _match(feature: Any, requirement: EvidenceRequirement) -> bool:
@@ -556,7 +542,7 @@ def _kg_entities_by_feature(
     store and for the migration adapter without exposing RDF to callers.
     """
 
-    port = _world_model_port(context)
+    port = _current_world_port(context)
     finder = getattr(port, "find_entities", None)
     if not callable(finder):
         return {}
@@ -695,7 +681,7 @@ def _kg_feature_refs(
 ) -> set[tuple[str, str]]:
     """Resolve semantic names/types through the World Model without loading geometry."""
 
-    port = _world_model_port(context)
+    port = _current_world_port(context)
     finder = getattr(port, "find_entities", None)
     if not callable(finder):
         return set()
@@ -1038,10 +1024,7 @@ def retrieve_catalog_evidence(
         if identity_projection["group_count"] > 1 or external_identity_ambiguous
         else "unresolved"
     )
-    world_model = getattr(context, "world_model", None)
-    if _text(getattr(context, "world_model_mode", "")).casefold() == "shadow":
-        world_model = getattr(context, "world_model_shadow", None) or world_model
-    world_model = world_model or getattr(context, "kg", None)
+    world_model = _current_world_port(context)
     packet = EvidencePacket(
         request="; ".join(_text(item.statement) for item in requirements),
         bundle_snapshot_digest="",

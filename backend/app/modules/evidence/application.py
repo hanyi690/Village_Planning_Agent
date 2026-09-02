@@ -305,9 +305,7 @@ class EvidenceContext(BaseModel):
     world_model_mode: str = "off"
     data_catalog: Any = None
     external_observation_snapshot: Any = None
-    world_model: Any = None
-    world_model_shadow: Any = None
-    kg: Any = None
+    current_world: Any = None
     kg_version: str = ""
     l1_snapshot_ref: str = ""
 
@@ -515,8 +513,8 @@ class EvidenceContext(BaseModel):
                 for item in getattr(catalog_snapshot, "representations", ()) or ()
             ):
                 capabilities.update({"local_spatial_evidence", "metric_source"})
-        world_model = state.get("world_model")
-        if world_model is None and cached_context is not None:
+        world_model = None
+        if cached_context is not None:
             world_model = (
                 getattr(cached_context, "world_model", None)
                 or getattr(cached_context, "world_model_shadow", None)
@@ -590,6 +588,15 @@ class EvidenceContext(BaseModel):
         if world_model is not None:
             sources.add("kg")
             capabilities.update({"identity_evidence", "source_evidence"})
+        current_world = state.get("current_world")
+        if current_world is None and cached_context is not None:
+            current_world = getattr(
+                getattr(cached_context, "ports", None),
+                "current_world",
+                None,
+            )
+        if current_world is None and world_model is not None:
+            current_world = getattr(world_model, "current_world", None)
         reports = state.get("reports")
         if reports is None and cached_context is not None:
             reports = getattr(cached_context, "reports", None)
@@ -669,23 +676,7 @@ class EvidenceContext(BaseModel):
             world_model_mode=world_model_mode,
             data_catalog=data_catalog,
             external_observation_snapshot=external_snapshot,
-            world_model=world_model,
-            world_model_shadow=(
-                state.get("world_model_shadow")
-                or (
-                    getattr(cached_context, "world_model_shadow", None)
-                    if cached_context is not None
-                    else None
-                )
-            ),
-            kg=(
-                state.get("kg")
-                or (
-                    getattr(cached_context, "kg", None)
-                    if cached_context is not None
-                    else None
-                )
-            ),
+            current_world=current_world,
             kg_version=str(
                 state.get("kg_version")
                 or (
@@ -741,9 +732,11 @@ class EvidenceContext(BaseModel):
                 "external_observation_snapshot",
                 None,
             ),
-            "world_model": getattr(context, "world_model", None),
-            "world_model_shadow": getattr(context, "world_model_shadow", None),
-            "kg": getattr(context, "kg", None),
+            "current_world": getattr(
+                getattr(context, "ports", None),
+                "current_world",
+                None,
+            ),
             "kg_version": str(getattr(context, "kg_version", "") or ""),
             "l1_snapshot_ref": str(
                 getattr(context, "l1_snapshot_ref", "") or ""
@@ -1986,21 +1979,13 @@ class EvidenceApplication:
         return source_descriptors(source_features)
 
     def install_source_semantic_snapshot(self, context: Any, snapshot: Any) -> None:
-        """Install an accepted, current-session semantic overlay."""
+        """Install a local source-semantic overlay without mutating WM."""
 
         from app.infrastructure.evidence_runtime.source_semantic import (
             install_source_semantic_snapshot,
         )
 
         install_source_semantic_snapshot(context, snapshot)
-        commit = getattr(getattr(context, "ports", None), "world_model_commit", None)
-        commit_semantics = getattr(commit, "commit_semantic_decisions", None)
-        if callable(commit_semantics) and str(
-            getattr(context, "world_model_mode", "off") or "off"
-        ).strip().lower() in {"shadow", "prefer_v2", "v2_only"}:
-            outcome = commit_semantics(snapshot)
-            if str(outcome.get("status") or "") == "aborted":
-                raise RuntimeError("world-model semantic decision commit aborted")
 
     def accepted_semantic_decisions(self, snapshot: Any) -> dict[str, Any]:
         """Return only accepted decisions from a persisted semantic snapshot."""

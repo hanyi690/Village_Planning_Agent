@@ -314,6 +314,9 @@ def test_l1_identity_status_is_resolved_for_one_entity_with_many_representations
     }
 
     class WorldModelPort:
+        snapshot_ref = "world-model://session/2/digest"
+        snapshot_digest = "digest"
+
         def find_entities(self, **kwargs):
             return [entity_row]
 
@@ -334,7 +337,7 @@ def test_l1_identity_status_is_resolved_for_one_entity_with_many_representations
             ]
 
     context = SimpleNamespace(
-        ports=SimpleNamespace(world_model=WorldModelPort()),
+        ports=SimpleNamespace(current_world=WorldModelPort()),
         world_model=SimpleNamespace(
             snapshot_ref="world-model://session/2/digest",
             snapshot_digest="digest",
@@ -430,7 +433,7 @@ def test_l1_ground_binds_fuzzy_phrase_without_promoting_it_to_entity():
             }]
 
     context = SimpleNamespace(
-        ports=SimpleNamespace(world_model=WorldModelPort()),
+        ports=SimpleNamespace(current_world=WorldModelPort()),
         world_model=SimpleNamespace(
             snapshot_ref="world-model://session/1/digest",
             snapshot_digest="world-digest",
@@ -555,7 +558,7 @@ def test_l1_ground_relative_location_keeps_scope_and_gap_semantics():
         ),
     ]
     context = SimpleNamespace(
-        ports=SimpleNamespace(world_model=WorldModelPort()),
+        ports=SimpleNamespace(current_world=WorldModelPort()),
         world_model=SimpleNamespace(
             snapshot_ref="world-model://session/1/digest",
             snapshot_digest="world-digest",

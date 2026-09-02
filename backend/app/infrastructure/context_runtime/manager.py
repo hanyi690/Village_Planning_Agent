@@ -399,7 +399,7 @@ def context_has_cognition_ports(
     ports = getattr(context, "ports", None)
     return bool(
         model is not None
-        and getattr(ports, "world_model", None) is not None
+        and getattr(ports, "current_world", None) is not None
         and getattr(ports, "world_model_commit", None) is not None
     )
 
@@ -669,8 +669,12 @@ async def build_planning_context(
     world_model = None
     world_model_shadow = None
     kg_error: Optional[str] = None
-    # Every normalized DATA catalog also gets a cognition World Model handle.
-    if data_resource_catalog is not None and not defer_cognition_bootstrap:
+    # Build the store once. The old implementation performed the same cached
+    # lookup again for v2 modes, which obscured the authority boundary.
+    if (
+        data_resource_catalog is not None
+        and not defer_cognition_bootstrap
+    ):
         try:
             from app.infrastructure.cognition_runtime.world_model_store import (
                 get_world_model_store,
@@ -685,46 +689,16 @@ async def build_planning_context(
                 artifact_root=artifact_root,
                 expected_snapshot_digest=str(expected_world_model_digest or ""),
             )
+            if world_model_mode == "shadow":
+                world_model_shadow = world_model
+            else:
+                kg = world_model
+                kg_session_ref = world_model.session_ref
+                kg_version = world_model.version
         except Exception as exc:
             kg_error = type(exc).__name__
             logger.warning(
                 "[PlanningContext] generic World Model build failed: %s",
-                type(exc).__name__,
-            )
-
-    # Shadow/prefer_v2/v2_only all build the DATA-backed World Model graph.
-    # Prefer/v2 deliberately skip the legacy session KG path so parcel
-    # fields cannot become a hidden prerequisite for cognition or commits.
-    if (
-        not defer_cognition_bootstrap
-        and world_model_mode in {"shadow", "prefer_v2", "v2_only"}
-        and data_resource_catalog is not None
-    ):
-        try:
-            from app.infrastructure.cognition_runtime.world_model_store import (
-                get_world_model_store,
-            )
-
-            world_model_store = get_world_model_store(
-                session_id,
-                resolved_village,
-                data_resource_catalog,
-                schema_mapping_snapshot=schema_mapping_snapshot,
-                schema_mapping_artifact_ref=schema_mapping_artifact_ref,
-                artifact_root=artifact_root,
-                expected_snapshot_digest=str(expected_world_model_digest or ""),
-            )
-            world_model = world_model_store
-            if world_model_mode == "shadow":
-                world_model_shadow = world_model_store
-            else:
-                kg = world_model_store
-                kg_session_ref = world_model_store.session_ref
-                kg_version = world_model_store.version
-        except Exception as exc:
-            kg_error = type(exc).__name__
-            logger.warning(
-                "[PlanningContext] DATA world-model KG build failed: %s",
                 type(exc).__name__,
             )
 
@@ -735,7 +709,8 @@ async def build_planning_context(
     gazetteer_port = None
     spatial_query_port = None
     semantic_query_port = None
-    world_model_port = None
+    current_world_port = None
+    network_retry_port = None
     world_model_commit_port = None
     try:
         if gazetteer is not None:
@@ -768,60 +743,57 @@ async def build_planning_context(
             type(e).__name__,
         )
     try:
-        # ``world_model`` is the canonical cognition graph. Always expose a
-        # read port for that graph.
+        # Current consumers receive the explicitly scoped source/world view.
         world_model_for_port = world_model or (
             world_model_shadow if world_model_mode == "shadow" else None
         ) or kg
         if world_model_for_port is not None:
-            from app.infrastructure.kg.adapters.world_model_adapter import KGWorldModelAdapter
+            current_world_port = getattr(
+                world_model_for_port,
+                "current_world",
+                None,
+            )
+            if current_world_port is None:
+                raise RuntimeError(
+                    "DATA-backed World Model has no CurrentWorldQueryPort"
+                )
+            from app.infrastructure.kg.adapters.world_model_adapter import (
+                KGWorldModelAdapter,
+            )
 
-            world_model_port = KGWorldModelAdapter(world_model_for_port)
+            network_retry_port = KGWorldModelAdapter(
+                world_model_for_port
+            ).build_network_retry_adapter()
     except Exception as e:
         logger.warning(
             "[PlanningContext] world_model adapter build failed: %s",
             type(e).__name__,
         )
-    if world_model_port is None and world_model_mode == "shadow" and world_model_shadow is not None:
-        from app.infrastructure.kg.adapters.world_model_adapter import KGWorldModelAdapter
-
-        world_model_port = KGWorldModelAdapter(world_model_shadow)
     try:
         world_model_for_commit = world_model or (
             world_model_shadow if world_model_mode == "shadow" else None
         )
         if world_model_for_commit is not None or kg is not None:
-            from app.infrastructure.kg.adapters.world_model_commit_adapter import (
-                KGWorldModelCommitAdapter,
-            )
-
             if world_model_mode == "shadow" and world_model_shadow is not None:
                 world_model_commit_port = world_model_shadow
-            elif world_model_mode in {"prefer_v2", "v2_only"}:
-                world_model_commit_port = world_model_for_commit or kg
-            elif world_model_for_commit is not None and kg is None:
-                # Generic DATA-only/off sessions still need a write surface
-                # for accepted semantic decisions and planned lineage.
-                world_model_commit_port = world_model_for_commit
             else:
-                world_model_commit_port = KGWorldModelCommitAdapter(
-                    kg,
-                    session_id=session_id,
-                )
+                world_model_commit_port = world_model_for_commit or kg
     except Exception as e:
         logger.warning(
             "[PlanningContext] world_model commit adapter build failed: %s",
             type(e).__name__,
         )
-    # The DATA-backed graph is a valid write surface for intent, semantic
-    # assertions and planned lineage in a cold-start session.
+    # The DATA-backed graph is a valid write surface for intent and planned
+    # lineage in a cold-start session. Current assertions remain a later
+    # Cognition transaction concern.
     if world_model_mode == "shadow" and world_model_shadow is not None:
         world_model_commit_port = world_model_shadow
     ports = PlanningPorts(
         gazetteer=gazetteer_port,
         spatial_query=spatial_query_port,
         semantic_query=semantic_query_port,
-        world_model=world_model_port,
+        current_world=current_world_port,
+        network_retry=network_retry_port,
         world_model_commit=world_model_commit_port,
     )
     # 4. Constraint index

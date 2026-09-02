@@ -28,6 +28,7 @@ from rdflib import BNode, Dataset, Literal, RDF, URIRef
 from rdflib.plugins.serializers.trig import TrigSerializer
 
 from app.infrastructure.kg.adapters.source_catalog_adapter import project_source_catalog
+from app.infrastructure.kg.adapters.current_world_adapter import CurrentWorldQueryAdapter
 from app.infrastructure.kg.adapters.world_model_adapter import KGWorldModelAdapter
 from app.infrastructure.kg.ontology import GEO, PLN, PLN_NS
 from app.infrastructure.logging import get_logger
@@ -52,10 +53,17 @@ IDENTITY_GRAPH = URIRef("urn:planning:graph:identity-binding")
 # ontology/schema changes can alter entity/representation semantics while the
 # source bytes remain identical.  Bump the code marker whenever the
 # source-catalog projection changes in a non-backward-compatible way.
-WORLD_MODEL_PROJECTION_VERSION = "source-catalog-projection-v9"
-WORLD_MODEL_SCHEMA_VERSION = "world-model-trig-v10"
-WORLD_MODEL_CODE_VERSION = "world-model-store-v10"
+WORLD_MODEL_PROJECTION_VERSION = "source-catalog-projection-v11"
+WORLD_MODEL_SCHEMA_VERSION = "world-model-trig-v12"
+WORLD_MODEL_CODE_VERSION = "world-model-store-v12"
 WORLD_MODEL_DIGEST_ALGORITHM = "sha256-sorted-rdflib-n3-quads-v1"
+_VIEW_METADATA_PREDICATES = frozenset({
+    PLN.worldModelVersion,
+    PLN.worldModelProjectionVersion,
+    PLN.worldModelSchemaVersion,
+    PLN.worldModelCodeVersion,
+    PLN.worldModelDigestAlgorithm,
+})
 
 
 class _RoundTripTrigSerializer(TrigSerializer):
@@ -87,6 +95,27 @@ def _stable_graph_digest(dataset: Dataset) -> str:
                 raise RuntimeError(
                     "World Model persistence requires stable URI/Literal terms; "
                     "blank nodes are not permitted"
+                )
+            rows.append(json.dumps(
+                [term.n3() for term in terms],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ))
+    return hashlib.sha256("\n".join(sorted(rows)).encode("utf-8")).hexdigest()
+
+
+def _stable_context_digest(*contexts: Any) -> str:
+    """Digest only the named graphs that form one logical view."""
+
+    rows: list[str] = []
+    for context in contexts:
+        for subject, predicate, obj in context:
+            if predicate in _VIEW_METADATA_PREDICATES:
+                continue
+            terms = (context.identifier, subject, predicate, obj)
+            if any(isinstance(term, BNode) for term in terms):
+                raise RuntimeError(
+                    "World Model view persistence requires stable terms"
                 )
             rows.append(json.dumps(
                 [term.n3() for term in terms],
@@ -195,6 +224,11 @@ class WorldModelKGStore:
                     raise RuntimeError(
                         "world-model initial CAS conflict could not be reloaded"
                     ) from exc
+        self.current_world = CurrentWorldQueryAdapter(self)
+        self.current_world_port = self.current_world
+        # The generic adapter remains private to the store's deferred
+        # identity/intent write implementation. Current-view consumers are
+        # wired to ``current_world`` by Context Runtime.
         self.read_port = KGWorldModelAdapter(self)
         logger.info(
             "[WorldModelKGStore] initialized session=%s restored=%s triples=%d "
@@ -214,6 +248,12 @@ class WorldModelKGStore:
 
     def _graph_digest(self) -> str:
         return _stable_graph_digest(self.g)
+
+    @property
+    def current_world_digest(self) -> str:
+        """Digest of source + current world view, excluding planned state."""
+
+        return _stable_context_digest(self.source_graph, self.world_graph)
 
     def _snapshot_quads(self) -> list[tuple[Any, Any, Any, Any]]:
         return [
@@ -611,11 +651,34 @@ class WorldModelKGStore:
             schema_mapping_ref=self.schema_mapping_artifact_ref,
             schema_mapping_digest=self.schema_mapping_digest,
             graph_digest=self.snapshot_digest,
-            entity_refs=tuple(sorted(str(item) for item in self.g.subjects(RDF.type, PLN.WorldEntity))),
-            representation_refs=tuple(sorted(str(item) for item in self.g.subjects(RDF.type, PLN.SpatialRepresentation))),
+            current_world_digest=self.current_world_digest,
+            source_record_refs=tuple(sorted(
+                str(item)
+                for item in self.source_graph.subjects(
+                    RDF.type,
+                    PLN.SourceRecord,
+                )
+            )),
+            entity_refs=tuple(sorted(
+                str(item)
+                for item in self.world_graph.subjects(
+                    RDF.type,
+                    PLN.WorldEntity,
+                )
+            )),
+            representation_refs=tuple(sorted(
+                str(item)
+                for item in self.world_graph.subjects(
+                    RDF.type,
+                    PLN.SpatialRepresentation,
+                )
+            )),
             assertion_refs=tuple(sorted(
                 str(item)
-                for item in self.g.subjects(RDF.type, PLN.SemanticAssertion)
+                for item in self.assertion_graph.subjects(
+                    RDF.type,
+                    PLN.SemanticAssertion,
+                )
             )),
             identity_binding_refs=tuple(sorted(
                 str(item)
@@ -633,7 +696,6 @@ class WorldModelKGStore:
             self.source_graph,
             self.catalog,
             world_graph=self.world_graph,
-            assertion_graph=self.assertion_graph,
             schema_mapping_snapshot=self.schema_mapping_snapshot,
         )
         session_node = URIRef(f"{PLN_NS}session_{_digest(self.session_ref)[:24]}")
@@ -1650,55 +1712,6 @@ class WorldModelKGStore:
                 accepted=len(prepared),
                 snapshot=snapshot,
             )
-
-    def commit_semantic_decisions(self, snapshot: Any) -> dict[str, Any]:
-        """Persist verified source semantic decisions as reversible assertions."""
-
-        decisions = list(getattr(snapshot, "decisions", ()) or ())
-        if not decisions:
-            return {"status": "noop", "committed": True, "written": 0, "world_model_version": self.version, "world_model_snapshot_ref": self.snapshot_ref}
-        with self._write_lock:
-            graph_snapshot = self._snapshot_quads()
-            previous_version, previous_digest, previous_descriptor = self.version, self.snapshot_digest, self._descriptor_digest
-            try:
-                written = 0
-                for decision in decisions:
-                    source_id = _text(getattr(decision, "source_feature_id", ""))
-                    status = _text(getattr(decision, "status", ""))
-                    semantic_type = _text(getattr(decision, "semantic_type", ""))
-                    if not source_id or not semantic_type or status not in {"accepted", "ambiguous", "unresolved"}:
-                        continue
-                    entities = self.find_entities(source_feature_ref=source_id, limit=8)
-                    if not entities:
-                        continue
-                    for entity in entities:
-                        entity_ref = _text(entity.get("entity_ref"))
-                        subject = URIRef(entity_ref)
-                        self.assertion_graph.add((subject, PLN.semanticType, Literal(semantic_type)))
-                        self.assertion_graph.add((subject, PLN.semanticStatus, Literal(status)))
-                        candidate_ref = _text(getattr(decision, "candidate_ref", ""))
-                        if candidate_ref:
-                            self.assertion_graph.add((subject, PLN.semanticCandidateRef, Literal(candidate_ref)))
-                        written += 1
-            except Exception as exc:
-                self._restore_quads(graph_snapshot)
-                return {"status": "aborted", "committed": False, "error_type": type(exc).__name__}
-            if not written:
-                return {"status": "noop", "committed": True, "written": 0, "world_model_version": self.version, "world_model_snapshot_ref": self.snapshot_ref}
-            self.version += 1
-            self._write_version_marker()
-            self.snapshot_digest = self._graph_digest()
-            try:
-                self._persist_snapshot(parent_descriptor=previous_descriptor)
-            except Exception as exc:
-                self._recover_after_commit_failure(
-                    graph_snapshot,
-                    version=previous_version,
-                    snapshot_digest=previous_digest,
-                    descriptor_digest=previous_descriptor,
-                )
-                return {"status": "aborted", "committed": False, "error_type": type(exc).__name__}
-            return {"status": "committed", "committed": True, "written": written, "world_model_version": self.version, "world_model_snapshot_ref": self.snapshot_ref}
 
     def _validate_planned_lineage(self, payload: dict[str, Any]) -> None:
         """Reject foreign DATA/KG references before writing planned graph."""

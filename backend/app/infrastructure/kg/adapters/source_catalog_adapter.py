@@ -412,7 +412,6 @@ def project_source_catalog(
     catalog: Any,
     *,
     world_graph: Graph | None = None,
-    assertion_graph: Graph | None = None,
     schema_mapping_snapshot: Any = None,
 ) -> int:
     """Add source-backed WorldEntity/Representation nodes without fixed layers."""
@@ -449,17 +448,18 @@ def project_source_catalog(
     source_record_nodes: dict[tuple[str, str], Any] = {}
     for feature in snapshot.features:
         source_record = _uri(
-            "source_feature_record",
+            "source_record",
             f"{feature.dataset_ref}:{feature.source_feature_ref}",
         )
         source_record_nodes[_source_feature_key(
             feature.dataset_ref,
             feature.source_feature_ref,
         )] = source_record
-        graph.add((source_record, RDF.type, PLN.SourceFeatureRecord))
+        graph.add((source_record, RDF.type, PLN.SourceRecord))
         graph.add((source_record, PLN.sourceFeatureRef, Literal(feature.source_feature_ref)))
         graph.add((source_record, PLN.sourceFeatureDigest, Literal(feature.source_feature_digest)))
         graph.add((source_record, PLN.sourceDatasetRef, Literal(feature.dataset_ref)))
+        graph.add((source_record, PLN.sourceSnapshotRef, Literal(snapshot.snapshot_id)))
         dataset_node = dataset_nodes.get(feature.dataset_ref)
         if dataset_node is not None:
             graph.add((source_record, PLN.sourceDataset, dataset_node))
@@ -481,8 +481,8 @@ def project_source_catalog(
             graph.add((source_record, PLN.normalizedCrs, Literal(feature.normalized_crs)))
         graph.add((source_record, PLN.geometryKind, Literal(feature.geometry_kind)))
 
+    source_graph = graph
     graph = world_graph if world_graph is not None else graph
-    assertions = assertion_graph if assertion_graph is not None else graph
     spatial_features = [
         feature
         for feature in snapshot.features
@@ -578,11 +578,10 @@ def project_source_catalog(
             for transform in getattr(feature, "crs_transform", ()) or ():
                 graph.add((part, PLN.crsTransform, Literal(str(transform))))
             # Lossless physical fields stay in DATA and are addressed through
-            # this part's sourceResourceRef. Duplicating every raw/unmapped
-            # value as a SemanticAssertion made the graph scale with the
-            # source schema rather than with accepted cognition. Collection
-            # mapping decisions carry unresolved-field status; only accepted
-            # normalized claims are materialized below.
+            # this part's sourceResourceRef. Normalized source claims also
+            # stay in SOURCE_GRAPH: they describe what DATA admitted, not a
+            # Cognition-approved world fact. Only a later decision transaction
+            # may create a SemanticAssertion in ASSERTION_GRAPH.
             for key, value in sorted((feature.normalized_claims or {}).items(), key=lambda item: str(item[0])):
                 if value in (None, "", [], {}):
                     continue
@@ -590,15 +589,14 @@ def project_source_catalog(
                     "normalized_claim",
                     f"{feature.dataset_ref}:{feature.source_feature_ref}:{key}",
                 )
-                assertions.add((part, PLN.hasNormalizedClaim, claim))
-                assertions.add((claim, RDF.type, PLN.SemanticAssertion))
-                assertions.add((claim, PLN.assertionStatus, Literal("accepted")))
-                assertions.add((claim, PLN.confidence, Literal(1.0)))
-                assertions.add((claim, PLN.sourceFeatureRef, Literal(feature.source_feature_ref)))
-                assertions.add((claim, PLN.sourceDatasetRef, Literal(feature.dataset_ref)))
-                assertions.add((claim, PLN.sourceFeatureDigest, Literal(feature.source_feature_digest)))
-                assertions.add((claim, PLN.claimKey, Literal(str(key))))
-                assertions.add((claim, PLN.claimValue, Literal(str(value))))
+                source_graph.add((source_record, PLN.hasNormalizedSourceClaim, claim))
+                source_graph.add((claim, RDF.type, PLN.NormalizedSourceClaim))
+                source_graph.add((claim, PLN.sourceFeatureRef, Literal(feature.source_feature_ref)))
+                source_graph.add((claim, PLN.sourceDatasetRef, Literal(feature.dataset_ref)))
+                source_graph.add((claim, PLN.sourceSnapshotRef, Literal(snapshot.snapshot_id)))
+                source_graph.add((claim, PLN.sourceFeatureDigest, Literal(feature.source_feature_digest)))
+                source_graph.add((claim, PLN.claimKey, Literal(str(key))))
+                source_graph.add((claim, PLN.claimValue, Literal(str(value))))
             for representation in representation_by_feature.get(source_key, []):
                 rep_node = _uri("representation", representation.representation_ref)
                 graph.add((part, PLN.hasSpatialRepresentation, rep_node))

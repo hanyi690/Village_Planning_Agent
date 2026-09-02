@@ -42,7 +42,7 @@ PlannedEntity
 | assertion | 已有 candidate/accepted/ambiguous/rejected/superseded contract | 补齐所有状态转移、decision、valid time 与 projection rebuild |
 | identity commit | 已有 frozen envelope 和 typed commit result | 扩展为通用 proposal commit transaction |
 | merge/split | 当前主要依赖构建/投影逻辑 | 改为 supersede 旧 assertion + 新 assertion + projection rebuild |
-| query port | 已有 bounded entity/representation/relation/binding query | 拆成 typed Current/Intent/Planned views |
+| query port | WM v0 已有 bounded CurrentWorld entity/source/representation query；旧 whole-graph adapter 仅供内部延后能力使用 | 拆成 typed Current/Intent/Planned views |
 | indexes | 已有 KG 和部分 projection/cache | 明确 snapshot-scoped lifecycle 与 dependency digest |
 |多进程 writer | 当前有 CAS，主要按 session/branch 使用 | 明确数据库 CAS/lease/advisory lock 的部署实现 |
 
@@ -52,7 +52,7 @@ PlannedEntity
 
 | Graph | 内容 | 允许写入者 | 允许读取者 |
 |---|---|---|---|
-| source | source record、raw attribute/geometry refs | DATA bootstrap adapter | Cognition、Evidence |
+| source | source record、normalized source claim、raw attribute/geometry refs | DATA bootstrap adapter | Cognition、Evidence |
 | assertion | proposal、decision、状态和 supersedes | Cognition transaction | Cognition、审计 |
 | world | accepted assertion 的确定性投影 | Cognition projector | L1/L2/L3/Evidence/GROUND/SELECT |
 | intent | admitted planning intent | Cognition intent commit adapter | GROUND/SELECT/EXECUTE |
@@ -71,8 +71,15 @@ L1/L2/L3/Evidence/L1-GROUND 只注入 <code>CurrentWorldQueryPort</code>；它�
 planned graph。Planning GROUND 同时读取 current 和 intent，但不能读取 planned。VALIDATE
 可同时读取三种 view，但保持命名空间。
 
-当前 <code>WorldModelPort</code> 是迁移期统一只读端口；adapter 必须先按 view 过滤，之后再
-拆分协议。不得仅靠调用方约定“不要查 planned”。
+DATA 的 normalized claim 属于 source plane：它记录 DATA 已接纳的标准化值，
+不代表 Cognition 已批准的现实世界事实。因此它只能作为
+<code>NormalizedSourceClaim</code> 写入 source graph；只有 Cognition decision
+transaction 才能在 assertion graph 创建 <code>SemanticAssertion</code>，并由
+accepted projection 更新 world graph。
+
+当前 <code>WorldModelPort</code> 仅作为迁移期 infrastructure 内部协议保留；它不注入
+Evidence、L1 或 GROUND，也不属于 WM v0 的 current-view capability。adapter 必须先按 view
+过滤，之后再拆分协议。不得仅靠调用方约定“不要查 planned”。
 
 ## 4. Source、Entity、Part 与 Representation
 
@@ -499,7 +506,7 @@ modules/cognition/schema_understanding.py
 modules/cognition/validation.py
 infrastructure/cognition_runtime/world_model_store.py
 infrastructure/kg/adapters/source_catalog_adapter.py
-infrastructure/kg/adapters/world_model_commit_adapter.py
+infrastructure/kg/adapters/current_world_adapter.py
 infrastructure/context_runtime/cognition_projection.py
 ~~~
 

@@ -16,6 +16,8 @@ class SessionWorldModelSnapshot(StrictContractModel):
     parent_snapshot_ref: str = ""
     parent_snapshot_digest: str = ""
     graph_digest: str
+    current_world_digest: str = ""
+    source_record_refs: tuple[str, ...] = ()
     entity_refs: tuple[str, ...] = ()
     representation_refs: tuple[str, ...] = ()
     assertion_refs: tuple[str, ...] = ()

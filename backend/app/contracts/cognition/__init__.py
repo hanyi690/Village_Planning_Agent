@@ -37,7 +37,7 @@ from .stage_contracts import (
     L1WorldProjectionSnapshot,
 )
 from .shadow_diff import CognitionShadowDiff, ShadowDiffItem
-from .source import SourceCatalogSnapshot, SourceCollectionSnapshot, SourceFeatureRecord
+from .source import SourceCatalogSnapshot, SourceCollectionSnapshot, SourceRecord
 
 __all__ = [
     "EntityPart",
@@ -68,7 +68,7 @@ __all__ = [
     "SourceFieldProfile",
     "SourceCatalogSnapshot",
     "SourceCollectionSnapshot",
-    "SourceFeatureRecord",
+    "SourceRecord",
     "SpatialRepresentation",
     "SourceSemanticMappingSnapshot",
     "WorldEntity",

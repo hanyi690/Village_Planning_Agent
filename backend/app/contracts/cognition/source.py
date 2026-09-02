@@ -20,13 +20,20 @@ class SourceGeometryFieldProfile(StrictContractModel):
     crs_refs: tuple[str, ...] = ()
 
 
-class SourceFeatureRecord(StrictContractModel):
+class SourceRecord(StrictContractModel):
+    """Immutable source-side record admitted into the WM current snapshot."""
+
     source_record_ref: str
-    collection_ref: str
-    source_feature_id: str
-    attributes_ref: str
-    geometry_refs: tuple[str, ...] = ()
-    content_digest: str
+    dataset_ref: str
+    collection_ref: str = ""
+    source_feature_ref: str
+    source_snapshot_ref: str
+    raw_attribute_ref: str = ""
+    source_geometry_refs: tuple[str, ...] = ()
+    valid_time: str = ""
+    input_role: str = "current_evidence"
+    admission_status: str = "admitted"
+    source_digest: str
 
 
 class SourceCollectionSnapshot(StrictContractModel):
@@ -49,7 +56,7 @@ class SourceCatalogSnapshot(StrictContractModel):
 __all__ = [
     "SourceCatalogSnapshot",
     "SourceCollectionSnapshot",
-    "SourceFeatureRecord",
+    "SourceRecord",
     "SourceFieldProfile",
     "SourceGeometryFieldProfile",
 ]

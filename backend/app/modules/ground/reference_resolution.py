@@ -493,13 +493,10 @@ def _is_location_work_item(mention: Any) -> bool:
     return not any(name.endswith(suffix) for suffix in _NON_SPATIAL_NAME_SUFFIXES)
 
 
-def _world_model_port(context: Any) -> Any:
-    port = getattr(getattr(context, "ports", None), "world_model", None)
-    if str(getattr(context, "world_model_mode", "off") or "off").strip().lower() == "shadow":
-        shadow = getattr(context, "world_model_shadow", None)
-        if shadow is not None:
-            port = getattr(shadow, "read_port", shadow)
-    return port
+def _current_world_port(context: Any) -> Any:
+    """Return the only world-model capability allowed to Ground reads."""
+    current_port = getattr(getattr(context, "ports", None), "current_world", None)
+    return current_port
 
 
 def _catalog_location_index(
@@ -580,12 +577,8 @@ def _binding_from_entity_rows(
     match_mode: str,
     evidence_refs: list[str] | None = None,
 ) -> GroundedEntityBinding:
-    port = _world_model_port(context)
-    world_model = (
-        getattr(context, "world_model", None)
-        or getattr(context, "world_model_shadow", None)
-        or port
-    )
+    port = _current_world_port(context)
+    world_model = port
     world_model_snapshot_ref = str(
         getattr(world_model, "snapshot_ref", "") or ""
     )
@@ -758,7 +751,7 @@ def _bind_relative_location_expressions(
 
     if not bindings:
         return []
-    port = _world_model_port(context)
+    port = _current_world_port(context)
     mention_by_ref: dict[str, Any] = {}
     for index, mention in enumerate(mentions):
         mention_ref = (
@@ -998,7 +991,7 @@ def _resolve_l1_catalog_mentions(
     """Resolve L1 places immediately through indexed DATA/KG identities."""
 
     catalog = getattr(context, "data_resource_catalog", None)
-    port = _world_model_port(context)
+    port = _current_world_port(context)
     exact_index, alias_index = _catalog_location_index(
         context, catalog
     )

@@ -380,15 +380,14 @@ def _kg_retry_adapter(state: Any, gis_data: Mapping[str, Any]) -> Tuple[Optional
     composition, while normal workflow execution uses the current port.
     """
 
-    world_model = getattr(getattr(state, "ports", None), "world_model", None)
-    builder = getattr(world_model, "build_network_retry_adapter", None)
-    if not callable(builder):
+    retry_adapter = getattr(
+        getattr(state, "ports", None),
+        "network_retry",
+        None,
+    )
+    if retry_adapter is None:
         return None, None
-    try:
-        return builder(), "world_model_port"
-    except (TypeError, ValueError) as exc:
-        logger.warning("[road_execute] Ignoring incompatible world-model retry port: %s", type(exc).__name__)
-        return None, None
+    return retry_adapter, "network_retry_port"
 
 
 def _write_bundle_layers(root: Path, gis_data: Mapping[str, Any]) -> Tuple[Path, ...]:

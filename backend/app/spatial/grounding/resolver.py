@@ -236,9 +236,19 @@ class SpatialResolver:
     ):
         if not hasattr(context, "workspace"):
             raise TypeError("SpatialResolver requires a PlanningContext workspace")
-        world_model_port = getattr(getattr(context, "ports", None), "world_model", None)
-        if not hasattr(context, "kg") and world_model_port is None:
-            raise TypeError("SpatialResolver requires a WorldModel read port")
+        current_world_port = getattr(
+            getattr(context, "ports", None),
+            "current_world",
+            None,
+        )
+        mode = str(
+            getattr(context, "world_model_mode", "off") or "off"
+        ).strip().lower()
+        if current_world_port is None and (
+            mode in {"shadow", "prefer_v2", "v2_only"}
+            or not getattr(context, "kg", None)
+        ):
+            raise TypeError("SpatialResolver requires a CurrentWorldQueryPort")
         self.context = context
         if ground_llm_budget is None:
             from app.spatial.grounding.call_budget import get_ground_llm_budget
@@ -263,18 +273,9 @@ class SpatialResolver:
     @property
     def kg(self):
         mode = str(getattr(self.context, "world_model_mode", "off") or "off").strip().lower()
-        if mode == "shadow" and getattr(self.context, "world_model_shadow", None) is not None:
-            shadow = self.context.world_model_shadow
-            return getattr(shadow, "read_port", shadow)
         if mode in {"shadow", "prefer_v2", "v2_only"}:
-            port = getattr(getattr(self.context, "ports", None), "world_model", None)
-            if port is not None:
-                return port
+            return getattr(getattr(self.context, "ports", None), "current_world", None)
         kg = getattr(self.context, "kg", None)
-        if kg is None:
-            # A DATA-only composition root may intentionally omit the legacy
-            # KG attribute while still injecting the cognition port.
-            kg = getattr(getattr(self.context, "ports", None), "world_model", None)
         return getattr(kg, "read_port", kg)
 
     @property
@@ -428,10 +429,9 @@ class SpatialResolver:
 
         finder = getattr(self.kg, "find_entities", None)
         # In ``world_model_mode=off`` the legacy PlanningKG remains the
-        # compatibility read surface, while Context Runtime may already have
-        # projected the generic DATA catalog into the WorldModelPort.  Prefer
-        # that port when the legacy index cannot answer source-feature joins.
-        port = getattr(getattr(self.context, "ports", None), "world_model", None)
+        # compatibility read surface. In v2, source-feature joins use only
+        # the explicitly scoped current-world port.
+        port = getattr(getattr(self.context, "ports", None), "current_world", None)
         port_finder = getattr(port, "find_entities", None)
         if not callable(finder) and callable(port_finder):
             finder = port_finder

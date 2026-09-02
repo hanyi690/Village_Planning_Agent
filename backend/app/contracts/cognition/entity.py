@@ -13,7 +13,24 @@ class WorldEntity(StrictContractModel):
     entity_ref: str
     concept_refs: tuple[str, ...] = ()
     canonical_name: str = ""
+    canonical_label: str = ""
     aliases: tuple[str, ...] = ()
+    valid_time: str = ""
+    identity_status: Literal[
+        "provisional",
+        "resolved",
+        "ambiguous",
+        "superseded",
+    ] = "provisional"
+    semantic_status: Literal[
+        "unresolved",
+        "accepted",
+        "ambiguous",
+        "superseded",
+    ] = "unresolved"
+    capabilities: tuple[str, ...] = ()
+    accepted_assertion_refs: tuple[str, ...] = ()
+    supporting_source_refs: tuple[str, ...] = ()
     lifecycle_state: Literal["observed", "planned", "superseded"] = "observed"
 
 
@@ -21,6 +38,8 @@ class EntityPart(StrictContractModel):
     part_ref: str
     entity_ref: str
     source_record_refs: tuple[str, ...] = ()
+    valid_time: str = ""
+    geometry_kind: str = "unknown"
     lifecycle_state: Literal["observed", "planned", "superseded"] = "observed"
 
 

@@ -18,6 +18,42 @@ from app.contracts.cognition.query import (
 )
 
 
+class CurrentWorldQueryPort(Protocol):
+    """Bounded read-only view of the current DATA-backed world snapshot.
+
+    Implementations must read source records from the source graph and world
+    entities/parts/representations from the world graph. This protocol does
+    not expose assertion, intent, planned, identity, RDF, or network APIs.
+    """
+
+    def find_source_records(
+        self,
+        *,
+        source_record_ref: str = "",
+        source_feature_ref: str = "",
+        dataset_ref: str = "",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]: ...
+
+    def find_entities(
+        self,
+        *,
+        identity: str = "",
+        entity_ref: str = "",
+        source_feature_ref: str = "",
+        name: str = "",
+        entity_type: str = "",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]: ...
+
+    def representations_for(
+        self,
+        entity_ref: str,
+        *,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]: ...
+
+
 class WorldModelPort(Protocol):
     """Read-only KG identity/representation/relation surface.
 
@@ -84,8 +120,6 @@ class WorldModelCommitPort(Protocol):
 
     def commit_changeset(self, changeset: Any) -> dict[str, Any]: ...
 
-    def commit_semantic_decisions(self, snapshot: Any) -> dict[str, Any]: ...
-
     def commit_identity_bindings(
         self,
         envelope: IdentityBindingCommitEnvelope,
@@ -101,4 +135,4 @@ class WorldModelCommitPort(Protocol):
         ...
 
 
-__all__ = ["WorldModelPort", "WorldModelCommitPort"]
+__all__ = ["CurrentWorldQueryPort", "WorldModelPort", "WorldModelCommitPort"]

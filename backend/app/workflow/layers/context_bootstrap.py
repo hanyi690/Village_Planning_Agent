@@ -519,7 +519,7 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
                 or ""
             )
             # In V2 the sidecars are commit/replay inputs, not PlanningContext
-            # payloads.  L2/L3 retrieve bounded rows through WorldModelPort.
+            # payloads. L2/L3 retrieve bounded rows through a typed world view.
             context.l1_fact_records = []
             context.location_mentions = []
             context.location_facts = []
