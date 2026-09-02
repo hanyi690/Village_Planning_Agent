@@ -840,88 +840,6 @@ class WorldModelKGStore:
                 "world_model_snapshot_ref": self.snapshot_ref,
             }
 
-    def commit_changeset(self, changeset: Any) -> dict[str, Any]:
-        """Apply a validated cognition changeset to its named graph atomically."""
-
-        with self._write_lock:
-            payload = _model_dict(changeset)
-            parent = _text(payload.get("parent_snapshot_ref"))
-            if parent and parent != self.snapshot_ref:
-                return {"status": "aborted", "committed": False, "error_type": "stale_parent_snapshot"}
-            source_ref = _text(payload.get("source_snapshot_ref"))
-            if source_ref and source_ref not in {self.data_digest, _text(getattr(self.catalog.snapshot, "snapshot_id", ""))}:
-                return {"status": "aborted", "committed": False, "error_type": "foreign_source_snapshot"}
-            changes = payload.get("changes") or []
-            if not changes:
-                return {"status": "noop", "committed": True, "written": 0, "world_model_version": self.version, "world_model_snapshot_ref": self.snapshot_ref}
-            graph_snapshot = self._snapshot_quads()
-            previous_version, previous_digest, previous_descriptor = self.version, self.snapshot_digest, self._descriptor_digest
-            try:
-                for raw_change in changes:
-                    change = _model_dict(raw_change)
-                    operation = _text(change.get("operation"))
-                    subject_ref = _text(change.get("subject_ref"))
-                    if not subject_ref:
-                        raise ValueError("world model change requires subject_ref")
-                    subject = URIRef(subject_ref) if subject_ref.startswith(("http://", "https://", "urn:")) else URIRef(f"{PLN_NS}entity_{_digest(subject_ref)[:24]}")
-                    if operation == "upsert_entity":
-                        self.world_graph.add((subject, RDF.type, PLN.WorldEntity))
-                        self.world_graph.add((subject, PLN.entityIdentity, Literal(subject_ref)))
-                    elif operation == "upsert_part":
-                        entity_ref = _text(change.get("object_ref"))
-                        entities = self.find_entities(entity_ref=entity_ref, limit=1)
-                        if not entity_ref or not entities:
-                            raise ValueError("part change requires an existing entity")
-                        entity_node = URIRef(str(entities[0]["entity_ref"]))
-                        self.world_graph.add((subject, RDF.type, PLN.EntityPart))
-                        self.world_graph.add((subject, PLN.partOf, entity_node))
-                        self.world_graph.add((entity_node, PLN.hasEntityPart, subject))
-                    elif operation == "upsert_representation":
-                        entity_ref = _text(change.get("object_ref"))
-                        entities = self.find_entities(entity_ref=entity_ref, limit=1)
-                        if not entity_ref or not entities:
-                            raise ValueError("representation change requires an existing entity_ref")
-                        entity_node = URIRef(str(entities[0]["entity_ref"]))
-                        representation_ref = _text(change.get("representation_ref"))
-                        geometry_ref = _text(change.get("value"))
-                        if not representation_ref or not geometry_ref:
-                            raise ValueError("representation change requires representation_ref and geometry_ref")
-                        rep = URIRef(f"{PLN_NS}representation_{_digest(representation_ref)[:24]}")
-                        self.world_graph.add((rep, RDF.type, PLN.SpatialRepresentation))
-                        self.world_graph.add((rep, PLN.representationRef, Literal(representation_ref)))
-                        self.world_graph.add((rep, PLN.geometryRef, Literal(geometry_ref)))
-                        self.world_graph.add((rep, PLN.entityRef, Literal(entity_ref)))
-                        self.world_graph.add((entity_node, PLN.hasSpatialRepresentation, rep))
-                    elif operation == "assert":
-                        predicate = _text(change.get("predicate"))
-                        if not predicate:
-                            raise ValueError("assert change requires predicate")
-                        value = _text(change.get("object_ref") or change.get("value"))
-                        if not value:
-                            raise ValueError("assert change requires object_ref or value")
-                        self.assertion_graph.add((subject, URIRef(f"{PLN_NS}{predicate}"), Literal(value)))
-                    elif operation == "planned":
-                        self.planned_graph.add((subject, RDF.type, PLN.PlannedFeature))
-                    else:
-                        raise ValueError(f"unsupported world model operation: {operation}")
-            except Exception as exc:
-                self._restore_quads(graph_snapshot)
-                return {"status": "aborted", "committed": False, "error_type": type(exc).__name__}
-            self.version += 1
-            self._write_version_marker()
-            self.snapshot_digest = self._graph_digest()
-            try:
-                self._persist_snapshot(parent_descriptor=previous_descriptor)
-            except Exception as exc:
-                self._recover_after_commit_failure(
-                    graph_snapshot,
-                    version=previous_version,
-                    snapshot_digest=previous_digest,
-                    descriptor_digest=previous_descriptor,
-                )
-                return {"status": "aborted", "committed": False, "error_type": type(exc).__name__}
-            return {"status": "committed", "committed": True, "written": len(changes), "world_model_version": self.version, "world_model_snapshot_ref": self.snapshot_ref}
-
     def commit_identity_bindings(self, envelope: Any) -> Any:
         """Replace the current L1 identity assertion plane atomically.
 
@@ -1511,110 +1429,162 @@ class WorldModelKGStore:
                 world_model_snapshot=snapshot,
             )
 
-    def commit_proposal_batch(self, batch: Any) -> Any:
-        """Validate and atomically commit accepted semantic proposals.
+    def commit_assertion_transaction(
+        self,
+        request: Any,
+        proposals: tuple[Any, ...],
+        decisions: tuple[Any, ...],
+    ) -> Any:
+        """Apply one Cognition decision group to the current-world projection.
 
-        Proposal validation happens before the graph snapshot is mutated.  A
-        failed validation or CAS publication restores the exact previous
-        graph, while a replay of the same batch fingerprint is a typed noop.
-        Planned and intent graphs are deliberately untouched by this method.
+        The request carries only closed references.  Proposal and decision
+        values are revalidated at this boundary before they are recorded in
+        the assertion graph.  No proposal status is accepted as authority;
+        only a matching ``AssertionDecisionArtifact(ACCEPT)`` can project a
+        current-world triple.
         """
 
         from app.contracts.cognition.proposals import (
-            WorldModelCommitResult,
-            WorldModelProposalBatch,
+            AssertionCommitRequest,
+            AssertionDecisionArtifact,
+            AssertionProposal,
+            WorldModelCommitReceipt,
         )
 
+        old_current_digest = self.current_world_digest
+        old_snapshot_digest = self.snapshot_digest
         try:
-            typed = WorldModelProposalBatch.model_validate(batch)
+            typed_request = AssertionCommitRequest.model_validate(request)
+            typed_proposals = tuple(
+                AssertionProposal.model_validate(item) for item in proposals
+            )
+            typed_decisions = tuple(
+                AssertionDecisionArtifact.model_validate(item) for item in decisions
+            )
+            transaction_fingerprint = "sha256:" + semantic_checksum({
+                "request": typed_request,
+                "proposals": typed_proposals,
+                "decisions": typed_decisions,
+            })
         except Exception as exc:
-            return WorldModelCommitResult(
-                status="rejected",
-                committed=False,
-                error_type=f"invalid_proposal_batch:{type(exc).__name__}",
+            return WorldModelCommitReceipt(
+                status="invalid_request",
+                old_current_world_digest=old_current_digest,
+                new_current_world_digest=old_current_digest,
+                old_world_model_snapshot_digest=old_snapshot_digest,
+                new_world_model_snapshot_digest=old_snapshot_digest,
+                error_type=f"invalid_transaction:{type(exc).__name__}",
             )
 
-        proposal_fingerprint = "sha256:" + semantic_checksum(typed)
-        parent_ref = typed.parent_world_model_snapshot_ref
-        parent_digest = typed.parent_world_model_snapshot_digest
+        parent_ref = typed_request.expected_parent_snapshot
+        parent_digest = typed_request.expected_current_world_digest
 
-        def result(
+        def receipt(
             status: str,
             *,
             committed: bool = False,
-            written: int = 0,
-            accepted: int = 0,
-            rejected: int = 0,
             error_type: str = "",
             snapshot: Any = None,
+            accepted: tuple[str, ...] = (),
+            ambiguous: tuple[str, ...] = (),
+            rejected: tuple[str, ...] = (),
+            affected_entities: tuple[str, ...] = (),
+            affected_relations: tuple[str, ...] = (),
+            affected_representations: tuple[str, ...] = (),
         ) -> Any:
-            current = snapshot or self.snapshot_contract().model_copy(update={
-                "parent_snapshot_ref": parent_ref,
-                "parent_snapshot_digest": parent_digest,
-            })
-            return WorldModelCommitResult(
+            return WorldModelCommitReceipt(
                 status=status,
                 committed=committed,
-                batch_ref=typed.batch_ref,
-                proposal_fingerprint=proposal_fingerprint,
-                written=written,
-                accepted=accepted,
-                rejected=rejected,
+                parent=parent_ref,
+                child=(snapshot.snapshot_ref if snapshot is not None else ""),
+                accepted_assertion_refs=accepted,
+                ambiguous_assertion_refs=ambiguous,
+                rejected_assertion_refs=rejected,
+                affected_entity_refs=affected_entities,
+                affected_relation_refs=affected_relations,
+                affected_representation_refs=affected_representations,
+                old_current_world_digest=old_current_digest,
+                new_current_world_digest=(
+                    snapshot.current_world_digest
+                    if snapshot is not None
+                    else self.current_world_digest
+                ),
+                old_world_model_snapshot_digest=old_snapshot_digest,
+                new_world_model_snapshot_digest=self.snapshot_digest,
+                transaction_fingerprint=transaction_fingerprint,
                 error_type=error_type,
-                parent_world_model_snapshot_ref=parent_ref,
-                parent_world_model_snapshot_digest=parent_digest,
-                world_model_snapshot_ref=self.snapshot_ref,
-                world_model_snapshot_digest=self.snapshot_digest,
                 world_model_version=self.version,
-                world_model_snapshot=current,
+                world_model_snapshot=snapshot,
             )
 
         with self._write_lock:
             marker = URIRef(
-                f"{PLN_NS}proposal_batch_{_digest(typed.batch_ref)[:24]}"
+                f"{PLN_NS}cognition_commit_{_digest(transaction_fingerprint)[:24]}"
             )
-            existing = _text(
-                self.assertion_graph.value(marker, PLN.proposalFingerprint)
-            )
-            if existing == proposal_fingerprint:
-                return result("noop", committed=True)
+            existing = _text(self.assertion_graph.value(
+                marker,
+                URIRef(f"{PLN_NS}transactionFingerprint"),
+            ))
+            if existing == transaction_fingerprint:
+                current = self.snapshot_contract().model_copy(update={
+                    "parent_snapshot_ref": parent_ref,
+                    "parent_snapshot_digest": parent_digest,
+                })
+                return receipt("noop", committed=True, snapshot=current)
             if parent_ref != self.snapshot_ref:
-                return result("stale_parent", error_type="stale_parent_ref")
-            if parent_digest != self.snapshot_digest:
-                return result("stale_parent", error_type="stale_parent_digest")
-            if any(item.status != "PROPOSED" for item in typed.proposals):
-                return result(
-                    "rejected",
-                    rejected=len(typed.proposals),
-                    error_type="proposal_status_must_be_PROPOSED",
-                )
+                return receipt("stale_parent", error_type="stale_parent_snapshot")
+            if parent_digest != self.current_world_digest:
+                return receipt("stale_parent", error_type="stale_current_world_digest")
 
-            proposal_refs = [item.proposal_ref for item in typed.proposals]
-            if len(proposal_refs) != len(set(proposal_refs)):
-                return result("rejected", rejected=len(typed.proposals), error_type="duplicate_proposal_ref")
+            proposal_by_ref = {item.proposal_ref: item for item in typed_proposals}
+            decision_by_ref = {item.decision_ref: item for item in typed_decisions}
+            if len(proposal_by_ref) != len(typed_proposals):
+                return receipt("invalid_request", error_type="duplicate_proposal_ref")
+            if len(decision_by_ref) != len(typed_decisions):
+                return receipt("invalid_request", error_type="duplicate_decision_ref")
+            if set(proposal_by_ref) != set(typed_request.proposal_refs):
+                return receipt("invalid_request", error_type="proposal_refs_not_closed")
+            if set(decision_by_ref) != set(typed_request.decision_refs):
+                return receipt("invalid_request", error_type="decision_refs_not_closed")
+            if len(proposal_by_ref) != len(decision_by_ref):
+                return receipt("invalid_request", error_type="proposal_decision_cardinality")
 
-            prepared: list[tuple[Any, Any, Any, Any]] = []
-            for proposal in typed.proposals:
-                entities = self.find_entities(entity_ref=proposal.subject_ref, limit=1)
-                if not entities:
-                    return result(
-                        "rejected",
-                        rejected=len(typed.proposals),
-                        error_type="foreign_proposal_subject",
-                    )
+            decision_by_proposal: dict[str, Any] = {}
+            for decision in typed_decisions:
+                if decision.proposal_ref not in proposal_by_ref:
+                    return receipt("invalid_request", error_type="foreign_decision_proposal")
+                if decision.proposal_ref in decision_by_proposal:
+                    return receipt("invalid_request", error_type="multiple_decisions_for_proposal")
+                decision_by_proposal[decision.proposal_ref] = decision
+            if set(decision_by_proposal) != set(proposal_by_ref):
+                return receipt("invalid_request", error_type="missing_decision")
+            if any(
+                proposal.parent_current_world_digest != parent_digest
+                for proposal in typed_proposals
+            ):
+                return receipt("invalid_request", error_type="proposal_parent_digest_mismatch")
+            if any(
+                decision.parent_current_world_digest != parent_digest
+                for decision in typed_decisions
+            ):
+                return receipt("invalid_request", error_type="decision_parent_digest_mismatch")
+            if len({proposal.subject_ref for proposal in typed_proposals}) > 1:
+                return receipt("invalid_request", error_type="commit_group_must_have_one_subject")
+
+            prepared: list[tuple[Any, Any, Any, Any, Any]] = []
+            for proposal in typed_proposals:
+                if not self.find_entities(entity_ref=proposal.subject_ref, limit=1):
+                    return receipt("invalid_request", error_type="foreign_proposal_subject")
                 if proposal.object_ref and not self.find_entities(
                     entity_ref=proposal.object_ref,
                     limit=1,
                 ):
-                    return result(
-                        "rejected",
-                        rejected=len(typed.proposals),
-                        error_type="foreign_proposal_object",
-                    )
-                assertion_ref = proposal.assertion_ref or (
-                    "assertion:" + _digest(proposal.proposal_ref)[:24]
-                )
-                predicate = str(proposal.predicate).strip()
+                    return receipt("invalid_request", error_type="foreign_proposal_object")
+                assertion_ref = "assertion:" + _digest(proposal.proposal_ref)[:32]
+                assertion_node = URIRef(assertion_ref)
+                if (assertion_node, RDF.type, PLN.SemanticAssertion) in self.assertion_graph:
+                    return receipt("invalid_request", error_type="proposal_already_committed")
+                predicate = proposal.predicate.strip()
                 predicate_node = URIRef(
                     predicate
                     if predicate.startswith(("http://", "https://", "urn:"))
@@ -1623,95 +1593,220 @@ class WorldModelKGStore:
                 object_node = (
                     URIRef(proposal.object_ref)
                     if proposal.object_ref
-                    else Literal(str(proposal.value if proposal.value is not None else ""))
+                    else Literal(str(proposal.value))
                 )
-                prepared.append((proposal, URIRef(assertion_ref), predicate_node, object_node))
+                for superseded_ref in proposal.supersedes:
+                    old_nodes = tuple(self.assertion_graph.subjects(
+                        PLN.assertionRef,
+                        Literal(superseded_ref),
+                    ))
+                    if not old_nodes:
+                        return receipt(
+                            "invalid_request",
+                            error_type="foreign_superseded_assertion",
+                        )
+                prepared.append((
+                    proposal,
+                    decision_by_proposal[proposal.proposal_ref],
+                    assertion_node,
+                    predicate_node,
+                    object_node,
+                ))
 
             graph_snapshot = self._snapshot_quads()
             previous_version = self.version
-            previous_digest = self.snapshot_digest
             previous_descriptor = self._descriptor_digest
             try:
-                self.assertion_graph.add((marker, RDF.type, PLN.ProposalCommit))
+                transaction_predicate = URIRef(f"{PLN_NS}transactionFingerprint")
+                self.assertion_graph.add((marker, RDF.type, PLN.AssertionCommitRequest))
                 self.assertion_graph.add((marker, PLN.inWorldModelSession, self.session_node))
-                self.assertion_graph.set((marker, PLN.proposalFingerprint, Literal(proposal_fingerprint)))
-                self.assertion_graph.set((marker, PLN.proposalBatchRef, Literal(typed.batch_ref)))
+                self.assertion_graph.set((marker, transaction_predicate, Literal(transaction_fingerprint)))
                 self.assertion_graph.set((marker, PLN.parentWorldModelSnapshotRef, Literal(parent_ref)))
-                self.assertion_graph.set((marker, PLN.parentWorldModelSnapshotDigest, Literal(parent_digest)))
+                self.assertion_graph.set((marker, PLN.currentWorldDigest, Literal(parent_digest)))
+                for artifact_ref in typed_request.evidence_artifact_refs:
+                    self.assertion_graph.add((marker, PLN.evidenceRef, Literal(artifact_ref)))
 
-                for proposal, assertion_node, predicate_node, object_node in prepared:
+                accepted: list[str] = []
+                ambiguous: list[str] = []
+                rejected: list[str] = []
+                affected_entities = {proposal.subject_ref for proposal, *_ in prepared}
+                affected_relations: set[str] = set()
+                affected_representations: set[str] = set()
+                for proposal, decision, assertion_node, predicate_node, object_node in prepared:
+                    proposal_node = URIRef(f"{PLN_NS}proposal_{_digest(proposal.proposal_ref)[:24]}")
+                    decision_node = URIRef(f"{PLN_NS}decision_{_digest(decision.decision_ref)[:24]}")
+                    self.assertion_graph.add((proposal_node, RDF.type, PLN.AssertionProposal))
+                    self.assertion_graph.set((proposal_node, PLN.proposalRef, Literal(proposal.proposal_ref)))
+                    self.assertion_graph.set((proposal_node, PLN.proposalFingerprint, Literal(proposal.proposal_fingerprint)))
+                    self.assertion_graph.set((proposal_node, PLN.proposalKind, Literal(proposal.proposal_kind)))
+                    self.assertion_graph.set((proposal_node, PLN.subjectRef, Literal(proposal.subject_ref)))
+                    self.assertion_graph.set((proposal_node, PLN.predicate, Literal(str(predicate_node))))
+                    self.assertion_graph.set((proposal_node, PLN.validTime, Literal(proposal.valid_time)))
+                    self.assertion_graph.set((proposal_node, PLN.parentWorldModelSnapshotRef, Literal(parent_ref)))
+                    self.assertion_graph.set((proposal_node, PLN.parentWorldModelSnapshotDigest, Literal(parent_digest)))
+                    if proposal.object_ref:
+                        self.assertion_graph.set((proposal_node, PLN.objectRef, Literal(proposal.object_ref)))
+                    elif proposal.value is not None:
+                        self.assertion_graph.set((proposal_node, PLN.claimValue, Literal(str(proposal.value))))
+                    for predicate, values in (
+                        (PLN.sourceRef, proposal.source_refs),
+                        (PLN.evidenceRef, proposal.evidence_refs),
+                        (PLN.requirementRef, proposal.requirement_refs),
+                        (PLN.supersedes, proposal.supersedes),
+                    ):
+                        for value in values:
+                            self.assertion_graph.add((proposal_node, predicate, Literal(value)))
+                    for key, value in proposal.authority.items():
+                        self.assertion_graph.add((proposal_node, PLN.authority, Literal(f"{key}={value}")))
+                    self.assertion_graph.add((decision_node, RDF.type, PLN.AssertionDecisionArtifact))
+                    for predicate, value in (
+                        (PLN.decisionRef, decision.decision_ref),
+                        (PLN.proposalRef, decision.proposal_ref),
+                        (PLN.decision, decision.decision),
+                        (PLN.reasonCode, decision.reason_code),
+                        (PLN.validatorRef, decision.validator_ref),
+                        (PLN.policyRef, decision.policy_ref),
+                        (PLN.policyVersion, decision.policy_version),
+                        (PLN.createdAt, decision.created_at.isoformat()),
+                        (PLN.parentWorldModelSnapshotDigest, parent_digest),
+                    ):
+                        self.assertion_graph.add((decision_node, predicate, Literal(str(value))))
+                    assertion_status = {
+                        "ACCEPT": "accepted",
+                        "AMBIGUOUS": "ambiguous",
+                        "REJECT": "rejected",
+                    }[decision.decision]
                     self.assertion_graph.add((assertion_node, RDF.type, PLN.SemanticAssertion))
-                    scalar_values = (
-                        (PLN.assertionRef, proposal.assertion_ref or f"assertion:{_digest(proposal.proposal_ref)[:24]}"),
+                    for predicate, value in (
+                        (PLN.assertionRef, str(assertion_node)),
                         (PLN.proposalRef, proposal.proposal_ref),
-                        (PLN.assertionKind, proposal.assertion_kind),
+                        (PLN.assertionKind, proposal.proposal_kind),
                         (PLN.subjectRef, proposal.subject_ref),
                         (PLN.predicate, str(predicate_node)),
-                        (PLN.assertionStatus, "accepted"),
+                        (PLN.assertionStatus, assertion_status),
+                        (PLN.decisionRef, decision.decision_ref),
                         (PLN.validTime, proposal.valid_time),
-                        (PLN.decisionRef, proposal.decision_ref),
                         (PLN.parentWorldModelSnapshotRef, parent_ref),
                         (PLN.parentWorldModelSnapshotDigest, parent_digest),
-                    )
-                    for predicate, value in scalar_values:
+                    ):
                         if value not in (None, ""):
                             self.assertion_graph.add((assertion_node, predicate, Literal(str(value))))
+                    for predicate, values in (
+                        (PLN.sourceRef, proposal.source_refs),
+                        (PLN.evidenceRef, proposal.evidence_refs),
+                        (PLN.requirementRef, proposal.requirement_refs),
+                        (PLN.supersedes, proposal.supersedes),
+                    ):
+                        for value in values:
+                            self.assertion_graph.add((assertion_node, predicate, Literal(value)))
                     if proposal.object_ref:
                         self.assertion_graph.add((assertion_node, PLN.objectRef, Literal(proposal.object_ref)))
                     elif proposal.value is not None:
                         self.assertion_graph.add((assertion_node, PLN.claimValue, Literal(str(proposal.value))))
-                    for predicate, values in (
-                        (PLN.sourceRef, proposal.source_refs),
-                        (PLN.evidenceRef, proposal.evidence_refs),
-                        (PLN.supersedes, proposal.supersedes),
-                    ):
-                        for value in values:
-                            if value:
-                                self.assertion_graph.add((assertion_node, predicate, Literal(value)))
-                    for key, value in proposal.confidence_components.items():
-                        self.assertion_graph.add((assertion_node, PLN.confidenceComponent, Literal(f"{key}={value}")))
-                    for key, value in proposal.authority.items():
-                        self.assertion_graph.add((assertion_node, PLN.authority, Literal(f"{key}={value}")))
-                    self.world_graph.add((URIRef(proposal.subject_ref), predicate_node, object_node))
+
+                    if decision.decision == "ACCEPT":
+                        accepted.append(str(assertion_node))
+                        if proposal.object_ref:
+                            affected_relations.add(str(assertion_node))
+                        if proposal.proposal_kind == "representation_support":
+                            affected_representations.add(proposal.subject_ref)
+                        for superseded_ref in proposal.supersedes:
+                            for old_node in self.assertion_graph.subjects(
+                                PLN.assertionRef,
+                                Literal(superseded_ref),
+                            ):
+                                self._remove_assertion_projection(old_node)
+                                self.assertion_graph.set(
+                                    (old_node, PLN.assertionStatus, Literal("superseded"))
+                                )
+                        self.world_graph.add((
+                            URIRef(proposal.subject_ref),
+                            predicate_node,
+                            object_node,
+                        ))
+                    elif decision.decision == "AMBIGUOUS":
+                        ambiguous.append(str(assertion_node))
+                    else:
+                        rejected.append(str(assertion_node))
+
+                for proposal, decision, _assertion_node, predicate_node, object_node in prepared:
+                    if decision.decision != "ACCEPT":
+                        continue
+                    triple = (URIRef(proposal.subject_ref), predicate_node, object_node)
+                    if triple not in self.world_graph:
+                        raise ValueError("accepted assertion projection missing")
                     for superseded_ref in proposal.supersedes:
                         for old_node in self.assertion_graph.subjects(
                             PLN.assertionRef,
                             Literal(superseded_ref),
                         ):
-                            self.assertion_graph.set((old_node, PLN.assertionStatus, Literal("superseded")))
+                            old_subject = _text(self.assertion_graph.value(old_node, PLN.subjectRef))
+                            old_predicate = _text(self.assertion_graph.value(old_node, PLN.predicate))
+                            old_object = _text(
+                                self.assertion_graph.value(old_node, PLN.objectRef)
+                                or self.assertion_graph.value(old_node, PLN.claimValue)
+                            )
+                            if old_subject and old_predicate and old_object:
+                                old_predicate_node = URIRef(old_predicate)
+                                old_object_node = URIRef(old_object) if old_object.startswith(("http://", "https://", "urn:")) else Literal(old_object)
+                                if (URIRef(old_subject), old_predicate_node, old_object_node) in self.world_graph and (old_predicate_node, old_object_node) != (predicate_node, object_node):
+                                    raise ValueError("superseded assertion projection remains")
 
                 self.version += 1
                 self._write_version_marker()
                 self.snapshot_digest = self._graph_digest()
                 self._persist_snapshot(
                     parent_descriptor=previous_descriptor,
-                    commit_parents={"proposal_batch": proposal_fingerprint},
+                    commit_parents={"cognition_transaction": transaction_fingerprint},
                     commit_provenance={
-                        "proposal_batch_ref": typed.batch_ref,
-                        "proposal_fingerprint": proposal_fingerprint,
+                        "transaction_fingerprint": transaction_fingerprint,
                         "proposal_count": len(prepared),
+                        "accepted_count": len(accepted),
                     },
                 )
             except Exception as exc:
                 self._recover_after_commit_failure(
                     graph_snapshot,
                     version=previous_version,
-                    snapshot_digest=previous_digest,
+                    snapshot_digest=old_snapshot_digest,
                     descriptor_digest=previous_descriptor,
                 )
-                return result("aborted", error_type=f"proposal_commit_failed:{type(exc).__name__}")
+                return receipt("aborted", error_type=f"assertion_commit_failed:{type(exc).__name__}")
 
             snapshot = self.snapshot_contract().model_copy(update={
                 "parent_snapshot_ref": parent_ref,
                 "parent_snapshot_digest": parent_digest,
             })
-            return result(
+            return receipt(
                 "committed",
                 committed=True,
-                written=len(prepared),
-                accepted=len(prepared),
                 snapshot=snapshot,
+                accepted=tuple(accepted),
+                ambiguous=tuple(ambiguous),
+                rejected=tuple(rejected),
+                affected_entities=tuple(sorted(affected_entities)),
+                affected_relations=tuple(sorted(affected_relations)),
+                affected_representations=tuple(sorted(affected_representations)),
             )
+
+    def _remove_assertion_projection(self, assertion_node: Any) -> None:
+        """Remove the current-world triple described by an assertion node."""
+
+        subject_ref = _text(self.assertion_graph.value(assertion_node, PLN.subjectRef))
+        predicate_ref = _text(self.assertion_graph.value(assertion_node, PLN.predicate))
+        object_ref = _text(
+            self.assertion_graph.value(assertion_node, PLN.objectRef)
+            or self.assertion_graph.value(assertion_node, PLN.claimValue)
+        )
+        if not subject_ref or not predicate_ref or not object_ref:
+            return
+        predicate = URIRef(predicate_ref)
+        object_node = (
+            URIRef(object_ref)
+            if object_ref.startswith(("http://", "https://", "urn:"))
+            else Literal(object_ref)
+        )
+        self.world_graph.remove((URIRef(subject_ref), predicate, object_node))
 
     def _validate_planned_lineage(self, payload: dict[str, Any]) -> None:
         """Reject foreign DATA/KG references before writing planned graph."""

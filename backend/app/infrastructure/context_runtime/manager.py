@@ -712,6 +712,7 @@ async def build_planning_context(
     current_world_port = None
     network_retry_port = None
     world_model_commit_port = None
+    cognition_commit_port = None
     try:
         if gazetteer is not None:
             from app.infrastructure.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
@@ -788,6 +789,7 @@ async def build_planning_context(
     # Cognition transaction concern.
     if world_model_mode == "shadow" and world_model_shadow is not None:
         world_model_commit_port = world_model_shadow
+    cognition_commit_port = world_model_commit_port
     ports = PlanningPorts(
         gazetteer=gazetteer_port,
         spatial_query=spatial_query_port,
@@ -795,6 +797,7 @@ async def build_planning_context(
         current_world=current_world_port,
         network_retry=network_retry_port,
         world_model_commit=world_model_commit_port,
+        cognition_commit=cognition_commit_port,
     )
     # 4. Constraint index
     constraint_index = None

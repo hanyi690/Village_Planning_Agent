@@ -305,6 +305,7 @@ class PlanningContext:
             "current_world": getattr(self.ports, "current_world", None) is not None,
             "network_retry": getattr(self.ports, "network_retry", None) is not None,
             "world_model_commit": getattr(self.ports, "world_model_commit", None) is not None,
+            "cognition_commit": getattr(self.ports, "cognition_commit", None) is not None,
             "gazetteer": self.gazetteer is not None,
             "constraint_index": self.constraint_index is not None,
             "reports": bool(self.reports),

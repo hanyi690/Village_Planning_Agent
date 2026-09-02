@@ -36,7 +36,7 @@ ARTIFACT_KEYS = (
     "repair_directives", "repair_impact", "global_zone_allocation",
     "planning_scenario", "scenario_set", "approved_execution_input", "validation_certificate", "final_relation_validation",
     "global_site_allocation", "l1_observations", "l1_bindings", "l1_world_projection",
-    "source_semantic_classification", "l1_source_index", "l1_observation_snapshot", "l1_binding_snapshot", "l1_final_product", "l1_product_manifest", "data_admission_receipt", "data_admission_gap", "data_remote_admission_receipt", "boundary_scope", "world_model_commit_snapshot", "execution_staging", "staged_parcel_changeset", "staged_spatial_changeset",
+    "source_semantic_classification", "l1_source_index", "l1_observation_snapshot", "l1_binding_snapshot", "l1_final_product", "l1_product_manifest", "data_admission_receipt", "data_admission_gap", "data_remote_admission_receipt", "boundary_scope", "world_model_commit_snapshot", "world_model_commit_receipt", "execution_staging", "staged_parcel_changeset", "staged_spatial_changeset",
     "staged_planned_state", "staged_layout_configs",
     "staged_planned_entity_set", "staged_planned_representation_set", "staged_execution_trace",
     "staged_delivery_spatial_snapshot",

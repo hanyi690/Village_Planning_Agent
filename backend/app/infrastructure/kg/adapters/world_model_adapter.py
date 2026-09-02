@@ -10,6 +10,9 @@ from rdflib import RDF, URIRef
 from app.infrastructure.kg.ontology import PLN
 
 
+_WORLD_GRAPH = "urn:planning:graph:world"
+
+
 class KGWorldModelAdapter:
     def __init__(self, kg: Any):
         self._kg = kg
@@ -372,6 +375,7 @@ class KGWorldModelAdapter:
         graph = getattr(self._kg, "g", None)
         if graph is None:
             return []
+        allowed_graphs = {_WORLD_GRAPH}
         wanted_predicate = str(predicate or "").strip().casefold()
         result: list[dict[str, Any]] = []
         # Dataset iteration yields quads (the fourth item is the named graph),
@@ -387,12 +391,6 @@ class KGWorldModelAdapter:
                 continue
             if pred == RDF.type or not isinstance(obj, URIRef):
                 continue
-            if _graph_name is not None and allowed_graphs and str(_graph_name) == str(ASSERTION_GRAPH):
-                assertion_status = str(
-                    graph.value(subject, PLN.assertionStatus) or ""
-                ).casefold()
-                if assertion_status and assertion_status != "accepted":
-                    continue
             subject_text = str(subject)
             object_text = str(obj)
             predicate_text = str(pred)

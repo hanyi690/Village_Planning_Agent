@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from rdflib import RDF, URIRef
+from rdflib import Literal, RDF, URIRef
 import pytest
 
-from app.contracts.cognition import SourceRecord
+from app.contracts.cognition import (
+    AssertionCommitRequest,
+    AssertionProposal,
+    SourceRecord,
+)
 from app.data.resource_catalog import DataResourceCatalog
 from app.infrastructure.cognition_runtime.world_model_store import (
     WorldModelKGStore,
@@ -233,3 +237,124 @@ def test_current_view_consumers_do_not_reintroduce_whole_graph_access():
         for path in Path(root).rglob("*.py"):
             text = path.read_text(encoding="utf-8")
             assert not any(token in text for token in forbidden), path
+
+
+def _assertion_proposal(store, *, ref: str, value: str, supersedes=()):
+    entity_ref = store.current_world.find_entities(limit=1)[0]["entity_ref"]
+    return AssertionProposal(
+        proposal_ref=ref,
+        proposal_kind="property",
+        subject_ref=entity_ref,
+        predicate="urn:planning:observedName",
+        value=value,
+        evidence_refs=("evidence-retrieval:artifact",),
+        requirement_refs=("requirement:name",),
+        authority={"producer": "evidence", "consumer": "cognition"},
+        parent_current_world_digest=store.current_world_digest,
+        supersedes=tuple(supersedes),
+    )
+
+
+def _commit_group(store, proposals):
+    from app.modules.cognition.transaction_validation import CognitionAssertionValidator
+
+    decisions = CognitionAssertionValidator().evaluate(
+        tuple(proposals),
+        current_world_digest=store.current_world_digest,
+    )
+    request = AssertionCommitRequest(
+        proposal_refs=tuple(item.proposal_ref for item in proposals),
+        decision_refs=tuple(item.decision_ref for item in decisions),
+        expected_parent_snapshot=store.snapshot_ref,
+        expected_current_world_digest=store.current_world_digest,
+        evidence_artifact_refs=("evidence-retrieval:artifact",),
+    )
+    return store.commit_assertion_transaction(request, tuple(proposals), decisions)
+
+
+def test_wm_v05_gate_a_missing_decision_does_not_mutate_world(tmp_path):
+    store = WorldModelKGStore(
+        "wm-v05-gate-a",
+        "示例村",
+        _catalog(),
+        artifact_root=str(tmp_path),
+    )
+    proposal = _assertion_proposal(store, ref="proposal:missing-decision", value="x")
+    request = {
+        "proposal_refs": (proposal.proposal_ref,),
+        "decision_refs": ("decision:missing",),
+        "expected_parent_snapshot": store.snapshot_ref,
+        "expected_current_world_digest": store.current_world_digest,
+    }
+    before = (store.snapshot_ref, store.snapshot_digest, store.current_world_digest)
+    receipt = store.commit_assertion_transaction(request, (proposal,), ())
+
+    assert receipt.status == "invalid_request"
+    assert receipt.error_type == "decision_refs_not_closed"
+    assert (store.snapshot_ref, store.snapshot_digest, store.current_world_digest) == before
+    assert store.find_relations(subject_ref=proposal.subject_ref, predicate=proposal.predicate) == []
+
+
+def test_wm_v05_gate_b_supersede_rebuilds_current_projection_and_reloads(tmp_path):
+    catalog = _catalog()
+    first = WorldModelKGStore(
+        "wm-v05-gate-b",
+        "示例村",
+        catalog,
+        artifact_root=str(tmp_path),
+    )
+    old_proposal = _assertion_proposal(first, ref="proposal:old", value="old")
+    old_receipt = _commit_group(first, (old_proposal,))
+    old_assertion_ref = old_receipt.accepted_assertion_refs[0]
+    assert old_receipt.status == "committed"
+    assert old_receipt.new_current_world_digest != old_receipt.old_current_world_digest
+
+    new_proposal = _assertion_proposal(
+        first,
+        ref="proposal:new",
+        value="new",
+        supersedes=(old_assertion_ref,),
+    )
+    new_receipt = _commit_group(first, (new_proposal,))
+    assert new_receipt.status == "committed"
+    assert old_assertion_ref in first.snapshot_contract().assertion_refs
+    assert list(first.assertion_graph.subjects(RDF.type, PLN.AssertionProposal))
+    assert list(first.assertion_graph.subjects(RDF.type, PLN.AssertionDecisionArtifact))
+    assert list(first.assertion_graph.subjects(RDF.type, PLN.SemanticAssertion))
+    assert (URIRef(new_proposal.subject_ref), URIRef(new_proposal.predicate), Literal("old")) not in first.world_graph
+    assert (URIRef(new_proposal.subject_ref), URIRef(new_proposal.predicate), Literal("new")) in first.world_graph
+
+    second = WorldModelKGStore(
+        "wm-v05-gate-b",
+        "示例村",
+        catalog,
+        artifact_root=str(tmp_path),
+    )
+    assert second.snapshot_ref == first.snapshot_ref
+    assert second.current_world_digest == first.current_world_digest
+    assert old_assertion_ref in second.snapshot_contract().assertion_refs
+    assert (URIRef(new_proposal.subject_ref), URIRef(new_proposal.predicate), Literal("old")) not in second.world_graph
+    assert (URIRef(new_proposal.subject_ref), URIRef(new_proposal.predicate), Literal("new")) in second.world_graph
+
+
+def test_wm_v05_cognition_validator_is_the_only_accept_authority():
+    from app.modules.cognition.transaction_validation import CognitionAssertionValidator
+
+    proposal = AssertionProposal(
+        proposal_ref="proposal:ambiguous",
+        proposal_kind="merge",
+        subject_ref="urn:planning:entity-a",
+        predicate="urn:planning:mergedWith",
+        object_ref="urn:planning:entity-b",
+        evidence_refs=("evidence:1",),
+        authority={"producer": "evidence"},
+        parent_current_world_digest="digest:current",
+    )
+    decision = CognitionAssertionValidator().evaluate(
+        (proposal,),
+        current_world_digest="digest:current",
+    )[0]
+
+    assert decision.decision == "AMBIGUOUS"
+    assert decision.proposal_ref == proposal.proposal_ref
+    assert proposal.proposal_fingerprint.startswith("sha256:")

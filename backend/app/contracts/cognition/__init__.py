@@ -17,9 +17,10 @@ from .identity_projection import (
     IdentityBindingCommitResult,
 )
 from .proposals import (
-    WorldModelCommitResult,
-    WorldModelProposal,
-    WorldModelProposalBatch,
+    AssertionDecisionArtifact,
+    AssertionCommitRequest,
+    AssertionProposal,
+    WorldModelCommitReceipt,
 )
 from .query import (
     EntityQuery,
@@ -43,9 +44,10 @@ __all__ = [
     "EntityPart",
     "IdentityBindingCommitEnvelope",
     "IdentityBindingCommitResult",
-    "WorldModelCommitResult",
-    "WorldModelProposal",
-    "WorldModelProposalBatch",
+    "AssertionDecisionArtifact",
+    "AssertionCommitRequest",
+    "AssertionProposal",
+    "WorldModelCommitReceipt",
     "LogicalPartProposal",
     "EntityQuery",
     "IdentityBindingProjectionPage",

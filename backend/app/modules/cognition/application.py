@@ -822,10 +822,10 @@ class CognitionApplication:
         if (
             context_world_model is None
             or getattr(context_ports, "world_model", None) is None
-            or getattr(context_ports, "world_model_commit", None) is None
+            or getattr(context_ports, "cognition_commit", None) is None
         ):
             raise RuntimeError(
-                "KG_CONTEXT_PUBLICATION_FAILED: WorldModel read/commit ports are unavailable"
+                "KG_CONTEXT_PUBLICATION_FAILED: WorldModel read/Cognition commit ports are unavailable"
             )
         if str(getattr(context_world_model, "snapshot_digest", "") or "") != str(
             snapshot.graph_digest
@@ -1047,19 +1047,27 @@ class CognitionApplication:
             SessionWorldModelSnapshot,
         ) or CognitionApplication.load_snapshot(state)
 
-    def commit_proposal_batch(
+    def commit_assertion_transaction(
         self,
         state: Mapping[str, Any],
-        batch: Any,
+        proposals: Any,
+        *,
+        decisions: Any = None,
+        request: Any = None,
+        evidence_artifact_refs: tuple[str, ...] = (),
     ) -> Any:
-        """Route one immutable proposal batch through Cognition's write port."""
+        """Validate proposals in Cognition, then publish one WM transaction."""
 
         from app.contracts.cognition.proposals import (
-            WorldModelCommitResult,
-            WorldModelProposalBatch,
+            AssertionCommitRequest,
+            AssertionDecisionArtifact,
+            AssertionProposal,
+            WorldModelCommitReceipt,
+        )
+        from app.modules.cognition.transaction_validation import (
+            CognitionAssertionValidator,
         )
 
-        typed_batch = WorldModelProposalBatch.model_validate(batch)
         current = dict(state)
         refs = dict(current.get("artifact_refs") or {})
         parent_key = "world_model_current_snapshot" if refs.get(
@@ -1072,8 +1080,28 @@ class CognitionApplication:
         )
         if parent_snapshot is None:
             raise ArtifactReplayError(
-                "World Model proposal commit requires a reloadable parent snapshot"
+                "Cognition assertion commit requires a reloadable parent snapshot"
             )
+        typed_proposals = tuple(
+            AssertionProposal.model_validate(item) for item in proposals
+        )
+        if decisions is None:
+            typed_decisions = CognitionAssertionValidator().evaluate(
+                typed_proposals,
+                current_world_digest=parent_snapshot.current_world_digest,
+            )
+        else:
+            typed_decisions = tuple(
+                AssertionDecisionArtifact.model_validate(item) for item in decisions
+            )
+        typed_request = AssertionCommitRequest.model_validate(request or {
+            "proposal_refs": tuple(item.proposal_ref for item in typed_proposals),
+            "decision_refs": tuple(item.decision_ref for item in typed_decisions),
+            "expected_parent_snapshot": parent_snapshot.snapshot_ref,
+            "expected_current_world_digest": parent_snapshot.current_world_digest,
+            "evidence_artifact_refs": evidence_artifact_refs,
+        })
+
         commit_port = None
         session_id = str(current.get("session_id") or "")
         if session_id:
@@ -1083,12 +1111,12 @@ class CognitionApplication:
                 cached = get_cached_context(session_id)
                 commit_port = getattr(
                     getattr(cached, "ports", None),
-                    "world_model_commit",
+                    "cognition_commit",
                     None,
                 )
             except Exception:
                 commit_port = None
-        if not callable(getattr(commit_port, "commit_proposal_batch", None)):
+        if not callable(getattr(commit_port, "commit_assertion_transaction", None)):
             from app.contracts.cognition.decision import SourceSemanticMappingSnapshot
             from app.data.resource_catalog import DataResourceCatalog
             from app.modules.data.application import DataApplication
@@ -1097,7 +1125,7 @@ class CognitionApplication:
             catalog_snapshot = DataApplication.load_catalog(current)
             if catalog_snapshot is None:
                 raise ArtifactReplayError(
-                    "World Model proposal commit requires a DATA catalog"
+                    "Cognition assertion commit requires a DATA catalog"
                 )
             mapping = load_artifact(
                 current,
@@ -1120,25 +1148,17 @@ class CognitionApplication:
                 expected_snapshot_digest=parent_snapshot.graph_digest,
             )
             commit_port = store
-        outcome = WorldModelCommitResult.model_validate(
-            commit_port.commit_proposal_batch(typed_batch)
-        )
-        if outcome.status == "noop":
-            current_ref = refs.get("world_model_current_snapshot") or refs.get(
-                "world_model_snapshot"
+        outcome = WorldModelCommitReceipt.model_validate(
+            commit_port.commit_assertion_transaction(
+                typed_request,
+                typed_proposals,
+                typed_decisions,
             )
-            if current_ref:
-                return outcome.model_copy(update={
-                    "world_model_artifact_ref": ArtifactRef.model_validate(current_ref),
-                })
-            return outcome
+        )
         if not outcome.committed or outcome.world_model_snapshot is None:
             return outcome
 
-        commit_state = {
-            **current,
-            "artifact_refs": refs,
-        }
+        commit_state = {**current, "artifact_refs": refs}
         committed_ref = ArtifactRef.model_validate(
             store_artifact(
                 commit_state,
@@ -1151,17 +1171,30 @@ class CognitionApplication:
         )
         refs["world_model_commit_snapshot"] = committed_ref.model_dump(mode="json")
         commit_state["artifact_refs"] = refs
-        current_ref = ArtifactRef.model_validate(
+        receipt_ref = ArtifactRef.model_validate(
             store_artifact(
                 commit_state,
-                "world_model_current_snapshot",
+                "world_model_commit_receipt",
                 "cognition",
-                "SessionWorldModelSnapshot",
-                outcome.world_model_snapshot,
-                parent_keys=("world_model_commit_snapshot",),
+                "WorldModelCommitReceipt",
+                outcome,
+                parent_keys=(parent_key, "world_model_commit_snapshot"),
             )
         )
-        return outcome.model_copy(update={"world_model_artifact_ref": current_ref})
+        refs["world_model_commit_receipt"] = receipt_ref.model_dump(mode="json")
+        commit_state["artifact_refs"] = refs
+        store_artifact(
+            commit_state,
+            "world_model_current_snapshot",
+            "cognition",
+            "SessionWorldModelSnapshot",
+            outcome.world_model_snapshot,
+            parent_keys=("world_model_commit_snapshot",),
+        )
+        return outcome.model_copy(update={
+            "receipt_artifact_ref": receipt_ref,
+            "world_model_snapshot": outcome.world_model_snapshot,
+        })
 
     @staticmethod
     def load_schema_mapping(

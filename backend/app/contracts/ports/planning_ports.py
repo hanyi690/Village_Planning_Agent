@@ -20,6 +20,7 @@ from app.contracts.ports.semantic_query import SemanticQueryPort
 from app.contracts.ports.spatial_query import SpatialQueryPort
 from app.contracts.ports.zone_allocator import ZoneAllocatorPort
 from app.contracts.ports.world_model import (
+    CognitionCommitPort,
     CurrentWorldQueryPort,
     WorldModelCommitPort,
 )
@@ -39,5 +40,6 @@ class PlanningPorts:
     current_world: CurrentWorldQueryPort | None = None
     network_retry: Any | None = None
     world_model_commit: WorldModelCommitPort | None = None
+    cognition_commit: CognitionCommitPort | None = None
 
 __all__ = ["PlanningPorts"]

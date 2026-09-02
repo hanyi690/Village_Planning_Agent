@@ -1,13 +1,9 @@
-"""Immutable Cognition proposals and World Model commit receipts.
-
-Evidence and L1-GROUND may construct these value objects, but only the
-``WorldModelCommitPort`` can turn a proposal into an accepted current-world
-assertion.  The separate batch contract makes the parent snapshot and the
-all-or-nothing commit boundary explicit at the application edge.
-"""
+"""Cognition-owned World Model assertion transaction contracts."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -18,120 +14,148 @@ from app.contracts.artifacts.ref import ArtifactRef
 from app.contracts.cognition.snapshot import SessionWorldModelSnapshot
 
 
-ProposalStatus = Literal[
-    "PROPOSED",
-    "ACCEPTED",
-    "AMBIGUOUS",
-    "REJECTED",
-    "SUPERSEDED",
-]
-
+AssertionDecision = Literal["ACCEPT", "AMBIGUOUS", "REJECT"]
 WorldModelCommitStatus = Literal[
     "committed",
     "noop",
+    "invalid_request",
     "stale_parent",
-    "ambiguous",
-    "rejected",
     "aborted",
-    "unsupported",
 ]
 
 
-class WorldModelProposal(StrictContractModel):
-    """One source/evidence-backed assertion proposal.
+def _fingerprint_payload(data: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in data.items()
+        if key not in {
+            "proposal_fingerprint",
+            "schema_version",
+            "digest",
+            "parent_digests",
+            "provenance",
+            "created_at",
+        }
+    }
 
-    ``status`` must be ``PROPOSED`` at the Cognition input boundary.  A
-    proposal carrying ``ACCEPTED`` is treated as an attempted authority
-    escalation and rejected by the commit port; callers never manufacture a
-    current-world decision by setting a field in this object.
-    """
+
+def _proposal_fingerprint(data: dict[str, Any]) -> str:
+    raw = json.dumps(
+        _fingerprint_payload(data),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+class AssertionProposal(StrictContractModel):
+    """Evidence-backed assertion candidate; never a current-world fact."""
 
     proposal_ref: str = Field(min_length=1)
-    assertion_ref: str = ""
-    assertion_kind: str = "semantic"
+    proposal_kind: str = Field(min_length=1)
     subject_ref: str = Field(min_length=1)
     predicate: str = Field(min_length=1)
     object_ref: str = ""
     value: Any = None
-    valid_time: str = ""
     source_refs: tuple[str, ...] = ()
     evidence_refs: tuple[str, ...] = ()
-    confidence_components: dict[str, float] = Field(default_factory=dict)
+    requirement_refs: tuple[str, ...] = ()
     authority: dict[str, str] = Field(default_factory=dict)
-    parent_world_model_snapshot_ref: str = ""
-    parent_world_model_snapshot_digest: str = ""
+    valid_time: str = ""
+    parent_current_world_digest: str = Field(min_length=1)
+    proposal_fingerprint: str = ""
     supersedes: tuple[str, ...] = ()
-    decision_ref: str = ""
-    status: ProposalStatus = "PROPOSED"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    @model_validator(mode="before")
+    @classmethod
+    def populate_and_validate_fingerprint(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        fingerprint = str(data.get("proposal_fingerprint") or "")
+        expected = _proposal_fingerprint(data)
+        if fingerprint and fingerprint != expected:
+            raise ValueError("proposal_fingerprint does not match proposal content")
+        data["proposal_fingerprint"] = expected
+        return data
+
     @model_validator(mode="after")
-    def validate_evidence_and_confidence(self) -> "WorldModelProposal":
+    def validate_lineage(self) -> "AssertionProposal":
         if not self.source_refs and not self.evidence_refs:
-            raise ValueError("World Model proposal requires source or evidence refs")
-        if any(
-            not 0.0 <= float(value) <= 1.0
-            for value in self.confidence_components.values()
-        ):
-            raise ValueError("proposal confidence components must be between 0 and 1")
+            raise ValueError("AssertionProposal requires source_refs or evidence_refs")
+        if not self.authority:
+            raise ValueError("AssertionProposal requires authority")
+        if not self.object_ref and self.value is None:
+            raise ValueError("AssertionProposal requires object_ref or value")
         return self
 
 
-class WorldModelProposalBatch(StrictContractModel):
-    """Atomic set of proposals evaluated against one World Model parent."""
+class AssertionDecisionArtifact(StrictContractModel):
+    """Deterministic Cognition decision attached to exactly one proposal."""
 
-    batch_ref: str = Field(min_length=1)
-    run_id: str = Field(min_length=1)
-    branch_id: str = Field(default="main", min_length=1)
-    parent_world_model_snapshot_ref: str = Field(min_length=1)
-    parent_world_model_snapshot_digest: str = Field(min_length=1)
-    proposals: tuple[WorldModelProposal, ...] = ()
-    input_artifact_refs: tuple[str, ...] = ()
-    policy_ref: str = ""
+    decision_ref: str = Field(min_length=1)
+    proposal_ref: str = Field(min_length=1)
+    decision: AssertionDecision
+    reason_code: str = Field(min_length=1)
+    validator_ref: str = Field(min_length=1)
+    policy_ref: str = Field(min_length=1)
+    policy_version: str = Field(min_length=1)
+    parent_current_world_digest: str = Field(min_length=1)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class AssertionCommitRequest(StrictContractModel):
+    """Closed reference set for one atomic Cognition commit group."""
+
+    proposal_refs: tuple[str, ...] = Field(min_length=1)
+    decision_refs: tuple[str, ...] = Field(min_length=1)
+    expected_parent_snapshot: str = Field(min_length=1)
+    expected_current_world_digest: str = Field(min_length=1)
+    evidence_artifact_refs: tuple[str, ...] = ()
 
     @model_validator(mode="after")
-    def validate_batch(self) -> "WorldModelProposalBatch":
-        refs = tuple(item.proposal_ref for item in self.proposals)
-        if len(refs) != len(set(refs)):
-            raise ValueError("World Model proposal refs must be unique")
-        for proposal in self.proposals:
-            if proposal.parent_world_model_snapshot_ref and (
-                proposal.parent_world_model_snapshot_ref
-                != self.parent_world_model_snapshot_ref
-            ):
-                raise ValueError("proposal parent ref differs from batch parent")
-            if proposal.parent_world_model_snapshot_digest and (
-                proposal.parent_world_model_snapshot_digest
-                != self.parent_world_model_snapshot_digest
-            ):
-                raise ValueError("proposal parent digest differs from batch parent")
+    def validate_refs(self) -> "AssertionCommitRequest":
+        if len(self.proposal_refs) != len(set(self.proposal_refs)):
+            raise ValueError("proposal_refs must be unique")
+        if len(self.decision_refs) != len(set(self.decision_refs)):
+            raise ValueError("decision_refs must be unique")
+        if len(self.proposal_refs) != len(self.decision_refs):
+            raise ValueError("proposal_refs and decision_refs must have equal length")
         return self
 
 
-class WorldModelCommitResult(StrictContractModel):
-    """Typed outcome of one atomic Cognition commit attempt."""
+class WorldModelCommitReceipt(StrictContractModel):
+    """Auditable result of one immutable World Model transaction."""
 
     status: WorldModelCommitStatus
-    committed: bool = False
-    batch_ref: str = ""
-    proposal_fingerprint: str = ""
-    written: int = 0
-    accepted: int = 0
-    rejected: int = 0
+    parent: str = ""
+    child: str = ""
+    accepted_assertion_refs: tuple[str, ...] = ()
+    ambiguous_assertion_refs: tuple[str, ...] = ()
+    rejected_assertion_refs: tuple[str, ...] = ()
+    affected_entity_refs: tuple[str, ...] = ()
+    affected_relation_refs: tuple[str, ...] = ()
+    affected_representation_refs: tuple[str, ...] = ()
+    old_current_world_digest: str = ""
+    new_current_world_digest: str = ""
+    old_world_model_snapshot_digest: str = ""
+    new_world_model_snapshot_digest: str = ""
+    transaction_fingerprint: str = ""
     error_type: str = ""
-    parent_world_model_snapshot_ref: str = ""
-    parent_world_model_snapshot_digest: str = ""
-    world_model_snapshot_ref: str = ""
-    world_model_snapshot_digest: str = ""
+    committed: bool = False
     world_model_version: int = 0
-    world_model_artifact_ref: ArtifactRef | None = None
+    receipt_artifact_ref: ArtifactRef | None = None
     world_model_snapshot: SessionWorldModelSnapshot | None = None
 
 
 __all__ = [
-    "ProposalStatus",
-    "WorldModelCommitResult",
+    "AssertionDecision",
+    "AssertionDecisionArtifact",
+    "AssertionCommitRequest",
+    "AssertionProposal",
+    "WorldModelCommitReceipt",
     "WorldModelCommitStatus",
-    "WorldModelProposal",
-    "WorldModelProposalBatch",
 ]
