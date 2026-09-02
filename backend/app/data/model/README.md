@@ -14,7 +14,7 @@
 | `raster_types.py` | Raster subclasses: `DEMInput`, `DOMInput`, `SlopeRaster`, `AspectRaster`, `SuitabilityRaster`, `TerrainAnalysisResult` |
 | `table_types.py` | `TableDataset` + 7 subclasses (PopulationTable, ControlRuleTable, PlanningIndicatorTable, etc.) |
 | `document_types.py` | `Document` + `ReferencePlanningText` + `L3Report` |
-| `canonical.py` | `VillageBundle` (morphology-first Pydantic container) + 6 `LayerGroup` classes with dynamic `_layers: dict` + `_bundle_key_for()` routing + `ProjectDataView` + `VillageMetadata` |
+| `canonical.py` | Existing upper-layer typed value objects and historical response models; not a DATA admission input or catalog writer |
 | `layer_registry.py` | `GIS_LAYER_REGISTRY` + `GisLayerTypeEntry` + `build_registry_from_yaml()` |
 | `gis_layer_registry.yaml` | Single source of truth for layer metadata (40+ entries) |
 
@@ -35,7 +35,11 @@ L0  Document                        (text + doc_type + source)
  └── L1  ReferencePlanningText / L3Report
 ```
 
-The DU (discriminated union) discriminator is `layer_type` (embedded on each feature). `VillageBundle.add()` in `canonical.py` routes features into morphology groups via `_bundle_key_for()`, which looks up `GIS_LAYER_REGISTRY` (YAML-driven) — not `isinstance` chains. Each `LayerGroup.add()` calls `_bundle_key_for(feature)` to get the `bundle_target.key` from the registry and appends to `_layers[key]`.
+The active DATA discriminator is the generic resource metadata in
+`resource_catalog.py`: dataset, layer, source feature, representation and capability.
+The typed classes in this directory remain only where an upper planning contract still
+uses them; they are not exported by `app.data.ingestion` and cannot be used to bypass
+`DataAdmissionFacade`.
 
 ## Public API
 
@@ -48,10 +52,7 @@ from app.data.model import (
     CurrentLandUseParcel, PlannedLandUseParcel, CurrentRoad, PlannedRoad,
     FarmlandProtection, EcologicalRedline, CurrentFacility, PlannedFacility,
     # ... 33 total
-    # Containers
-    VillageBundle, ProjectDataView, VillageMetadata,
-    PointLayerGroup, LineLayerGroup, PolygonLayerGroup,
-    RasterLayerGroup, TableLayerGroup, DocumentGroup,
+    # Upper-layer typed models, where explicitly required
     # Registry
     GIS_LAYER_REGISTRY, GisLayerTypeEntry, get_gis_layer_entry, get_all_gis_layer_types,
 )
@@ -69,5 +70,5 @@ from app.data.model import (
 See [`docs/guides/how-to-add-layer.md`](../../../../docs/guides/how-to-add-layer.md) for the full guide. Short version:
 
 1. **New layer type**: add YAML entry to `gis_layer_registry.yaml`
-2. **New Python class**: define Pydantic v2 subclass in `spatial_types.py` / `raster_types.py` / `table_types.py`, export from `__init__.py`, add mapping in `data/ingest.py::_infer_model_class()`
-3. **New bundle field**: add property to the appropriate Group in `canonical.py` (e.g. `PolygonLayerGroup.my_new_layer` as a `@property` returning `self.get("my_new_layer")`)
+2. **New Python class**: add it only for an explicit upper-layer contract; do not add a DATA ingest mapping. DATA inputs remain generic mappings and are normalized by `DataResourceCatalog`.
+3. **New DATA layer**: add a declarative source/layer entry and test its admission, representation and capability contract; do not add Bundle fields or typed ingest adapters.

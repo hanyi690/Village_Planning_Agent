@@ -1,9 +1,9 @@
-"""Remote raster download driver - DEM/DOM download guides.
+"""Remote raster driver for a declared raster source.
 
-Manages external raster sources that require manual download. Returns
-download instructions when data is not available locally; falls back to
-LocalRasterDriver if the file exists. Migrated from
-gis/data/drivers/remote_raster_driver.py.
+Manages external raster sources that require a declared download or local
+materialization. A local file is usable only after the remote declaration
+receipt is bound; unavailable content returns a diagnostic guide, not an
+admitted current resource.
 
 Providers:
   - alos_aw3d30: JAXA ALOS World 3D, 12.5m, free (research)
@@ -30,10 +30,10 @@ logger = get_logger(__name__)
 
 @DriverRegistry.register("remote_raster")
 class RemoteRasterDriver(DataSourceDriver):
-    """Remote raster download guide driver.
+    """Remote raster declaration driver.
 
-    When local file exists: delegates to LocalRasterDriver.
-    When missing: returns download guide with source URL and steps.
+    A materialized local file is read through the local raster decoder only
+    after the remote declaration has been admitted.
     """
 
     driver_type = "raster_file"
@@ -58,6 +58,9 @@ class RemoteRasterDriver(DataSourceDriver):
             DataResult with raster path (data_type="raster") or
             download guide (data_type="download_guide", success=False).
         """
+        admission_error = self._require_remote_admission(expected_kinds={"remote_raster"})
+        if admission_error is not None:
+            return admission_error
         if self.local_path.exists():
             local = LocalRasterDriver({
                 "path": str(self.local_path),

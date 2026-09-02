@@ -1,15 +1,8 @@
-"""Provider subpackage - active data provider modules.
+"""Protocol-specific external provider clients.
 
-Active submodules:
-- tianditu/: Used by fetcher.py, gis_context.py, accessibility.py, isochrone.py
-- amap/: Used by POIProvider, connections/amap.py
-- poi.py: Used by search_poi.py tool
-
-Removed modules (base.py, base_types.py, orchestrator.py, adapters,
-dem_provider.py, osm/, baidu/) have been deleted. New data access should use
-app.data.catalog.DataCatalog.
+Provider clients do not aggregate POI/anchors and do not write DATA cache
+directly. Provider runs supply boundary/query contracts and publish through
+the fenced observation writer.
 """
-
-from __future__ import annotations
 
 __all__ = []

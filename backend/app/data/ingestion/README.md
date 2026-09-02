@@ -1,42 +1,68 @@
-# data/ingestion 摄取子包
+# DATA ingestion
 
-> 本 README 以 `backend/app/data/ingestion/` 实际代码为准（核验日期 2026-08-15）。
-> 旧 `app/data/ingestion`、`modules/data` 内容已收敛到本包。
+`app.data.ingestion` 是 DATA 的输入解析边界，不是领域对象组装层。
 
-## 定位
-
-会话输入与外部数据进入系统的摄取边界：上传文件解析、空间/非空间来源适配、文档加载、
-表格与语义提取、地名解析、编译（l1/l2 profiles）。
-
-## 文件职责
-
-| 文件/目录 | 职责 |
-|---|---|
-| `upload.py` | `process_uploaded_file`：GIS 文件走空间解析；其他前端文件先经 MinerU，DATA 文本统一为 Markdown，同时保留表格资源与审计 |
-| `ingest.py` | `ingest_current_landuse`/`ingest_planned_landuse`/`ingest_feature`/`ingest_raster`：原始→typed 模型；`result_to_parcels`/`result_to_features`/`result_to_raster` |
-| `gazetteer.py` | 地名词典（地名→编码/坐标），供 L1 事实与 grounding |
-| `semantics.py` | MetricConcept/ValueSemantics（跨维度指标冲突检测） |
-| `tables.py` | 表格提取（分区/项目表），`table_schema_inference.py` 列语义推断 |
-| `summary_generator.py` / `summary_parser.py` | 维度报告结构化摘要生成/解析（ReportStore 使用） |
-| `spatial_language.py` | 空间关系语言解析 |
-| `documents/` | 文档加载：`document_loader`、`docling_loader`、`mineru_loader`、`pdf_fallback`、`loader` |
-| `sources/` | 数据来源驱动：`base`/`registry`/`file_vector`/`api_vector`/`document`/`local_raster`/`remote_raster`/`wmts_tile` |
-| `connections/` | 连接抽象：`base`/`rate_limiter`/`tianditu`/`gd_tianditu`/`amap` |
-| `providers/` | 地图 provider：`amap/`（anchor_service/provider/types）、`tencent/`、`tianditu/`（provider/tiles/wfs/gd_service） |
-| `adapters/` | 摄取策略适配：`features`/`parcels`/`raster`/`table`/`document` |
-| `compiler/` | 编译管线：`core`、`diagnostics`、`provenance`、`spec_mapper`、`profiles/l1_observation`、`profiles/l2_strategy` |
-
-## 数据流
+## 唯一写入路径
 
 ```text
-上传文件 / 外部来源
-  → upload / sources / providers / documents
-  → adapters / ingest → typed records（canonical/spatial/table/raster models）
-  → SessionDataSnapshot / DataResourceCatalog / SpatialWorkspace /（兼容）VillageBundle
-  → evidence / domain / workflow 消费
+UploadFile / declared source
+  → bounded parser
+  → source admission
+  → DataAdmissionFacade.admit()
+  → immutable DATA component products
 ```
 
-## 边界规则
+上传入口是 `upload.process_uploaded_file`。它计算 source digest，执行 byte/text/row
+预算和 temporal-role admission，然后把输入交给
+`app.modules.data.application.DataAdmissionFacade`。上传记录只保存状态和 artifact refs；
+current DATA 的事实来源是 CAS 中的 immutable products。
 
-- 不在此实现空间几何计算（BBox/距离/面积/过滤由 `app/spatial/` 完成）。
-- 所有摄取结果保留来源、解析诊断与质量状态；失败必须显式报告，不允许静默降级。
+## 当前保留的组件
+
+| 目录/文件 | 职责 |
+|---|---|
+| `upload.py` | 上传读取、文件类型识别、GeoJSON/通用矢量/栅格/表格/Markdown 解析 |
+| `source_admission.py` | current/reference/control/planned 角色隔离和 temporal admission |
+| `sources/` | `file_vector`、`api_vector`、`wmts_tile`、`local_raster`、`remote_raster`、`document` driver |
+| `connections/` | 连接、凭据引用和 rate limiter |
+| `documents/` | MinerU Markdown 文档入口；生产上传显式关闭本地解析 fallback |
+| `providers/` | AMap、Tencent、Tianditu 的声明式 provider client；结果必须进入 provider run writer |
+| `contracts.py` | `DataResult` 和 source metadata envelope |
+| `source_identity.py` | source/dataset/feature identity 辅助 |
+| `temporal_role_classifier.py` | 有界、可审计的来源时态角色分类 |
+
+## 组件产品
+
+`DataAdmissionFacade` 成功时发布：
+
+```text
+SourceSnapshotArtifact
+NormalizedResourceArtifact
+RepresentationSnapshotArtifact
+CapabilityIndexArtifact
+DataResourceCatalogIndexSnapshot
+DataAdmissionReceipt
+```
+
+失败时发布 terminal receipt 或 `DataAdmissionGap`，不发布 current catalog 指针。
+
+## 明确删除的旧入口
+
+以下能力不再属于 DATA ingestion：
+
+- typed landuse/parcel/feature/raster ingest；
+- `VillageBundle` 组装；
+- BSM/DLBM 派生和固定地类字段转换；
+- POI 优先级聚合和 provider 间 fallback；
+- provider anchor service；
+- data-side fuzzy gazetteer、行政码 loader 和独立编码探测器；
+- 通过缺省 parser、固定 boundary 或外部锚点补齐缺失输入。
+
+它们已经从工作树物理删除，不提供 re-export 或兼容 shim。
+
+## 约束
+
+- 不在 ingestion 内决定实体身份、规划意图或候选胜负。
+- 不在远程 admission 阶段发起网络请求。
+- 未知 CRS、非法 geometry、缺 receipt、部分 coverage 和 provider 失败均 fail closed。
+- 三家地图结果只能作为带 manifest 的 advisory observation，不能覆盖本地 DATA geometry。

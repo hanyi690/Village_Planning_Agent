@@ -10,20 +10,37 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.contracts.artifacts.ref import ArtifactRef
-from app.contracts.data.source_contracts import DataResourceCatalogSnapshot
+from app.contracts.data.source_contracts import (
+    DataResourceCatalogIndexSnapshot,
+    DataResourceCatalogSnapshot,
+)
 from app.contracts.data.admission_contracts import (
     DataAdmissionGap,
     DataAdmissionReceipt,
     DataAdmissionRequest,
     DataAdmissionResult,
 )
+from app.contracts.data.remote_admission_contracts import (
+    RemoteSourceAdmissionReceipt,
+    RemoteSourceAdmissionRequest,
+)
 from app.contracts.data.source_contracts import SourceAdmissionDecision
+from app.contracts.data.product_contracts import (
+    CapabilityIndexArtifact,
+    NormalizedResourceArtifact,
+    RepresentationSnapshotArtifact,
+    SourceSnapshotArtifact,
+    compose_catalog,
+    normalized_product,
+    source_product,
+)
 from app.contracts.data.stage_contracts import DataGapRecord, DataStageSnapshot
 from app.contracts.workflow.workflow_contracts import GateDecision, PendingRequest
 from app.data.model.snapshot import SessionDataSnapshot
@@ -68,6 +85,10 @@ class DataRunResult(BaseModel):
     data_snapshot: SessionDataSnapshot
     stage_snapshot: DataStageSnapshot
     catalog_ref: ArtifactRef
+    source_snapshot_ref: ArtifactRef
+    normalized_resource_ref: ArtifactRef
+    representation_snapshot_ref: ArtifactRef
+    capability_index_ref: ArtifactRef
     data_snapshot_ref: ArtifactRef
     stage_ref: ArtifactRef
     gate_ref: ArtifactRef
@@ -75,6 +96,7 @@ class DataRunResult(BaseModel):
     gap_ref: str = ""
     lifecycle_state: str = ""
     lifecycle: tuple[str, ...] = ()
+    boundary_scope_ref: ArtifactRef | None = None
     state_patch: dict[str, Any] = Field(default_factory=dict)
 
     def to_state_patch(self) -> dict[str, Any]:
@@ -86,6 +108,14 @@ class DataRunResult(BaseModel):
             "data_stage": self.stage_ref.model_dump(mode="json"),
             "data_gate": self.gate_ref.model_dump(mode="json"),
         }
+        patch["artifact_refs"].update({
+            "source_snapshot": self.source_snapshot_ref.model_dump(mode="json"),
+            "normalized_resource": self.normalized_resource_ref.model_dump(mode="json"),
+            "representation_snapshot": self.representation_snapshot_ref.model_dump(mode="json"),
+            "capability_index": self.capability_index_ref.model_dump(mode="json"),
+        })
+        if self.boundary_scope_ref is not None:
+            patch["artifact_refs"]["boundary_scope"] = self.boundary_scope_ref.model_dump(mode="json")
         patch.update({
             "data_snapshot_id": self.data_snapshot.snapshot_id,
             "data_snapshot_digest": self.data_snapshot.digest,
@@ -107,7 +137,9 @@ class DataAdmissionFacade:
             "crs": request.declared_crs,
             "adapter": request.adapter_hint,
             "role": request.expected_role,
+            "content_digest": request.content_digest,
             "parent_catalog_ref": request.parent_catalog_ref,
+            "recovery_gap_ref": request.recovery_gap_ref,
         })[:24]
 
     @staticmethod
@@ -122,11 +154,72 @@ class DataAdmissionFacade:
         return ":".join((request.adapter_hint, media, crs, request.expected_role))
 
     @staticmethod
+    def admit_declared_remote(
+        request: RemoteSourceAdmissionRequest,
+        *,
+        state: Mapping[str, Any] | None = None,
+    ) -> RemoteSourceAdmissionReceipt:
+        """Admit a remote source declaration without executing a provider.
+
+        This is intentionally synchronous and side-effect-free with respect
+        to the network.  The only durable side effect, when ``state`` is
+        supplied, is the immutable receipt in the DATA CAS.  A provider run
+        must later prove complete coverage before its observation product can
+        be consumed by Evidence or World Model.
+        """
+
+        receipt_id = "data.remote.receipt." + semantic_checksum({
+            "request_digest": request.request_digest,
+            "source_id": request.source_id,
+        })[:24]
+        receipt = RemoteSourceAdmissionReceipt(
+            receipt_id=receipt_id,
+            request_digest=request.request_digest,
+            source_id=request.source_id,
+            kind=request.kind,
+            provider=request.provider,
+            status="ADMITTED",
+            boundary_ref=request.boundary_ref,
+            boundary_digest=request.boundary_digest,
+            query_geometry_digest=request.query_geometry_digest,
+            crs_contract=request.crs_contract,
+            capability_contract=request.capabilities,
+            provenance={
+                "admission_mode": "declaration_only",
+                "network_contacted": False,
+                "auth_ref": request.auth_ref,
+                "limits": request.limits.model_dump(mode="json"),
+                "endpoint": str(request.endpoint),
+            },
+        )
+        if state is not None:
+            artifact_state = dict(state)
+            artifact_state.setdefault("artifact_schema_version", "3")
+            artifact_state.setdefault("branch_id", "main")
+            refs = dict(artifact_state.get("artifact_refs") or {})
+            artifact_state["artifact_refs"] = refs
+            stored_ref = store_artifact(
+                artifact_state,
+                "data_remote_admission_receipt",
+                "data",
+                "RemoteSourceAdmissionReceipt",
+                receipt,
+            )
+            refs["data_remote_admission_receipt"] = stored_ref
+            if isinstance(state, dict):
+                state.setdefault("artifact_refs", {})["data_remote_admission_receipt"] = stored_ref
+        return receipt
+
+    @staticmethod
     def _prepare_input(request: DataAdmissionRequest, value: Any) -> Any:
         """Materialize one declared file input into generic DATA records."""
 
         media = str(request.declared_media_type or "").strip().casefold()
-        if media in {"geojson", "application/geo+json"}:
+        if media in {
+            "geojson", "application/geo+json", "application/x-esri-shapefile",
+            "application/x-shapefile", "application/geopackage+sqlite3",
+            "application/vnd.google-earth.kml+xml", "application/gml+xml",
+        }:
             path = None
             if isinstance(value, (str, Path)):
                 candidate = Path(value)
@@ -151,12 +244,44 @@ class DataAdmissionFacade:
                 properties.update({
                     "source_uri": source_uri,
                     "source_content_ref": request.source_ref,
+                    "source_content_digest": request.content_digest,
                     "input_role": request.expected_role,
                     "source_feature_ordinal": index,
                 })
                 feature["properties"] = properties
                 features.append(feature)
-            return {"type": "FeatureCollection", "features": features}
+            result = {"type": "FeatureCollection", "features": features}
+            if payload.get("crs") is not None:
+                result["crs"] = payload["crs"]
+            return result
+        if media in {
+            "text/csv", "text/tab-separated-values", "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }:
+            if not isinstance(value, Mapping) or str(value.get("type") or "").casefold() != "tableresource":
+                raise ValueError("table input must be a materialized TableResource")
+            records: list[dict[str, Any]] = []
+            for table in value.get("tables") or ():
+                if not isinstance(table, Mapping):
+                    raise ValueError("table resource contains an invalid sheet")
+                sheet_name = str(table.get("name") or "default")
+                for row_ordinal, row in enumerate(table.get("rows") or ()):
+                    if not isinstance(row, Mapping):
+                        raise ValueError(f"table row {row_ordinal} is not an object")
+                    records.append({
+                        "geometry": None,
+                        "properties": {
+                            "resource_kind": "table",
+                            "sheet_name": sheet_name,
+                            "row_ordinal": row_ordinal,
+                            "columns": dict(row),
+                            "source_uri": request.source_ref,
+                            "source_content_ref": request.source_ref,
+                            "source_content_digest": request.content_digest,
+                            "input_role": request.expected_role,
+                        },
+                    })
+            return records
         if media in {"text/markdown", "text/x-markdown", "markdown"}:
             if isinstance(value, (str, Path)):
                 candidate = Path(value)
@@ -178,11 +303,11 @@ class DataAdmissionFacade:
                 "properties": {
                     "resource_kind": "document",
                     "content_format": "markdown",
-                    "document_type": "current_evidence_report",
                     "parser": "mineru",
                     "text": text,
                     "source_uri": source_uri,
                     "source_content_ref": request.source_ref,
+                    "source_content_digest": request.content_digest,
                     "input_role": request.expected_role,
                     "source_span_strategy": "markdown_line",
                 },
@@ -190,6 +315,16 @@ class DataAdmissionFacade:
         if media in {"image/tiff", "image/geotiff", "application/geotiff", "geotiff"}:
             from app.data.ingestion.sources.local_raster import LocalRasterDriver
 
+            if isinstance(value, Mapping) and str(value.get("type") or "").casefold() == "rasterresource":
+                metadata = dict(value)
+                metadata.setdefault("source_crs", metadata.get("crs") or request.declared_crs)
+                metadata.update({
+                    "source_uri": request.source_ref,
+                    "source_content_ref": request.source_ref,
+                    "source_content_digest": request.content_digest,
+                    "input_role": request.expected_role,
+                })
+                return [{"geometry": None, "properties": metadata}]
             raw_path = value.get("path") if isinstance(value, Mapping) else value
             path = Path(raw_path) if raw_path else Path("")
             if not path.is_file():
@@ -210,6 +345,7 @@ class DataAdmissionFacade:
                     "layer_ref": "dem",
                     "source_uri": str(path),
                     "source_content_ref": request.source_ref,
+                    "source_content_digest": request.content_digest,
                     "input_role": request.expected_role,
                     "format": "GeoTIFF",
                     "source_crs": str(result.metadata.get("crs") or request.declared_crs),
@@ -318,6 +454,10 @@ class DataAdmissionFacade:
         }
         for key in (
             "data_catalog",
+            "source_snapshot",
+            "normalized_resource",
+            "representation_snapshot",
+            "capability_index",
             "data_snapshot",
             "data_stage",
         ):
@@ -325,6 +465,11 @@ class DataAdmissionFacade:
             if ref is None:
                 return None
             refs[key] = ref.model_dump(mode="json")
+        if str(policy.get("boundary_scope_mode") or "").strip():
+            boundary_ref = repository.get_named_ref(run_id, branch_id, "boundary_scope")
+            if boundary_ref is None:
+                return None
+            refs["boundary_scope"] = boundary_ref.model_dump(mode="json")
         replay_state = {
             **state,
             "artifact_refs": refs,
@@ -350,9 +495,18 @@ class DataAdmissionFacade:
             data_snapshot=data_snapshot,
             stage_snapshot=stage,
             catalog_ref=ArtifactRef.model_validate(refs["data_catalog"]),
+            source_snapshot_ref=ArtifactRef.model_validate(refs["source_snapshot"]),
+            normalized_resource_ref=ArtifactRef.model_validate(refs["normalized_resource"]),
+            representation_snapshot_ref=ArtifactRef.model_validate(refs["representation_snapshot"]),
+            capability_index_ref=ArtifactRef.model_validate(refs["capability_index"]),
             data_snapshot_ref=ArtifactRef.model_validate(refs["data_snapshot"]),
             stage_ref=ArtifactRef.model_validate(refs["data_stage"]),
             gate_ref=ArtifactRef.model_validate(refs["data_gate"]),
+            boundary_scope_ref=(
+                ArtifactRef.model_validate(refs["boundary_scope"])
+                if "boundary_scope" in refs
+                else None
+            ),
             receipt_ref=receipt.receipt_ref,
             lifecycle_state=receipt.state,
             lifecycle=receipt.lifecycle,
@@ -370,6 +524,7 @@ class DataAdmissionFacade:
             stage_ref=data_run.stage_ref,
             gate_ref=data_run.gate_ref,
             receipt_artifact_ref=receipt_ref,
+            boundary_scope_artifact_ref=data_run.boundary_scope_ref,
             data_run=data_run,
         )
 
@@ -381,6 +536,7 @@ class DataAdmissionFacade:
         state: str,
         reason_code: str,
         reason: str,
+        lifecycle_prefix: tuple[str, ...] = ("DISCOVERED", "CLASSIFIED"),
     ) -> DataAdmissionResult:
         gap_ref = "data.gap." + semantic_checksum({
             "attempt_ref": attempt_ref,
@@ -400,8 +556,12 @@ class DataAdmissionFacade:
                 "adapter_hint": request.adapter_hint,
                 "expected_role": request.expected_role,
                 "reason": reason,
+                "recovery_gap_ref": request.recovery_gap_ref,
             },
-            input_refs=(request.source_ref,),
+            input_refs=tuple(dict.fromkeys([
+                request.source_ref,
+                *([_artifact_digest(request.recovery_gap_ref)] if request.recovery_gap_ref is not None else []),
+            ])),
             recovery_action="correct the declaration or provide a supported local input file",
             retryability="retryable" if state != "POLICY_REJECTED" else "non_retryable",
             owner="data",
@@ -416,6 +576,8 @@ class DataAdmissionFacade:
             receipt_ref=receipt_ref,
             source_ref=request.source_ref,
             attempt_ref=attempt_ref,
+            input_role=request.expected_role,
+            admission_status="quarantined",
             state=state,
             state_at_failure=state,
             reason_code=reason_code,
@@ -423,10 +585,10 @@ class DataAdmissionFacade:
             retryability=gap.retryability,
             owner=gap.owner,
             budget_state=gap.budget_state,
-            lifecycle=("DISCOVERED", "CLASSIFIED", state),
+            lifecycle=tuple(dict.fromkeys([*lifecycle_prefix, state])),
             gap_ref=gap_ref,
             observed_metadata=gap.observed_metadata,
-            input_refs=(request.source_ref,),
+            input_refs=gap.input_refs,
         )
         receipt_artifact_ref, gap_artifact_ref = DataAdmissionFacade._persist_rejection(
             request,
@@ -440,8 +602,111 @@ class DataAdmissionFacade:
             gap_artifact_ref=gap_artifact_ref,
         )
 
+    def record_ingress_admission(
+        self,
+        request: DataAdmissionRequest,
+        assessment: Any,
+    ) -> DataAdmissionResult:
+        """Persist a non-current ingress decision without publishing DATA.
+
+        Control text, reference plans, planned outputs, and unresolved uploads
+        are still first-class ingress products.  They receive the same
+        receipt/gap boundary as current evidence, but never create a current
+        world catalog.  This keeps the upload table and CAS on one admission
+        contract without pretending that every upload is spatial DATA.
+        """
+
+        input_role = str(getattr(assessment, "input_role", "unclassified") or "unclassified")
+        admission_status = str(getattr(assessment, "status", "quarantined") or "quarantined")
+        reason = str(getattr(assessment, "reason", "source_admission_unresolved") or "source_admission_unresolved")
+        budget_error = str((request.policy_context or {}).get("budget_error") or "").strip()
+        signals = tuple(str(item) for item in getattr(assessment, "signals", ()) if str(item).strip())
+        attempt_ref = self._attempt_ref(request, request.normalized_input if request.normalized_input is not None else request.content)
+        gap_ref = "data.gap." + semantic_checksum({
+            "attempt_ref": attempt_ref,
+            "reason": reason,
+            "status": admission_status,
+        })[:24]
+        observed = {
+            "media_type": request.declared_media_type,
+            "encoding": request.declared_encoding,
+            "crs": request.declared_crs,
+            "adapter_hint": request.adapter_hint,
+            "expected_role": request.expected_role,
+            "input_role": input_role,
+            "admission_status": admission_status,
+            "reason": reason,
+            "signals": list(signals),
+            "classifier_ref": str(getattr(assessment, "classifier_ref", "") or ""),
+            "classifier_input_digest": str(getattr(assessment, "classifier_input_digest", "") or ""),
+            "classifier_output_digest": str(getattr(assessment, "classifier_output_digest", "") or ""),
+            "classifier_model": str(getattr(assessment, "classifier_model", "") or ""),
+            "classifier_confidence": float(getattr(assessment, "classifier_confidence", 0.0) or 0.0),
+        }
+        gap = DataAdmissionGap(
+            gap_ref=gap_ref,
+            source_ref=request.source_ref,
+            attempt_ref=attempt_ref,
+            state_at_failure="POLICY_REJECTED",
+            reason_code=(
+                budget_error
+                if budget_error
+                else "source_admission_quarantined"
+                if admission_status == "quarantined"
+                else "non_current_source_isolated"
+            ),
+            required_capability=self._required_capability(request),
+            observed_metadata=observed,
+            input_refs=(request.source_ref,),
+            recovery_action=(
+                "reduce the upload to the configured DATA byte budget and retry"
+                if budget_error
+                else
+                "provide an explicit current_evidence declaration and pass the temporal-role gate"
+                if admission_status == "quarantined"
+                else "consume this source only through its declared control or reference channel"
+            ),
+            retryability="retryable" if admission_status == "quarantined" else "non_retryable",
+            owner="data",
+            budget_state=dict(request.policy_context.get("budget_state") or {}),
+        )
+        receipt_ref = "data.receipt." + semantic_checksum({
+            "attempt_ref": attempt_ref,
+            "gap_ref": gap_ref,
+        })[:24]
+        receipt = DataAdmissionReceipt(
+            receipt_ref=receipt_ref,
+            source_ref=request.source_ref,
+            attempt_ref=attempt_ref,
+            input_role=input_role,
+            admission_status=admission_status,
+            state="POLICY_REJECTED",
+            state_at_failure="POLICY_REJECTED",
+            reason_code=gap.reason_code,
+            required_capability=gap.required_capability,
+            lifecycle=("DISCOVERED", "CLASSIFIED", "POLICY_REJECTED"),
+            gap_ref=gap_ref,
+            observed_metadata=observed,
+            input_refs=(request.source_ref,),
+            recovery_action=gap.recovery_action,
+            retryability=gap.retryability,
+            owner="data",
+            budget_state=gap.budget_state,
+        )
+        receipt_artifact_ref, gap_artifact_ref = self._persist_rejection(
+            request,
+            gap=gap,
+            receipt=receipt,
+        )
+        return DataAdmissionResult(
+            receipt=receipt,
+            gap=gap,
+            receipt_artifact_ref=receipt_artifact_ref,
+            gap_artifact_ref=gap_artifact_ref,
+        )
+
     async def admit(self, request: DataAdmissionRequest) -> DataAdmissionResult:
-        from app.data.admission import check_p0_local_boundary
+        from app.data.admission import check_local_admission_boundary
 
         raw_value = request.normalized_input if request.normalized_input is not None else request.content
         if raw_value is None:
@@ -450,8 +715,78 @@ class DataAdmissionFacade:
                 request, attempt_ref=attempt_ref, state="INVALID",
                 reason_code="input_missing", reason="content or normalized_input is required",
             )
+        policy = dict(request.policy_context or {})
+        budget_error = str(policy.get("budget_error") or "").strip()
+        if budget_error:
+            return self._rejection(
+                request,
+                attempt_ref=self._attempt_ref(request, raw_value),
+                state="POLICY_REJECTED",
+                reason_code=budget_error,
+                reason="input exceeds a configured DATA admission budget",
+                lifecycle_prefix=("DISCOVERED", "CLASSIFIED", "PARSING"),
+            )
+        try:
+            from app.core.settings import (
+                DATA_MAX_FEATURES,
+                DATA_MAX_TABLE_ROWS,
+                DATA_MAX_TEXT_CHARS,
+            )
+        except Exception:
+            DATA_MAX_FEATURES, DATA_MAX_TABLE_ROWS, DATA_MAX_TEXT_CHARS = 500000, 1000000, 2000000
+        media = str(request.declared_media_type or "").casefold()
+        if media in {"text/markdown", "text/x-markdown", "markdown"} and isinstance(raw_value, str):
+            if len(raw_value) > DATA_MAX_TEXT_CHARS:
+                return self._rejection(
+                    request,
+                    attempt_ref=self._attempt_ref(request, raw_value),
+                    state="POLICY_REJECTED",
+                    reason_code="text_length_exceeded",
+                    reason="Markdown exceeds DATA_MAX_TEXT_CHARS",
+                    lifecycle_prefix=("DISCOVERED", "CLASSIFIED", "PARSING"),
+                )
+        if isinstance(raw_value, Mapping):
+            if str(raw_value.get("type") or "").casefold() == "featurecollection":
+                count = len(raw_value.get("features") or ())
+                if count > DATA_MAX_FEATURES:
+                    return self._rejection(
+                        request,
+                        attempt_ref=self._attempt_ref(request, raw_value),
+                        state="POLICY_REJECTED",
+                        reason_code="feature_count_exceeded",
+                        reason="FeatureCollection exceeds DATA_MAX_FEATURES",
+                        lifecycle_prefix=("DISCOVERED", "CLASSIFIED", "PARSING"),
+                    )
+            if str(raw_value.get("type") or "").casefold() == "tableresource":
+                row_count = sum(
+                    len(table.get("rows") or ())
+                    for table in raw_value.get("tables") or ()
+                    if isinstance(table, Mapping)
+                )
+                if row_count > DATA_MAX_TABLE_ROWS:
+                    return self._rejection(
+                        request,
+                        attempt_ref=self._attempt_ref(request, raw_value),
+                        state="POLICY_REJECTED",
+                        reason_code="table_row_count_exceeded",
+                        reason="TableResource exceeds DATA_MAX_TABLE_ROWS",
+                        lifecycle_prefix=("DISCOVERED", "CLASSIFIED", "PARSING"),
+                    )
         attempt_ref = self._attempt_ref(request, raw_value)
-        boundary = check_p0_local_boundary(
+        normalized_source_ref = (
+            "/"
+            + str(request.source_ref).replace("\\", "/").strip("/").casefold()
+            + "/"
+        )
+        if "/planned/" in normalized_source_ref:
+            return self._rejection(
+                request,
+                attempt_ref=attempt_ref,
+                state="POLICY_REJECTED",
+                reason_code="planned_input_excluded",
+                reason="planned inputs are outside the DATA current_evidence boundary",
+            )
+        boundary = check_local_admission_boundary(
             declared_media_type=request.declared_media_type,
             adapter_hint=request.adapter_hint,
             declared_crs=request.declared_crs,
@@ -474,6 +809,7 @@ class DataAdmissionFacade:
                 state="ENCODING_UNRESOLVED",
                 reason_code="encoding_unresolved",
                 reason=str(exc),
+                lifecycle_prefix=("DISCOVERED", "CLASSIFIED", "PARSING"),
             )
         except FileNotFoundError as exc:
             return self._rejection(
@@ -482,6 +818,7 @@ class DataAdmissionFacade:
                 state="INVALID",
                 reason_code="input_file_missing",
                 reason=str(exc),
+                lifecycle_prefix=("DISCOVERED", "CLASSIFIED", "PARSING"),
             )
         except Exception as exc:
             return self._rejection(
@@ -490,7 +827,28 @@ class DataAdmissionFacade:
                 state="INVALID",
                 reason_code="input_parse_failed",
                 reason=f"{type(exc).__name__}: {exc}",
+                lifecycle_prefix=("DISCOVERED", "CLASSIFIED", "PARSING"),
             )
+        if isinstance(value, Mapping) and str(value.get("type") or "").casefold() == "featurecollection":
+            if len(value.get("features") or ()) > DATA_MAX_FEATURES:
+                return self._rejection(
+                    request,
+                    attempt_ref=self._attempt_ref(request, value),
+                    state="POLICY_REJECTED",
+                    reason_code="feature_count_exceeded",
+                    reason="materialized FeatureCollection exceeds DATA_MAX_FEATURES",
+                    lifecycle_prefix=("DISCOVERED", "CLASSIFIED", "PARSING"),
+                )
+        if str(request.adapter_hint or "").casefold() == "table" and isinstance(value, list):
+            if len(value) > DATA_MAX_TABLE_ROWS:
+                return self._rejection(
+                    request,
+                    attempt_ref=self._attempt_ref(request, value),
+                    state="POLICY_REJECTED",
+                    reason_code="table_row_count_exceeded",
+                    reason="materialized table exceeds DATA_MAX_TABLE_ROWS",
+                    lifecycle_prefix=("DISCOVERED", "CLASSIFIED", "PARSING"),
+                )
         attempt_ref = self._attempt_ref(request, value)
 
         parent_ref: ArtifactRef | None = None
@@ -505,7 +863,9 @@ class DataAdmissionFacade:
                     reason_code="parent_catalog_ref_invalid",
                     reason="parent_catalog_ref must be an ArtifactRef descriptor",
                 )
-            if parent_ref.schema_id != "DataResourceCatalogSnapshot":
+            if parent_ref.schema_id not in {
+                "DataResourceCatalogIndexSnapshot",
+            }:
                 return self._rejection(
                     request,
                     attempt_ref=attempt_ref,
@@ -550,17 +910,41 @@ class DataAdmissionFacade:
         if replayed is not None:
             return replayed
 
-        catalog = DataApplication.normalize(
-            value,
-            dataset_ref=request.source_ref,
-            session_id=request.session_id,
-            source_snapshot_ref="data-input:" + attempt_ref,
-        )
+        try:
+            catalog = DataApplication.normalize(
+                value,
+                dataset_ref=request.source_ref,
+                session_id=request.session_id,
+                source_snapshot_ref="data-input:" + attempt_ref,
+                layer_ref=str(request.policy_context.get("layer_ref") or ""),
+            )
+        except (ValueError, TypeError, KeyError) as exc:
+            message = str(exc)
+            terminal_state = (
+                "CRS_UNRESOLVED"
+                if "crs" in message.casefold()
+                else "GEOMETRY_INVALID"
+                if "geometr" in message.casefold()
+                else "INVALID"
+            )
+            return self._rejection(
+                request,
+                attempt_ref=attempt_ref,
+                state=terminal_state,
+                reason_code=terminal_state.casefold(),
+                reason=f"{type(exc).__name__}: {message}",
+                lifecycle_prefix=(
+                    "DISCOVERED", "CLASSIFIED", "PARSING", "NORMALIZED",
+                ),
+            )
         features = catalog.snapshot.features
         if not features:
             return self._rejection(
                 request, attempt_ref=attempt_ref, state="INVALID",
                 reason_code="empty_geojson", reason="GeoJSON contains no features",
+                lifecycle_prefix=(
+                    "DISCOVERED", "CLASSIFIED", "PARSING", "NORMALIZED",
+                ),
             )
         if any(
             feature.normalized_geometry is None
@@ -572,6 +956,10 @@ class DataAdmissionFacade:
             return self._rejection(
                 request, attempt_ref=attempt_ref, state="GEOMETRY_INVALID",
                 reason_code="geometry_invalid", reason="one or more geometries are not normalized WGS84 geometry",
+                lifecycle_prefix=(
+                    "DISCOVERED", "CLASSIFIED", "PARSING", "NORMALIZED",
+                    "REPRESENTATION_BUILT",
+                ),
             )
         decisions = tuple(
             SourceAdmissionDecision(
@@ -585,7 +973,7 @@ class DataAdmissionFacade:
                 input_role="current_evidence",
                 status="admitted",
                 resource_kind=feature.geometry_kind,
-                reason="explicit_p0_local_boundary_admission",
+                reason="explicit_local_capability_admission",
                 recovery_pointer=f"data-receipt:{attempt_ref}",
             )
             for feature in catalog.snapshot.features
@@ -641,6 +1029,62 @@ class DataAdmissionFacade:
             catalog=catalog,
             data_snapshot=data_snapshot,
         )
+        boundary_scope_ref: ArtifactRef | None = None
+        boundary_scope_artifact = None
+        boundary_scope_mode = str(
+            request.policy_context.get("boundary_scope_mode") or ""
+        ).strip()
+        if boundary_scope_mode:
+            from app.data.boundary_scope import build_boundary_scope_artifact
+
+            if boundary_scope_mode not in {
+                "admitted_boundary",
+                "polygonized_admin_boundary",
+            }:
+                return self._rejection(
+                    request,
+                    attempt_ref=attempt_ref,
+                    state="POLICY_REJECTED",
+                    reason_code="boundary_scope_mode_invalid",
+                    reason="boundary scope mode must be explicit",
+                )
+            boundary_scope = build_boundary_scope_artifact(
+                run.catalog,
+                mode=boundary_scope_mode,
+                source_dataset_ref=str(
+                    request.policy_context.get("boundary_dataset_ref") or ""
+                ),
+                source_layer_ref=str(
+                    request.policy_context.get("boundary_layer_ref") or "boundary"
+                ),
+            )
+            if boundary_scope is None:
+                return self._rejection(
+                    request,
+                    attempt_ref=attempt_ref,
+                    state="GEOMETRY_INVALID",
+                    reason_code="boundary_scope_unavailable",
+                    reason="an admitted normalized polygon boundary is required",
+                )
+            boundary_state = {
+                **run_state,
+                **run.to_state_patch(),
+                "artifact_refs": dict(run.to_state_patch().get("artifact_refs") or {}),
+            }
+            boundary_scope_ref = ArtifactRef.model_validate(
+                store_artifact(
+                    boundary_state,
+                    "boundary_scope",
+                    "data",
+                    "BoundaryScopeArtifact",
+                    boundary_scope,
+                    parent_keys=(
+                        "data_catalog", "source_snapshot", "normalized_resource",
+                        "representation_snapshot", "capability_index",
+                    ),
+                )
+            )
+            boundary_scope_artifact = boundary_scope
         lifecycle = (
             "DISCOVERED", "CLASSIFIED", "PARSING", "NORMALIZED",
             "REPRESENTATION_BUILT", "CAPABILITY_INDEXED", "ADMITTED",
@@ -653,12 +1097,17 @@ class DataAdmissionFacade:
             receipt_ref=receipt_ref,
             source_ref=request.source_ref,
             attempt_ref=attempt_ref,
+            input_role="current_evidence",
+            admission_status="admitted",
             state="ADMITTED",
             state_at_failure="ADMITTED",
             lifecycle=lifecycle,
             catalog_ref=run.catalog_ref.digest,
             stage_ref=run.stage_ref.digest,
             gate_ref=run.gate_ref.digest,
+            boundary_scope_ref=(
+                boundary_scope_ref.digest if boundary_scope_ref is not None else ""
+            ),
             required_capability=DataAdmissionFacade._required_capability(request),
             observed_metadata={
                 "feature_count": len(run.catalog.features),
@@ -668,10 +1117,36 @@ class DataAdmissionFacade:
                     str(item.geometry_kind or "")
                     for item in run.catalog.features
                 }),
+                "content_digest": request.content_digest,
+                "classifier_ref": str(request.policy_context.get("classifier_ref") or ""),
+                "classifier_input_digest": str(request.policy_context.get("classifier_input_digest") or ""),
+                "classifier_output_digest": str(request.policy_context.get("classifier_output_digest") or ""),
+                "classifier_model": str(request.policy_context.get("classifier_model") or ""),
+                "classifier_confidence": float(request.policy_context.get("classifier_confidence") or 0.0),
+                "boundary_scope_ref": (
+                    boundary_scope_ref.digest if boundary_scope_ref is not None else ""
+                ),
+                "boundary_digest": str(
+                    getattr(boundary_scope_artifact, "boundary_digest", "") or ""
+                ),
+                "query_geometry_digest": str(
+                    getattr(boundary_scope_artifact, "query_geometry_digest", "") or ""
+                ),
+                "recovery_gap_ref": (
+                    _artifact_digest(request.recovery_gap_ref)
+                    if request.recovery_gap_ref is not None
+                    else ""
+                ),
             },
             input_refs=tuple(dict.fromkeys([
                 request.source_ref,
                 *( [parent_ref.digest] if parent_ref is not None else [] ),
+                *( [boundary_scope_ref.digest] if boundary_scope_ref is not None else [] ),
+                *(
+                    [_artifact_digest(request.recovery_gap_ref)]
+                    if request.recovery_gap_ref is not None
+                    else []
+                ),
             ])),
         )
         stage = run.stage_snapshot.model_copy(update={
@@ -680,6 +1155,8 @@ class DataAdmissionFacade:
             "lifecycle": lifecycle,
         })
         run_refs = dict(run.to_state_patch().get("artifact_refs") or {})
+        if boundary_scope_ref is not None:
+            run_refs["boundary_scope"] = boundary_scope_ref.model_dump(mode="json")
         revised_state = {
             **run_state,
             **run.to_state_patch(),
@@ -711,6 +1188,10 @@ class DataAdmissionFacade:
             revised_gate,
             output_refs={
                 "data_catalog": run.catalog_ref,
+                "source_snapshot": run.source_snapshot_ref,
+                "normalized_resource": run.normalized_resource_ref,
+                "representation_snapshot": run.representation_snapshot_ref,
+                "capability_index": run.capability_index_ref,
                 "data_snapshot": run.data_snapshot_ref,
                 "data_stage": revised_stage_ref,
             },
@@ -730,10 +1211,16 @@ class DataAdmissionFacade:
             }
         receipt_parent_keys = [
             "data_catalog",
+            "source_snapshot",
+            "normalized_resource",
+            "representation_snapshot",
+            "capability_index",
             "data_snapshot",
             "data_stage",
             "data_gate",
         ]
+        if boundary_scope_ref is not None:
+            receipt_parent_keys.append("boundary_scope")
         if parent_ref is not None:
             receipt_parent_keys.append("data_catalog_parent")
         receipt_artifact_ref = ArtifactRef.model_validate(
@@ -753,6 +1240,7 @@ class DataAdmissionFacade:
             "lifecycle": lifecycle,
             "stage_ref": revised_stage_ref,
             "gate_ref": revised_gate_ref,
+            "boundary_scope_ref": boundary_scope_ref,
             "state_patch": {
                 **dict(run.state_patch),
                 "artifact_refs": run_refs,
@@ -765,10 +1253,54 @@ class DataAdmissionFacade:
             stage_ref=revised_stage_ref,
             gate_ref=revised_gate_ref,
             receipt_artifact_ref=receipt_artifact_ref,
+            boundary_scope_artifact_ref=boundary_scope_ref,
             data_run=run,
         )
 
     async def resume(self, request: DataAdmissionRequest) -> DataAdmissionResult:
+        if request.recovery_gap_ref is None:
+            raise ValueError("resume requires recovery_gap_ref")
+        try:
+            recovery_ref = ArtifactRef.model_validate(request.recovery_gap_ref)
+        except Exception:
+            return self._rejection(
+                request,
+                attempt_ref=self._attempt_ref(request, request.normalized_input or request.content),
+                state="POLICY_REJECTED",
+                reason_code="recovery_gap_ref_invalid",
+                reason="recovery_gap_ref must be an immutable DataAdmissionGap artifact ref",
+            )
+        if recovery_ref.schema_id != "DataAdmissionGap":
+            return self._rejection(
+                request,
+                attempt_ref=self._attempt_ref(request, request.normalized_input or request.content),
+                state="POLICY_REJECTED",
+                reason_code="recovery_gap_ref_wrong_schema",
+                reason="recovery_gap_ref must identify a DataAdmissionGap artifact",
+            )
+        recovery_state = self._admission_state(
+            request,
+            run_id=recovery_ref.run_id,
+            refs={"data_admission_gap": recovery_ref.model_dump(mode="json")},
+        )
+        recovery_state["branch_id"] = recovery_ref.branch_id
+        gap = load_artifact(recovery_state, "data_admission_gap", DataAdmissionGap)
+        if gap is None or gap.source_ref != request.source_ref:
+            return self._rejection(
+                request,
+                attempt_ref=self._attempt_ref(request, request.normalized_input or request.content),
+                state="POLICY_REJECTED",
+                reason_code="recovery_gap_source_mismatch",
+                reason="recovery gap does not belong to this source",
+            )
+        if gap.retryability != "retryable":
+            return self._rejection(
+                request,
+                attempt_ref=self._attempt_ref(request, request.normalized_input or request.content),
+                state="POLICY_REJECTED",
+                reason_code="recovery_gap_not_retryable",
+                reason="the recorded admission gap is terminal and cannot be resumed",
+            )
         return await self.admit(request)
 
     @staticmethod
@@ -788,6 +1320,24 @@ def _descriptor_digest(value: Any) -> str:
         or getattr(value, "digest", "")
         or ""
     )
+
+
+def _artifact_digest(value: Any) -> str:
+    if isinstance(value, Mapping):
+        return str(value.get("digest") or value.get("descriptor_digest") or "")
+    return str(
+        getattr(value, "digest", "")
+        or getattr(value, "descriptor_digest", "")
+        or ""
+    )
+
+
+def _data_budget(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(1, value)
 
 
 def _catalog_gaps(catalog: DataResourceCatalog) -> tuple[DataGapRecord, ...]:
@@ -1041,6 +1591,43 @@ class DataApplication:
     """Normalize arbitrary source records and publish a DATA gate."""
 
     @staticmethod
+    def _catalog_index(
+        snapshot: DataResourceCatalogSnapshot,
+        *,
+        source_ref: ArtifactRef,
+        normalized_ref: ArtifactRef,
+        representation_ref: ArtifactRef,
+        capability_ref: ArtifactRef,
+    ) -> DataResourceCatalogIndexSnapshot:
+        """Build the small catalog pointer kept in workflow-visible DATA state."""
+
+        return DataResourceCatalogIndexSnapshot(
+            snapshot_id=snapshot.snapshot_id,
+            catalog_digest=snapshot.digest,
+            source_snapshot_ref=source_ref.digest,
+            source_snapshot_digest=source_ref.digest,
+            normalized_resource_ref=normalized_ref.digest,
+            normalized_resource_digest=normalized_ref.digest,
+            representation_snapshot_ref=representation_ref.digest,
+            representation_snapshot_digest=representation_ref.digest,
+            capability_index_ref=capability_ref.digest,
+            capability_index_digest=capability_ref.digest,
+            dataset_refs=tuple(item.dataset_ref for item in snapshot.datasets),
+            dataset_digests=tuple(item.digest for item in snapshot.datasets),
+            feature_refs=tuple(
+                f"{item.dataset_ref}:{item.source_feature_ref}"
+                for item in snapshot.features
+            ),
+            feature_digests=tuple(item.source_feature_digest for item in snapshot.features),
+            representation_refs=tuple(item.representation_ref for item in snapshot.representations),
+            representation_digests=tuple(item.content_digest for item in snapshot.representations),
+            capability_refs=tuple(item.capability_ref for item in snapshot.capabilities),
+            capability_digests=tuple(item.content_digest for item in snapshot.capabilities),
+            admission_decision_refs=tuple(item.decision_ref for item in snapshot.admission_decisions),
+            admission_policy_version=snapshot.admission_policy_version,
+        )
+
+    @staticmethod
     def normalize(
         source: Any,
         *,
@@ -1048,6 +1635,7 @@ class DataApplication:
         session_id: str = "",
         village_name: str = "",
         source_snapshot_ref: str = "",
+        layer_ref: str = "",
     ) -> DataResourceCatalog:
         """Return a lossless generic catalog without assigning planning types."""
 
@@ -1060,6 +1648,7 @@ class DataApplication:
             dataset_ref=dataset_ref,
             name=village_name,
             snapshot_id=source_snapshot_ref,
+            layer_ref=layer_ref,
         )
 
     @staticmethod
@@ -1137,6 +1726,11 @@ class DataApplication:
         normalized = DataResourceCatalog(
             current_world_snapshot(normalized.snapshot)
         )
+        from app.modules.data.invalidation import build_data_dependency_graph
+
+        dependency_graph = build_data_dependency_graph(
+            normalized,
+        )
         snapshot = data_snapshot or SessionDataSnapshot.from_data_catalog(
             normalized,
             session_id=request.session_id,
@@ -1150,13 +1744,82 @@ class DataApplication:
             )
         refs = dict(state.get("artifact_refs") or {})
         artifact_state = self._artifact_state(state, refs)
+        source_ref = ArtifactRef.model_validate(
+            store_artifact(
+                artifact_state,
+                "source_snapshot",
+                "data",
+                "SourceSnapshotArtifact",
+                source_product(
+                    normalized.snapshot,
+                    source_ref=str(state.get("source_ref") or request.session_id),
+                    content_digest=str(state.get("content_digest") or ""),
+                ),
+                parent_keys=(),
+            )
+        )
+        refs["source_snapshot"] = source_ref.model_dump(mode="json")
+        artifact_state = self._artifact_state(state, refs)
+        normalized_ref = ArtifactRef.model_validate(
+            store_artifact(
+                artifact_state,
+                "normalized_resource",
+                "data",
+                "NormalizedResourceArtifact",
+                normalized_product(normalized.snapshot),
+                parent_keys=("source_snapshot",),
+            )
+        )
+        refs["normalized_resource"] = normalized_ref.model_dump(mode="json")
+        artifact_state = self._artifact_state(state, refs)
+        representation_ref = ArtifactRef.model_validate(
+            store_artifact(
+                artifact_state,
+                "representation_snapshot",
+                "data",
+                "RepresentationSnapshotArtifact",
+                RepresentationSnapshotArtifact(
+                    snapshot_id=normalized.snapshot.snapshot_id,
+                    representations=normalized.snapshot.representations,
+                ),
+                parent_keys=("normalized_resource",),
+            )
+        )
+        refs["representation_snapshot"] = representation_ref.model_dump(mode="json")
+        artifact_state = self._artifact_state(state, refs)
+        capability_ref = ArtifactRef.model_validate(
+            store_artifact(
+                artifact_state,
+                "capability_index",
+                "data",
+                "CapabilityIndexArtifact",
+                CapabilityIndexArtifact(
+                    snapshot_id=normalized.snapshot.snapshot_id,
+                    capabilities=normalized.snapshot.capabilities,
+                ),
+                parent_keys=("representation_snapshot",),
+            )
+        )
+        refs["capability_index"] = capability_ref.model_dump(mode="json")
+        catalog_index = self._catalog_index(
+            normalized.snapshot,
+            source_ref=source_ref,
+            normalized_ref=normalized_ref,
+            representation_ref=representation_ref,
+            capability_ref=capability_ref,
+        )
+        artifact_state = self._artifact_state(state, refs)
         catalog_ref = ArtifactRef.model_validate(
             store_artifact(
                 artifact_state,
                 "data_catalog",
                 "data",
-                "DataResourceCatalogSnapshot",
-                normalized.snapshot,
+                "DataResourceCatalogIndexSnapshot",
+                catalog_index,
+                parent_keys=(
+                    "source_snapshot", "normalized_resource",
+                    "representation_snapshot", "capability_index",
+                ),
             )
         )
         refs["data_catalog"] = catalog_ref.model_dump(mode="json")
@@ -1215,6 +1878,7 @@ class DataApplication:
             diagnostics=tuple(item.reason for item in gaps),
             gap_refs=tuple(item.gap_ref for item in gaps),
             gaps=gaps,
+            data_dependency_graph_digest=dependency_graph.graph_digest,
         )
         stage_ref = ArtifactRef.model_validate(
             store_artifact(
@@ -1241,6 +1905,10 @@ class DataApplication:
             gate,
             output_refs={
                 "data_catalog": catalog_ref,
+                "source_snapshot": source_ref,
+                "normalized_resource": normalized_ref,
+                "representation_snapshot": representation_ref,
+                "capability_index": capability_ref,
                 "data_snapshot": data_snapshot_ref,
                 "data_stage": stage_ref,
             },
@@ -1251,6 +1919,10 @@ class DataApplication:
             data_snapshot=SessionDataSnapshot.model_validate(snapshot),
             stage_snapshot=stage_snapshot,
             catalog_ref=catalog_ref,
+            source_snapshot_ref=source_ref,
+            normalized_resource_ref=normalized_ref,
+            representation_snapshot_ref=representation_ref,
+            capability_index_ref=capability_ref,
             data_snapshot_ref=data_snapshot_ref,
             stage_ref=stage_ref,
             gate_ref=gate_ref,
@@ -1260,12 +1932,39 @@ class DataApplication:
                 "data_snapshot_digest": snapshot.digest,
                 "data_stage_status": stage_snapshot.status,
                 "data_gap_refs": list(stage_snapshot.gap_refs),
+                "data_dependency_graph_digest": dependency_graph.graph_digest,
             },
         )
 
     @staticmethod
     def load_catalog(state: Mapping[str, Any]) -> DataResourceCatalogSnapshot | None:
-        return load_artifact(dict(state), "data_catalog", DataResourceCatalogSnapshot)
+        index = load_artifact(dict(state), "data_catalog", DataResourceCatalogIndexSnapshot)
+        if index is None:
+            return None
+        source = load_artifact(dict(state), "source_snapshot", SourceSnapshotArtifact)
+        normalized = load_artifact(dict(state), "normalized_resource", NormalizedResourceArtifact)
+        representations = load_artifact(dict(state), "representation_snapshot", RepresentationSnapshotArtifact)
+        capabilities = load_artifact(dict(state), "capability_index", CapabilityIndexArtifact)
+        if any(item is None for item in (source, normalized, representations, capabilities)):
+            raise RuntimeError("DATA catalog component artifact is missing")
+        refs = dict(state).get("artifact_refs") or {}
+        expected = {
+            "source_snapshot": index.source_snapshot_ref,
+            "normalized_resource": index.normalized_resource_ref,
+            "representation_snapshot": index.representation_snapshot_ref,
+            "capability_index": index.capability_index_ref,
+        }
+        for key, digest in expected.items():
+            actual = str((refs.get(key) or {}).get("digest") or "")
+            if actual != digest:
+                raise RuntimeError(f"DATA catalog component ref mismatch: {key}")
+        return compose_catalog(
+            source,
+            normalized,
+            representations,
+            capabilities,
+            expected_digest=index.catalog_digest,
+        )
 
     @staticmethod
     def load_snapshot(state: Mapping[str, Any]) -> SessionDataSnapshot | None:
@@ -1274,6 +1973,12 @@ class DataApplication:
     @staticmethod
     def load_stage(state: Mapping[str, Any]) -> DataStageSnapshot | None:
         return load_artifact(dict(state), "data_stage", DataStageSnapshot)
+
+    @staticmethod
+    def load_boundary_scope(state: Mapping[str, Any]) -> Any | None:
+        from app.contracts.data.boundary_contracts import BoundaryScopeArtifact
+
+        return load_artifact(dict(state), "boundary_scope", BoundaryScopeArtifact)
 
 
 async def run_data(

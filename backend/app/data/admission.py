@@ -65,8 +65,8 @@ class CognitionReadinessIssue:
 
 
 @dataclass(frozen=True)
-class P0BoundaryDecision:
-    """Declaration-only result for the supported local MVP input slice."""
+class LocalAdmissionDecision:
+    """Declaration-only result for the canonical local DATA input matrix."""
 
     accepted: bool
     state: str
@@ -74,47 +74,156 @@ class P0BoundaryDecision:
     reason: str = ""
 
 
-def check_p0_local_boundary(
+def plan_catalog_invalidation(
+    previous: DataResourceCatalogSnapshot | None,
+    current: DataResourceCatalogSnapshot,
+) -> dict[str, tuple[str, ...]]:
+    """Return exact DATA-owned refs invalidated by a catalog revision.
+
+    Invalidation is keyed by qualified source identity and content digest,
+    never by list position.  Downstream caches can therefore invalidate only
+    changed features and their dependent representations/capabilities while
+    retaining unaffected source products.
+    """
+
+    if previous is None:
+        return {
+            "datasets": tuple(item.dataset_ref for item in current.datasets),
+            "features": tuple(
+                f"{item.dataset_ref}:{item.source_feature_ref}"
+                for item in current.features
+            ),
+            "representations": tuple(item.representation_ref for item in current.representations),
+            "capabilities": tuple(item.capability_ref for item in current.capabilities),
+        }
+
+    previous_features = {
+        (item.dataset_ref, item.source_feature_ref): item.source_feature_digest
+        for item in previous.features
+    }
+    current_features = {
+        (item.dataset_ref, item.source_feature_ref): item.source_feature_digest
+        for item in current.features
+    }
+    changed_feature_keys = {
+        key for key in set(previous_features) | set(current_features)
+        if previous_features.get(key) != current_features.get(key)
+    }
+    changed_feature_refs = {
+        f"{dataset}:{feature}" for dataset, feature in changed_feature_keys
+    }
+    def _product_digest(item: Any) -> str:
+        return hashlib.sha256(json.dumps(
+            item.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+
+    previous_representation_digests = {
+        item.representation_ref: _product_digest(item)
+        for item in previous.representations
+    }
+    current_representation_digests = {
+        item.representation_ref: _product_digest(item)
+        for item in current.representations
+    }
+    changed_representation_refs = set(
+        ref
+        for ref in set(previous_representation_digests) | set(current_representation_digests)
+        if previous_representation_digests.get(ref) != current_representation_digests.get(ref)
+    )
+    changed_representation_refs.update(
+        item.representation_ref
+        for item in current.representations
+        if (item.dataset_ref, item.source_feature_ref) in changed_feature_keys
+    )
+    previous_capability_digests = {
+        item.capability_ref: _product_digest(item)
+        for item in previous.capabilities
+    }
+    current_capability_digests = {
+        item.capability_ref: _product_digest(item)
+        for item in current.capabilities
+    }
+    changed_capability_refs = {
+        ref
+        for ref in set(previous_capability_digests) | set(current_capability_digests)
+        if previous_capability_digests.get(ref) != current_capability_digests.get(ref)
+    }
+    changed_capability_refs.update(
+        item.capability_ref
+        for item in current.capabilities
+        if item.resource_ref.removeprefix("resource:") in changed_feature_refs
+    )
+    previous_dataset_digests = {item.dataset_ref: item.digest for item in previous.datasets}
+    current_dataset_digests = {item.dataset_ref: item.digest for item in current.datasets}
+    return {
+        "datasets": tuple(sorted(
+            ref
+            for ref in set(previous_dataset_digests) | set(current_dataset_digests)
+            if previous_dataset_digests.get(ref) != current_dataset_digests.get(ref)
+        )),
+        "features": tuple(sorted(changed_feature_refs)),
+        "representations": tuple(sorted(changed_representation_refs)),
+        "capabilities": tuple(sorted(changed_capability_refs)),
+    }
+
+
+def check_local_admission_boundary(
     *,
     declared_media_type: str,
     adapter_hint: str,
     declared_crs: str,
     declared_encoding: str,
     expected_role: str,
-) -> P0BoundaryDecision:
-    """Check declared capabilities without trusting filenames or properties.
+) -> LocalAdmissionDecision:
+    """Check the explicit local capability matrix without guessing metadata.
 
-    The P0 local slice includes only explicitly declared GeoJSON, Markdown
-    and GeoTIFF file inputs. Provider observations are Evidence-owned and do
-    not enter this local admission boundary.
+    Local vector containers and tables are accepted after deterministic
+    decoding. Services and remote resources remain outside this write
+    boundary.
     """
 
     media = _text(declared_media_type).casefold()
     if _text(expected_role).casefold() != "current_evidence":
-        return P0BoundaryDecision(False, "POLICY_REJECTED", "non_current_role", "P0 admits current_evidence only")
+        return LocalAdmissionDecision(False, "POLICY_REJECTED", "non_current_role", "local DATA admits current_evidence only")
     if _text(declared_encoding).casefold().replace("-", "") not in {"utf8", "utf"}:
-        return P0BoundaryDecision(False, "ENCODING_UNRESOLVED", "encoding_unresolved", "P0 requires UTF-8 input")
+        return LocalAdmissionDecision(False, "ENCODING_UNRESOLVED", "encoding_unresolved", "local DATA requires UTF-8 input")
     adapter = _text(adapter_hint).casefold()
     crs = _text(declared_crs).casefold()
-    if media in {"geojson", "application/geo+json"}:
+    if media in {
+        "geojson", "application/geo+json", "application/x-esri-shapefile",
+        "application/x-shapefile", "application/geopackage+sqlite3",
+        "application/vnd.google-earth.kml+xml", "application/gml+xml",
+    }:
         if adapter != "file_vector":
-            return P0BoundaryDecision(False, "UNSUPPORTED", "unsupported_adapter", "GeoJSON requires the file_vector adapter")
+            return LocalAdmissionDecision(False, "UNSUPPORTED", "unsupported_adapter", "local vector input requires the file_vector adapter")
         if crs not in {"epsg:4326", "4326"}:
-            return P0BoundaryDecision(False, "CRS_UNRESOLVED", "crs_unresolved", "P0 GeoJSON requires declared EPSG:4326")
-        return P0BoundaryDecision(True, "ADMITTED")
+            return LocalAdmissionDecision(False, "CRS_UNRESOLVED", "crs_unresolved", "local vector input requires declared EPSG:4326")
+        return LocalAdmissionDecision(True, "ADMITTED")
+    if media in {
+        "text/csv", "text/tab-separated-values", "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }:
+        if adapter != "table":
+            return LocalAdmissionDecision(False, "UNSUPPORTED", "unsupported_adapter", "table input requires the table adapter")
+        if crs not in {"", "none", "non-spatial", "non_spatial"}:
+            return LocalAdmissionDecision(False, "CRS_UNRESOLVED", "non_spatial_crs_declared", "table input must declare no spatial CRS")
+        return LocalAdmissionDecision(True, "ADMITTED")
     if media in {"text/markdown", "text/x-markdown", "markdown"}:
         if adapter != "document":
-            return P0BoundaryDecision(False, "UNSUPPORTED", "unsupported_adapter", "Markdown requires the document adapter")
+            return LocalAdmissionDecision(False, "UNSUPPORTED", "unsupported_adapter", "Markdown requires the document adapter")
         if crs not in {"", "none", "non-spatial", "non_spatial"}:
-            return P0BoundaryDecision(False, "CRS_UNRESOLVED", "non_spatial_crs_declared", "Markdown must declare no spatial CRS")
-        return P0BoundaryDecision(True, "ADMITTED")
+            return LocalAdmissionDecision(False, "CRS_UNRESOLVED", "non_spatial_crs_declared", "Markdown must declare no spatial CRS")
+        return LocalAdmissionDecision(True, "ADMITTED")
     if media in {"image/tiff", "image/geotiff", "application/geotiff", "geotiff"}:
         if adapter not in {"local_raster", "raster"}:
-            return P0BoundaryDecision(False, "UNSUPPORTED", "unsupported_adapter", "GeoTIFF requires the local_raster adapter")
+            return LocalAdmissionDecision(False, "UNSUPPORTED", "unsupported_adapter", "GeoTIFF requires the local_raster adapter")
         if crs not in {"epsg:4326", "4326"}:
-            return P0BoundaryDecision(False, "CRS_UNRESOLVED", "crs_unresolved", "P0 DEM requires declared EPSG:4326")
-        return P0BoundaryDecision(True, "ADMITTED")
-    return P0BoundaryDecision(False, "UNSUPPORTED", "unsupported_media", "P0 media type is outside the declared local input registry")
+            return LocalAdmissionDecision(False, "CRS_UNRESOLVED", "crs_unresolved", "GeoTIFF requires declared EPSG:4326")
+        return LocalAdmissionDecision(True, "ADMITTED")
+    return LocalAdmissionDecision(False, "UNSUPPORTED", "unsupported_media", "media type is outside the declared local input registry")
 
 
 def _text(value: Any) -> str:
@@ -327,26 +436,6 @@ def cognition_readiness_issues(
     return tuple(issues)
 
 
-def _legacy_collection_match(
-    decision: SourceAdmissionDecision,
-    feature: SourceFeature,
-) -> bool:
-    source_ref = _text(decision.source_ref)
-    dataset_ref, _ = feature_key(feature)
-    layer_ref = _text(feature.layer_ref)
-    if not source_ref.startswith("legacy-bundle:") or not layer_ref:
-        return False
-    if not dataset_ref.startswith("session:"):
-        return False
-    session_ref = dataset_ref.removeprefix("session:")
-    if ":documents" in session_ref:
-        return False
-    return (
-        source_ref.startswith(f"legacy-bundle:{session_ref}:")
-        and source_ref.endswith(f":{layer_ref}")
-    )
-
-
 def _decision_specificity(
     decision: SourceAdmissionDecision,
     feature: SourceFeature,
@@ -369,8 +458,6 @@ def _decision_specificity(
         or raw_dataset_ref and source_ref == raw_dataset_ref
     ):
         score = 3
-    if not score and _legacy_collection_match(decision, feature):
-        score = 2
     if not score:
         return 0
     declared_digests = {
@@ -851,7 +938,7 @@ def assert_cognition_ready_catalog(snapshot: DataResourceCatalogSnapshot) -> Non
 
 
 __all__ = [
-    "P0BoundaryDecision",
+    "LocalAdmissionDecision",
     "FeatureAdmissionVerdict",
     "CatalogAdmissionIndex",
     "CognitionReadinessIssue",
@@ -869,5 +956,6 @@ __all__ = [
     "is_admitted_capability",
     "is_admitted_representation",
     "non_admitted_feature_verdicts",
-    "check_p0_local_boundary",
+    "check_local_admission_boundary",
+    "plan_catalog_invalidation",
 ]

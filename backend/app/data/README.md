@@ -1,41 +1,63 @@
-# Data 数据层
+# DATA 数据层
 
-> 本 README 以 `backend/app/data/` 实际代码为准；已退役路径只保存在历史归档中。
+DATA 负责把显式声明的本地/远程来源转换成可追踪、不可变、可重载的输入产品。
+唯一的 current DATA 写边界是
+`app.modules.data.application.DataAdmissionFacade`；`DataCatalog` 只管理声明式 source
+registry 和显式 bounded query。
 
-## 定位
+## 真实输入闭包
 
-所有空间数据（矢量/栅格/瓦片）与非空间文档进入系统的唯一边界：上传、摄取、catalog、
-编码、快照与来源管理。数据层拥有 `SessionDataSnapshot` / `SpatialWorkspace`，是 Agent
-空间输入的权威来源。
+当前金田村基线由以下输入组成：
 
-## 目录职责
+- `data/gis/jintian/current/` 下的 10 个现状 GeoJSON；
+- `data/gis/jintian/terrain/dem.tif`；
+- `docs/MinerU_markdown_泗水镇金田村现状报告_2056637054755487744.md`；
+- `data/cache/map_observations/{amap,tianditu,tencent}/` 下带 manifest 的 provider observation；
+- `data/cache/tiles/` 下的 WMTS tile cache。
 
-| 目录 | 职责 |
+`output/` 不承载 DATA cache 或旧 Bundle 输入。旧 output cache 和旧 DATA 历史模块已经物理删除。
+
+## 活跃目录
+
+| 目录 | 责任 |
 |---|---|
-| `ingestion/` | 上传与摄取：GIS 文件走空间解析；前端非 GIS 文件先经 MinerU，文本入口统一为 UTF-8 Markdown；另含地图 provider（providers/amap|tencent|tianditu）、连接、适配器、编译器、gazetteer/语义/表格/摘要 |
-| `catalog/` | 数据目录：`catalog.DataCatalog`、`collection_registry`、`assembly`、`dedup`、`external_anchors`、`geometry_fallback`、`inference`、`admin_code_loader`、`advisory_crosswalks/`（crosswalks + registry） |
-| `encodings/` | 用地分类编码：`classification`（ClassificationSchema）、`code_lookup`、`code_sets`、`metrics`、`dicts/`（candidate_engine/disambiguation/loader/rule_loader + vocabularies） |
-| `model/` | typed 数据模型：`snapshot.SessionDataSnapshot`/`CollectionSnapshot`、`canonical`、`spatial_types`、`table_types`、`raster_types`、`document_types`、`layer_registry`、`location_parser`、`village_name_registry`、`audit`、`base` |
-| `snapshots/` | 快照服务：`snapshot_service`（freeze_session_snapshot）、`data_quality` |
-| `ports/` | 数据侧 Port：`ingest.DataIngestPort` |
+| `ingestion/` | 上传、文件解析、source admission、连接和远程 driver |
+| `catalog/` | YAML source registry、session artifact reload、provider lease/writer、advisory observation cache |
+| `resource_catalog.py` | generic source/normalized/representation/capability catalog 和严格拓扑审计 |
+| `boundary_scope.py` | 从已准入 boundary 生成 `BoundaryScopeArtifact` |
+| `coordinate_contract.py` | 显式 CRS/坐标转换契约，未知坐标 fail closed |
+| `model/` | DATA 所需 snapshot、基础值对象和资源类型 |
+| `snapshots/` | DATA snapshot quality 辅助 |
+| `modules/data/` | admission facade、catalog application、dependency invalidation、production gate |
 
-## 关键入口
+## 统一产品链
 
-- `ingestion/upload.py::process_uploaded_file`：会话创建时上传文件（村庄数据/任务/约束）
-  的解析入口，返回 `parsed_text` 等；供 `application/commands/create_session` 使用。
-- `ingestion/ingest.py`：`ingest_current_landuse` / `ingest_planned_landuse` /
-  `ingest_feature` / `ingest_raster` / `result_to_parcels` 等把原始 GeoJSON/栅格转换为
-  typed 模型。
-- `data/resource_catalog.py::DataResourceCatalog.from_records`：从任意 GeoJSON-like
-  records、对象、表格/栅格描述建立通用 DATA catalog；这是新 World Model/Evidence 的
-  首选入口。
-- `catalog/catalog.py::DataCatalog.load_village_bundle`：仅为旧会话和显式兼容路径组装
-  `VillageBundle`（parcels/roads/constraints/water 等 Group），不得成为 V2 的前置条件。
-- `model/snapshot.py::SessionDataSnapshot`：冻结一次会话的输入资料 manifest（结构、CRS、
-  来源、质量）；`spatial/model/workspace.SpatialWorkspace` 由它注入。
+```text
+source bytes/declaration
+  → DataAdmissionReceipt
+  → SourceSnapshot
+  → NormalizedResource
+  → RepresentationSnapshot
+  → CapabilityIndex
+  → DataResourceCatalogIndexSnapshot
+  → BoundaryScopeArtifact / provider observation snapshot
+```
 
-## 边界规则
+catalog index 只保存 refs、identity、digest 和 capability 索引；原始 geometry、normalized geometry
+和 raw attributes 分别保存在对应 immutable component product 中。
 
-- 数据层不做规划决策：不推导 DLBM→GHYTBM 分类，不生成 `PlanningProgram`/`ParcelChange`。
-- 上传/摄取结果必须带 source identity、时间、CRS/schema、解析诊断与质量状态。
-- 空间计算在 `app/spatial/`；本层只负责解析、注册与快照。
+## 下游边界
+
+- WM 通过 `project_source_catalog()` 消费 normalized DATA catalog；
+- Evidence 通过 `data_catalog_retriever` 读取 source-feature facts；
+- 三家地图 cache 通过 `cached_map_retriever` 作为 advisory observation 读取；
+- Planning Ground 只消费带 resource/representation/CRS/capability lineage 的数据；
+- 任意下游结果带 `data_dependency_graph_digest`，DATA 变化时按依赖子图失效。
+
+generic catalog 缺失时必须 fail closed。
+
+## 已物理删除的兼容路径
+
+DATA 不再提供旧 Bundle、BSM/DLBM 派生、external anchor injection、typed ingest adapters、
+provider anchor aggregators、data-side fuzzy gazetteer、固定 boundary 读取或 output cache fallback。
+旧路径缺失时必须得到明确的 gap/failure，不能返回空成功。

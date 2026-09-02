@@ -39,6 +39,7 @@ class DataAdmissionRequest(BaseModel):
 
     session_id: str = Field(min_length=1)
     source_ref: str = Field(min_length=1)
+    content_digest: str = ""
     content: Any | None = None
     normalized_input: Any | None = None
     source_kind: str = ""
@@ -49,6 +50,7 @@ class DataAdmissionRequest(BaseModel):
     expected_role: str = Field(min_length=1)
     policy_context: dict[str, Any] = Field(default_factory=dict)
     parent_catalog_ref: Any | None = None
+    recovery_gap_ref: Any | None = None
 
 
 class DataAdmissionReceipt(BaseModel):
@@ -59,6 +61,8 @@ class DataAdmissionReceipt(BaseModel):
     receipt_ref: str = Field(min_length=1)
     source_ref: str = Field(min_length=1)
     attempt_ref: str = Field(min_length=1)
+    input_role: str = "unclassified"
+    admission_status: str = "quarantined"
     state: DataLifecycleState
     state_at_failure: DataLifecycleState = "ADMITTED"
     reason_code: str = ""
@@ -68,6 +72,7 @@ class DataAdmissionReceipt(BaseModel):
     stage_ref: str = ""
     gate_ref: str = ""
     gate_artifact_ref: str = ""
+    boundary_scope_ref: str = ""
     gap_ref: str = ""
     observed_metadata: dict[str, Any] = Field(default_factory=dict)
     input_refs: tuple[str, ...] = ()
@@ -108,6 +113,7 @@ class DataAdmissionResult(BaseModel):
     gate_ref: Any | None = None
     receipt_artifact_ref: Any | None = None
     gap_artifact_ref: Any | None = None
+    boundary_scope_artifact_ref: Any | None = None
     data_run: Any | None = None
 
     def to_state_patch(self) -> dict[str, Any]:
@@ -123,6 +129,7 @@ class DataAdmissionResult(BaseModel):
         for key, value in (
             ("data_admission_receipt", self.receipt_artifact_ref),
             ("data_admission_gap", self.gap_artifact_ref),
+            ("boundary_scope", self.boundary_scope_artifact_ref),
         ):
             if value is not None:
                 refs[key] = (

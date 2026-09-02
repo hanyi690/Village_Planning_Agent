@@ -85,6 +85,9 @@ class WmtsTileDriver(DataSourceDriver):
         """
         if bbox is None:
             return DataResult.fail(error="bbox required for tile fetch")
+        admission_error = self._require_remote_admission(expected_kinds={"wmts"})
+        if admission_error is not None:
+            return admission_error
 
         if not (self.zoom_range[0] <= zoom <= self.zoom_range[1]):
             return DataResult.fail(

@@ -1,14 +1,9 @@
-"""Unified GIS layer-type registry -- YAML-only metadata source.
+"""Unified GIS layer-type registry -- YAML metadata for active projections.
 
-Design (v4.4):
-  YAML (gis_layer_registry.yaml) = single source of truth for all metadata.
-  No Python-side _TYPE_BINDINGS dict. All model_class_name resolution
-  is done via _infer_model_class() in ingest.py.
-
-Adding a new GIS layer type:
-  1. Add entry to gis_layer_registry.yaml (full metadata: ingest, bundle_target, kg, etc.)
-  2. If it needs a Python model class, add mapping to _infer_model_class() in ingest.py
-  3. Restart -- registry auto-builds from YAML at import time.
+The registry describes layer semantics, encoding hints, KG projection metadata and
+validation constraints. It is not an ingest dispatcher and does not construct a
+Bundle. DATA admission remains owned by ``DataAdmissionFacade`` and generic
+resource normalization.
 """
 
 from __future__ import annotations
@@ -21,7 +16,7 @@ from pydantic import BaseModel, Field
 
 
 class IngestSpec(BaseModel):
-    adapter: str = "features"
+    adapter: str = "generic_resource"
     feature_type: str = ""
 
 
@@ -98,19 +93,6 @@ def get_all_gis_layer_types() -> List[str]:
     return list(GIS_LAYER_REGISTRY.keys())
 
 
-def get_planned_output_bundle_keys() -> frozenset[str]:
-    """Return output groups explicitly declared by the legacy adapter."""
-
-    return frozenset(
-        entry.bundle_target.key
-        for entry in GIS_LAYER_REGISTRY.values()
-        if entry.bundle_target is not None
-        and entry.spatial is not None
-        and entry.spatial.is_planned_output
-        and entry.bundle_target.key
-    )
-
-
 def build_registry_from_yaml(yaml_path: Optional[str] = None) -> None:
     if yaml_path is None:
         yaml_path = str(Path(__file__).parent / "gis_layer_registry.yaml")
@@ -133,5 +115,5 @@ __all__ = [
     "Bundletarget", "KgSpec", "ValidationSpec",
     "GIS_LAYER_REGISTRY", "register_gis_layer_type",
     "get_gis_layer_entry", "get_all_gis_layer_types",
-    "get_planned_output_bundle_keys", "build_registry_from_yaml",
+    "build_registry_from_yaml",
 ]

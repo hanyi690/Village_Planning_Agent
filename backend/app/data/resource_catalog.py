@@ -107,33 +107,72 @@ def _crs_text(value: Any, fallback: str) -> str:
 
 
 _NORMALIZED_CRS = "EPSG:4326"
+TOPOLOGY_REPAIR_POLICY = "strict_geometry_type"
 
 
 def _validated_wgs84_geometry(
     geometry: Mapping[str, Any],
     *,
     transform_ref: str,
-) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
+) -> tuple[dict[str, Any] | None, tuple[str, ...], dict[str, Any]]:
     """Validate a normalized geometry before granting spatial capability."""
 
     try:
         from shapely import make_valid
         from shapely.geometry import mapping as shapely_mapping, shape
+        from shapely.validation import explain_validity
 
         candidate = shape(dict(geometry))
         if candidate.is_empty:
-            return None, (transform_ref, "empty_geometry")
+            return None, (transform_ref, "empty_geometry"), {}
+        source_type = str(candidate.geom_type)
+        source_kind = _kind(dict(geometry))
+        source_parts = int(
+            len(candidate.geoms) if hasattr(candidate, "geoms") else 1
+        )
+        source_area = float(candidate.area) if source_kind == "polygon" else None
         if not candidate.is_valid:
-            source_kind = _kind(dict(geometry))
+            validity_reason = str(explain_validity(candidate))
             repaired = make_valid(candidate)
-            repaired_kind = _kind(dict(shapely_mapping(repaired)))
+            repaired_mapping = dict(shapely_mapping(repaired))
+            repaired_kind = _kind(repaired_mapping)
+            repaired_type = str(repaired.geom_type)
+            repaired_parts = int(
+                len(repaired.geoms) if hasattr(repaired, "geoms") else 1
+            )
+            repaired_area = float(repaired.area) if repaired_kind == "polygon" else None
+            relative_area_delta = (
+                (repaired_area - source_area) / source_area
+                if source_area not in {None, 0.0} and repaired_area is not None
+                else None
+            )
+            audit = {
+                "method": "make_valid",
+                "policy": TOPOLOGY_REPAIR_POLICY,
+                "source_geometry_type": source_type,
+                "repaired_geometry_type": repaired_type,
+                "source_geometry_family": source_kind,
+                "repaired_geometry_family": repaired_kind,
+                "source_part_count": source_parts,
+                "repaired_part_count": repaired_parts,
+                "part_count_delta": repaired_parts - source_parts,
+                "source_validity_reason": validity_reason,
+                "source_area": source_area,
+                "repaired_area": repaired_area,
+                "relative_area_delta": relative_area_delta,
+                "review_required": bool(
+                    relative_area_delta is not None
+                    and abs(relative_area_delta) > 0.01
+                ),
+            }
             if (
                 repaired.is_empty
                 or not repaired.is_valid
                 or repaired_kind not in {"point", "line", "polygon"}
                 or repaired_kind != source_kind
+                or repaired_type != source_type
             ):
-                return None, (transform_ref, "invalid_geometry")
+                return None, (transform_ref, "invalid_geometry"), audit
             candidate = repaired
             transform_ref = (
                 f"{transform_ref}|topology_repair:make_valid:"
@@ -147,16 +186,16 @@ def _validated_wgs84_geometry(
             or bounds[1] < -90.0
             or bounds[3] > 90.0
         ):
-            return None, (transform_ref, "wgs84_bounds_invalid")
-        return dict(shapely_mapping(candidate)), (transform_ref,)
+            return None, (transform_ref, "wgs84_bounds_invalid"), locals().get("audit", {})
+        return dict(shapely_mapping(candidate)), (transform_ref,), locals().get("audit", {})
     except Exception as exc:
-        return None, (transform_ref, f"geometry_validation_failed:{type(exc).__name__}")
+        return None, (transform_ref, f"geometry_validation_failed:{type(exc).__name__}"), {}
 
 
 def _normalize_geometry(
     geometry: Mapping[str, Any] | None,
     source_crs: str,
-) -> tuple[dict[str, Any] | None, str, tuple[str, ...]]:
+) -> tuple[dict[str, Any] | None, str, tuple[str, ...], dict[str, Any]]:
     """Return a WGS84 view plus an explicit, replayable transform record.
 
     Native geometry is never overwritten.  If a CRS cannot be interpreted,
@@ -165,17 +204,17 @@ def _normalize_geometry(
     """
 
     if not isinstance(geometry, Mapping):
-        return None, "", ("missing_geometry",)
+        return None, "", ("missing_geometry",), {}
     source = str(source_crs or "").strip()
     source_fold = source.casefold()
     if source_fold in {"epsg:4326", "4326", "crs84", "urn:ogc:def:crs:ogc:1.3:crs84"}:
-        normalized, trace = _validated_wgs84_geometry(
+        normalized, trace, audit = _validated_wgs84_geometry(
             geometry,
             transform_ref="identity",
         )
-        return normalized, _NORMALIZED_CRS, trace
+        return normalized, _NORMALIZED_CRS, trace, audit
     if not source:
-        return None, "", ("source_crs_missing",)
+        return None, "", ("source_crs_missing",), {}
     try:
         from shapely.geometry import mapping as shapely_mapping, shape
         from shapely.ops import transform
@@ -190,18 +229,20 @@ def _normalize_geometry(
             return tx, ty, tz
 
         normalized = transform(apply, shape(dict(geometry)))
-        normalized_geometry, trace = _validated_wgs84_geometry(
+        normalized_geometry, trace, audit = _validated_wgs84_geometry(
             dict(shapely_mapping(normalized)),
             transform_ref=f"{source}->{_NORMALIZED_CRS}",
         )
-        return normalized_geometry, _NORMALIZED_CRS, trace
+        return normalized_geometry, _NORMALIZED_CRS, trace, audit
     except Exception as exc:
         return None, "", (
             f"{source}->{_NORMALIZED_CRS}:failed:{type(exc).__name__}",
-        )
+        ), {}
 
 
-def _expand_geometry_records(records: Iterable[Any]) -> list[Any]:
+def _expand_geometry_records(
+    records: Iterable[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
     """Expand one logical record carrying several geometry fields.
 
     GIS exports frequently keep a point, footprint and service area on the
@@ -212,11 +253,10 @@ def _expand_geometry_records(records: Iterable[Any]) -> list[Any]:
     schema requirement.
     """
 
-    expanded: list[Any] = []
+    expanded: list[Mapping[str, Any]] = []
     for record in records:
         if not isinstance(record, Mapping):
-            expanded.append(record)
-            continue
+            raise TypeError("DATA source records must be generic mappings")
         payload = dict(record)
         geometry_values: dict[str, Any] = {}
         properties = payload.get("properties")
@@ -564,13 +604,14 @@ def _operation_specs(
 class DataResourceCatalog:
     """Index source features and purpose-specific representations.
 
-    This adapter accepts GeoJSON-like records and arbitrary mappings. It never
+    This adapter accepts GeoJSON-like records and generic mappings. It never
     requires BSM, DLBM or a configured layer name; those values remain raw
-    attributes when present.
+    attributes when present. Domain model instances are not an input format.
     """
 
     def __init__(self, snapshot: DataResourceCatalogSnapshot):
         self.snapshot = snapshot
+        self.data_dependency_graph_digest = ""
         self._datasets = {
             item.dataset_ref: item
             for item in (snapshot.datasets or (snapshot.dataset,))
@@ -660,9 +701,10 @@ class DataResourceCatalog:
         """Return a deterministic union of DATA catalogs.
 
         The union is keyed by stable source/representation/capability refs;
-        duplicate refs are retained once.  This is the bridge used when a
-        legacy Bundle and user-supplied files/services coexist in one
-        session.  No layer or attribute schema is imposed by the merge.
+        duplicate refs are retained once.  Session bootstrap uses this only
+        to combine independently persisted generic DATA catalog payloads;
+        legacy Bundle objects are not an input to this merge.  No layer or
+        attribute schema is imposed by the merge.
         """
 
         all_catalogs = (self, *catalogs)
@@ -787,7 +829,7 @@ class DataResourceCatalog:
     @classmethod
     def from_records(
         cls,
-        records: Iterable[Any],
+        records: Iterable[Mapping[str, Any]],
         *,
         dataset_ref: str,
         name: str = "",
@@ -822,25 +864,16 @@ class DataResourceCatalog:
         dataset_records: dict[str, list[tuple[str, Any]]] = {}
         dataset_crs_values: dict[str, set[str]] = {}
         for index, record in enumerate(_expand_geometry_records(records)):
-            if isinstance(record, Mapping):
-                payload = dict(record)
-                geometry = payload.get("geometry")
-                properties = payload.get("properties")
-                if isinstance(properties, Mapping):
-                    attributes = dict(properties)
-                    attributes.update({key: value for key, value in payload.items() if key not in {"type", "geometry", "properties"}})
-                else:
-                    attributes = {key: value for key, value in payload.items() if key not in {"type", "geometry"}}
+            if not isinstance(record, Mapping):
+                raise TypeError("DATA source records must be generic mappings")
+            payload = dict(record)
+            geometry = payload.get("geometry")
+            properties = payload.get("properties")
+            if isinstance(properties, Mapping):
+                attributes = dict(properties)
+                attributes.update({key: value for key, value in payload.items() if key not in {"type", "geometry", "properties"}})
             else:
-                geometry = getattr(record, "geometry", None)
-                attributes = {}
-                if hasattr(record, "model_dump"):
-                    values = record.model_dump(mode="python")
-                    geometry = values.pop("geometry", geometry)
-                    attributes = values
-                elif hasattr(record, "__dict__"):
-                    attributes = dict(vars(record))
-                    geometry = attributes.pop("geometry", geometry)
+                attributes = {key: value for key, value in payload.items() if key not in {"type", "geometry"}}
             if not isinstance(geometry, Mapping) and geometry is not None:
                 try:
                     from shapely.geometry import mapping as shapely_mapping
@@ -899,7 +932,7 @@ class DataResourceCatalog:
                 or collection_crs,
                 crs,
             )
-            normalized_geometry, normalized_crs, crs_transform = _normalize_geometry(
+            normalized_geometry, normalized_crs, crs_transform, topology_repair_audit = _normalize_geometry(
                 geometry,
                 feature_crs,
             )
@@ -926,6 +959,7 @@ class DataResourceCatalog:
                 source_crs=feature_crs,
                 normalized_crs=normalized_crs,
                 crs_transform=crs_transform,
+                topology_repair_audit=topology_repair_audit,
                 raw_attributes=attributes,
                 normalized_claims={
                     **(

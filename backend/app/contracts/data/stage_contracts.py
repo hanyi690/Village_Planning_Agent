@@ -53,6 +53,7 @@ class DataStageSnapshot(ContractMeta):
     receipt_ref: str = ""
     lifecycle_state: str = ""
     lifecycle: tuple[str, ...] = ()
+    data_dependency_graph_digest: str = ""
 
 
 __all__ = ["DataGapRecord", "DataStageSnapshot"]

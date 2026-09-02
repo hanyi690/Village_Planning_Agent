@@ -63,5 +63,26 @@ class DataSourceDriver(ABC):
         """Whether data is available from local cache without network."""
         return False
 
+    _admission_receipt: Any = None
+
+    def bind_remote_admission(self, receipt: Any, *, expected_kinds: set[str]) -> None:
+        """Bind an admitted remote declaration before a network-capable fetch."""
+
+        from app.contracts.data.remote_admission_contracts import RemoteSourceAdmissionReceipt
+
+        if not isinstance(receipt, RemoteSourceAdmissionReceipt):
+            raise TypeError("remote source requires RemoteSourceAdmissionReceipt")
+        if receipt.status != "ADMITTED" or receipt.kind not in expected_kinds:
+            raise ValueError("remote source admission receipt is not valid for this driver")
+        self._admission_receipt = receipt
+
+    def _require_remote_admission(self, *, expected_kinds: set[str]) -> DataResult | None:
+        receipt = self._admission_receipt
+        if receipt is None:
+            return DataResult.fail(error="remote source requires an admitted declaration receipt")
+        if receipt.status != "ADMITTED" or receipt.kind not in expected_kinds:
+            return DataResult.fail(error="remote source admission receipt is invalid or stale")
+        return None
+
 
 __all__ = ["DataSourceDriver"]

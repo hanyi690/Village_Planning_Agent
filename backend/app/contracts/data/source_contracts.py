@@ -82,6 +82,7 @@ class SourceFeature(BaseModel):
     source_crs: str = ""
     normalized_crs: str = ""
     crs_transform: tuple[str, ...] = ()
+    topology_repair_audit: dict[str, Any] = Field(default_factory=dict)
     raw_attributes: dict[str, Any] = Field(default_factory=dict)
     normalized_claims: dict[str, Any] = Field(default_factory=dict)
     unmapped_attributes: dict[str, Any] = Field(default_factory=dict)
@@ -120,6 +121,7 @@ class SourceFeature(BaseModel):
                     "source_crs": self.source_crs,
                     "normalized_crs": self.normalized_crs,
                     "crs_transform": self.crs_transform,
+                    "topology_repair_audit": self.topology_repair_audit,
                     "raw_attributes": self.raw_attributes,
                 }),
             )
@@ -259,6 +261,63 @@ class DataResourceCatalogSnapshot(BaseModel):
             )
 
 
+class DataResourceCatalogIndexSnapshot(BaseModel):
+    """Lightweight catalog pointer over independent DATA product artifacts."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    snapshot_id: str
+    catalog_digest: str
+    source_snapshot_ref: str
+    source_snapshot_digest: str
+    normalized_resource_ref: str
+    normalized_resource_digest: str
+    representation_snapshot_ref: str
+    representation_snapshot_digest: str
+    capability_index_ref: str
+    capability_index_digest: str
+    dataset_refs: tuple[str, ...] = ()
+    dataset_digests: tuple[str, ...] = ()
+    feature_refs: tuple[str, ...] = ()
+    feature_digests: tuple[str, ...] = ()
+    representation_refs: tuple[str, ...] = ()
+    representation_digests: tuple[str, ...] = ()
+    capability_refs: tuple[str, ...] = ()
+    capability_digests: tuple[str, ...] = ()
+    admission_decision_refs: tuple[str, ...] = ()
+    admission_policy_version: str = "current-world-admission-v1"
+    digest: str = ""
+
+    def model_post_init(self, __context: Any) -> None:
+        if not self.digest:
+            object.__setattr__(
+                self,
+                "digest",
+                _digest({
+                    "snapshot_id": self.snapshot_id,
+                    "catalog_digest": self.catalog_digest,
+                    "source_snapshot_ref": self.source_snapshot_ref,
+                    "source_snapshot_digest": self.source_snapshot_digest,
+                    "normalized_resource_ref": self.normalized_resource_ref,
+                    "normalized_resource_digest": self.normalized_resource_digest,
+                    "representation_snapshot_ref": self.representation_snapshot_ref,
+                    "representation_snapshot_digest": self.representation_snapshot_digest,
+                    "capability_index_ref": self.capability_index_ref,
+                    "capability_index_digest": self.capability_index_digest,
+                    "dataset_refs": self.dataset_refs,
+                    "dataset_digests": self.dataset_digests,
+                    "feature_refs": self.feature_refs,
+                    "feature_digests": self.feature_digests,
+                    "representation_refs": self.representation_refs,
+                    "representation_digests": self.representation_digests,
+                    "capability_refs": self.capability_refs,
+                    "capability_digests": self.capability_digests,
+                    "admission_decision_refs": self.admission_decision_refs,
+                    "admission_policy_version": self.admission_policy_version,
+                }),
+            )
+
+
 __all__ = [
     "GeometryKind",
     "SourceDataset",
@@ -267,5 +326,6 @@ __all__ = [
     "DataCapability",
     "SourceAdmissionDecision",
     "DataResourceCatalogSnapshot",
+    "DataResourceCatalogIndexSnapshot",
     "source_local_cognition_ref",
 ]

@@ -129,26 +129,22 @@ def _document(
     admission_signals: list[str] | None = None,
 ) -> dict[str, Any]:
     text = str(content or "")
-    from app.data.ingestion.source_admission import assess_source_admission
-
-    assessment = assess_source_admission(
-        input_role=input_role,
+    resolved_role = normalize_document_input_role(
+        input_role,
         source=source,
         category=category,
-        filename=name,
-        parsed_text=text,
     )
-    resolved_role = assessment.input_role
     declared_status = str(admission_status or "").strip().casefold()
-    if declared_status and declared_status != assessment.status:
+    expected_status = document_admission_status(resolved_role)
+    if declared_status and declared_status != expected_status:
         resolved_role = UNCLASSIFIED_ROLE
         resolved_status = "quarantined"
         resolved_reason = "persisted_admission_state_conflict"
     else:
-        resolved_status = assessment.status
-        resolved_reason = str(admission_reason or assessment.reason)
+        resolved_status = declared_status or expected_status
+        resolved_reason = str(admission_reason or "persisted_admission_receipt")
     resolved_signals = list(dict.fromkeys(
-        list(admission_signals or []) + list(assessment.signals)
+        list(admission_signals or [])
     ))
     return {
         "source": source,
@@ -225,6 +221,19 @@ async def load_session_documents(
         upload_id = str(item.get("id") or "")
         name = str(item.get("original_filename") or item.get("filename") or "")
         parser = "markdown_passthrough" if name.casefold().endswith((".md", ".markdown")) else "mineru"
+        has_receipt = isinstance(item.get("admission_receipt_ref"), dict) and bool(
+            item["admission_receipt_ref"].get("descriptor_digest")
+        )
+        uploaded_role = str(
+            item.get("input_role")
+            or item.get("document_role")
+            or item.get("source_role")
+            or ""
+        )
+        uploaded_status = str(item.get("admission_status") or "")
+        if not has_receipt:
+            uploaded_role = UNCLASSIFIED_ROLE
+            uploaded_status = "quarantined"
         documents.append(_document(
             source="upload",
             name=name,
@@ -233,14 +242,12 @@ async def load_session_documents(
             locator=f"upload://{upload_id}/{name}" if upload_id or name else "",
             record_id=upload_id,
             parser=parser,
-            input_role=str(
-                item.get("input_role")
-                or item.get("document_role")
-                or item.get("source_role")
-                or ""
+            input_role=uploaded_role,
+            admission_status=uploaded_status,
+            admission_reason=str(
+                item.get("admission_reason") or
+                ("admission_receipt_missing_or_legacy_upload" if not has_receipt else "")
             ),
-            admission_status=str(item.get("admission_status") or ""),
-            admission_reason=str(item.get("admission_reason") or ""),
             admission_signals=[
                 str(value)
                 for value in item.get("admission_signals") or []

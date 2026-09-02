@@ -73,6 +73,7 @@ sources:
   jintian_water_hyda:
     driver: api_vector
     connection: gd_tianditu
+    endpoint: "https://guangdong.tianditu.gov.cn"
     service_id: HYDA
     protocol: wfs
     crs: EPSG:4490
@@ -82,6 +83,7 @@ sources:
   jintian_water_hydl:
     driver: api_vector
     connection: gd_tianditu
+    endpoint: "https://guangdong.tianditu.gov.cn"
     service_id: HYDL
     protocol: wfs
     crs: EPSG:4490
@@ -90,18 +92,21 @@ sources:
 
   # ── 本地矢量 - 金田村规划 ──
   jintian_planned_landuse:
+    enabled: false
     driver: file_vector
     path: "data/gis/jintian/planned/landuse.geojson"
     layer_type: landuse_planned
     crs: EPSG:4326
 
   jintian_planned_road:
+    enabled: false
     driver: file_vector
     path: "data/gis/jintian/planned/road.geojson"
     layer_type: planned_road
     crs: EPSG:4326
 
   jintian_planned_annotation:
+    enabled: false
     driver: file_vector
     path: "data/gis/jintian/planned/annotation.geojson"
     layer_type: planned_annotation
@@ -138,6 +143,7 @@ sources:
     crs: EPSG:4326
 
   jintian_planned_boundary:
+    enabled: false
     driver: file_vector
     path: "data/gis/jintian/planned/boundary.geojson"
     layer_type: boundary_planned
@@ -147,6 +153,7 @@ sources:
   gd_three_zones:
     driver: api_vector
     connection: gd_tianditu
+    endpoint: "https://guangdong.tianditu.gov.cn"
     service_id: SQSXWPSJ
     protocol: mapserver_rest
     crs: EPSG:4490
@@ -164,6 +171,7 @@ sources:
   gd_ecological:
     driver: api_vector
     connection: gd_tianditu
+    endpoint: "https://guangdong.tianditu.gov.cn"
     service_id: GDSTBHHX
     protocol: mapserver_rest
     crs: EPSG:4490
@@ -175,6 +183,7 @@ sources:
   gd_hazard:
     driver: api_vector
     connection: gd_tianditu
+    endpoint: "https://guangdong.tianditu.gov.cn"
     service_id: DZZHD
     protocol: mapserver_rest
     crs: EPSG:4490
@@ -187,6 +196,7 @@ sources:
   tianditu_img_base:
     driver: wmts_tile
     connection: tianditu
+    endpoint: "https://t0.tianditu.gov.cn"
     layer: img_c
     projection: c
     zoom_range: [1, 18]
@@ -198,6 +208,7 @@ sources:
   tianditu_terrain:
     driver: wmts_tile
     connection: tianditu
+    endpoint: "https://t0.tianditu.gov.cn"
     layer: ter_c
     projection: c
     zoom_range: [1, 18]
@@ -209,6 +220,7 @@ sources:
   tianditu_annotation:
     driver: wmts_tile
     connection: tianditu
+    endpoint: "https://t0.tianditu.gov.cn"
     layer: cia_c
     projection: c
     zoom_range: [1, 18]
@@ -218,7 +230,7 @@ sources:
     cache_dir: "data/cache/tiles/cia_c"
 
   # ── 本地栅格 - DEM/DOM ──
-  # dem_local: AUDIT-T8 已落地 data/gis/jintian/terrain/dem.tif（广东DEM30M裁剪），路径有效。
+  # dem_local: current MVP DEM at data/gis/jintian/terrain/dem.tif; path verified.
   dem_local:
     driver: local_raster
     path: "data/gis/jintian/terrain/dem.tif"
@@ -268,10 +280,17 @@ sources:
   #       - "下载GeoTIFF格式DEM"
   #   local_path: "data/gis/jintian/terrain/dem_gdem.tif"
 
-  # ── 文档 - 规划文本 + L3 报告 ──
+  # ── 文档 - 当前事实报告 ──
+  jintian_current_report:
+    driver: document
+    path: "docs/MinerU_markdown_泗水镇金田村现状报告_2056637054755487744.md"
+    doc_type: current_evidence_report
+    layer_type: current_report
+    encoding: utf-8
+
+  # ── 文档 - 规划文本（不进入 current DATA） ──
   jintian_planning_text:
-    # Kept as an explicit compatibility declaration for old manifests, but
-    # planning text is not an input source for the current-world MVP.
+    # Planning text is not an input source for the DATA current_evidence probe.
     enabled: false
     driver: document
     path: "docs/*规划*文本*.md"

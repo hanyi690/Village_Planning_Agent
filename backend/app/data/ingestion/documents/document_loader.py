@@ -71,7 +71,7 @@ def classify_file_type(filename: str) -> str:
         return 'raster'
     if any(name_lower.endswith(ext) for ext in ('.csv', '.tsv', '.xlsx', '.xls')):
         return 'table'
-    if any(name_lower.endswith(ext) for ext in ['.gpkg', '.gpx', '.gml']):
+    if any(name_lower.endswith(ext) for ext in ['.gpkg', '.gdb', '.gpx', '.gml']):
         return 'gis_file'
     return 'document'
 

@@ -126,49 +126,57 @@ async def load_session_data_catalog(
         uploads = await get_uploaded_files_by_session_async(str(session_id))
     except Exception:
         return None
-    from app.data.ingestion.source_admission import assess_source_admission
-
     rows: list[dict[str, Any]] = []
+    persisted_catalogs: list[DataResourceCatalog] = []
     admission_decisions: list[dict[str, Any]] = []
     for upload_index, item in enumerate(uploads or ()):
         if not isinstance(item, dict):
             continue
         dataset_ref = _upload_ref(item, upload_index)
         source_uri = f"upload://{dataset_ref}"
-        assessment = assess_source_admission(
-            input_role=str(item.get("input_role") or ""),
-            source="upload",
-            category=str(item.get("file_category") or ""),
-            filename=str(
-                item.get("original_filename") or item.get("filename") or ""
-            ),
-            parsed_text=str(item.get("parsed_text") or ""),
-            gis_data=(
-                item.get("gis_data")
-                if isinstance(item.get("gis_data"), dict)
-                else None
-            ),
-            gis_data_type=str(item.get("gis_data_type") or ""),
-        )
+        persisted_role = str(item.get("input_role") or "unclassified").strip().casefold()
         persisted_status = str(
             item.get("admission_status") or ""
         ).strip().casefold()
-        if not persisted_status or persisted_status != assessment.status:
+        persisted_receipt = item.get("admission_receipt_ref")
+        receipt_present = isinstance(persisted_receipt, dict) and bool(
+            persisted_receipt.get("descriptor_digest")
+        )
+        if not receipt_present:
             input_role = "unclassified"
             admission_status = "quarantined"
-            admission_reason = "persisted_admission_state_missing_or_conflicting"
+            admission_reason = "admission_receipt_missing_or_legacy_upload"
         else:
-            input_role = assessment.input_role
-            admission_status = assessment.status
-            admission_reason = str(
-                item.get("admission_reason") or assessment.reason
-            )
-        if assessment.signals:
-            admission_reason = (
-                admission_reason
-                + ";signals="
-                + "|".join(assessment.signals[:4])
-            )
+            input_role = persisted_role
+            admission_status = persisted_status or "quarantined"
+            admission_reason = str(item.get("admission_reason") or "persisted_admission_receipt")
+        admission_signals = [
+            str(value)
+            for value in item.get("admission_signals") or []
+            if str(value).strip()
+        ]
+        if admission_status == "admitted":
+            artifact_refs = item.get("admission_artifact_refs")
+            catalog_ref = artifact_refs.get("data_catalog") if isinstance(artifact_refs, dict) else None
+            if isinstance(catalog_ref, dict) and catalog_ref.get("descriptor_digest"):
+                try:
+                    from app.modules.data.application import DataApplication
+
+                    catalog = DataApplication.load_catalog({
+                        "run_id": str(catalog_ref.get("run_id") or ""),
+                        "session_id": str(session_id),
+                        "branch_id": str(catalog_ref.get("branch_id") or "main"),
+                        "artifact_root": str(item.get("admission_artifact_root") or ""),
+                        "artifact_refs": artifact_refs,
+                    })
+                    if catalog is not None:
+                        persisted_catalogs.append(DataResourceCatalog(catalog))
+                        continue
+                except Exception:
+                    pass
+            input_role = "unclassified"
+            admission_status = "quarantined"
+            admission_reason = "admission_catalog_artifact_missing_or_unreadable"
         source_digest = _source_digest(item)
         resource_kind = str(
             item.get("file_type")
@@ -204,7 +212,7 @@ async def load_session_data_catalog(
                         "input_role": input_role,
                         "admission_status": admission_status,
                         "admission_reason": admission_reason,
-                        "admission_signals": list(assessment.signals),
+                        "admission_signals": admission_signals,
                         "parse_status": "failed",
                         "parse_error": str(item.get("parse_error") or "unknown_parse_failure"),
                         "upload_filename": str(item.get("original_filename") or item.get("filename") or ""),
@@ -229,7 +237,7 @@ async def load_session_data_catalog(
                     "input_role": input_role,
                     "admission_status": admission_status,
                     "admission_reason": admission_reason,
-                    "admission_signals": list(assessment.signals),
+                    "admission_signals": admission_signals,
                 },
             })
             continue
@@ -256,7 +264,7 @@ async def load_session_data_catalog(
                             "input_role": input_role,
                             "admission_status": admission_status,
                             "admission_reason": admission_reason,
-                            "admission_signals": list(assessment.signals),
+                            "admission_signals": admission_signals,
                             "table_name": sheet_name,
                             "table_row_index": row_index,
                         },
@@ -305,7 +313,7 @@ async def load_session_data_catalog(
                 "input_role": input_role,
                 "admission_status": admission_status,
                 "admission_reason": admission_reason,
-                "admission_signals": list(assessment.signals),
+                "admission_signals": admission_signals,
             })
             properties.setdefault("source_record_id", source_record_id)
             rows.append({
@@ -414,15 +422,71 @@ async def load_session_data_catalog(
                 "admission_signals": list(document.get("admission_signals") or []),
             },
         })
-    if not rows and not admission_decisions:
+    if not rows and not admission_decisions and not persisted_catalogs:
         return None
-    return DataResourceCatalog.from_records(
-        rows,
-        dataset_ref=f"session:{session_id}:uploads",
-        name=str(village_name or ""),
-        source_uris=sorted({str(row.get("source_uri")) for row in rows if row.get("source_uri")}),
-        admission_decisions=admission_decisions,
-    )
+    catalog = None
+    if rows:
+        catalog = DataResourceCatalog.from_records(
+            rows,
+            dataset_ref=f"session:{session_id}:uploads",
+            name=str(village_name or ""),
+            source_uris=sorted({str(row.get("source_uri")) for row in rows if row.get("source_uri")}),
+            admission_decisions=admission_decisions,
+        )
+    for persisted_catalog in persisted_catalogs:
+        catalog = persisted_catalog if catalog is None else catalog.merge(
+            persisted_catalog,
+            snapshot_id=f"data-session:{session_id}",
+        )
+    if catalog is not None and admission_decisions:
+        existing_decisions = {
+            item.decision_ref: item
+            for item in catalog.snapshot.admission_decisions
+        }
+        for decision in admission_decisions:
+            existing_decisions[str(decision["decision_ref"])] = _admission_decision(
+                source_ref=str(decision["source_ref"]),
+                source_digest=str(decision.get("source_digest") or ""),
+                input_role=str(decision.get("input_role") or "unclassified"),
+                status=str(decision.get("status") or "quarantined"),
+                resource_kind=str(decision.get("resource_kind") or ""),
+                reason=str(decision.get("reason") or ""),
+            )
+        catalog = DataResourceCatalog(catalog.snapshot.model_copy(update={
+            "admission_decisions": tuple(existing_decisions.values()),
+        }))
+    return catalog
 
 
-__all__ = ["load_session_data_catalog"]
+async def load_session_boundary_scope(session_id: str) -> Any | None:
+    """Reload the persisted boundary scope without rebuilding it from uploads."""
+
+    if not str(session_id or "").strip():
+        return None
+    try:
+        from app.database.operations import get_uploaded_files_by_session_async
+        from app.modules.data.application import DataApplication
+
+        uploads = await get_uploaded_files_by_session_async(str(session_id))
+    except Exception:
+        return None
+    for item in uploads or ():
+        if not isinstance(item, dict) or str(item.get("admission_status") or "").casefold() != "admitted":
+            continue
+        refs = item.get("admission_artifact_refs")
+        if not isinstance(refs, dict) or not refs.get("boundary_scope"):
+            continue
+        try:
+            return DataApplication.load_boundary_scope({
+                "session_id": str(session_id),
+                "run_id": str(refs["boundary_scope"].get("run_id") or ""),
+                "branch_id": str(refs["boundary_scope"].get("branch_id") or "main"),
+                "artifact_root": str(item.get("admission_artifact_root") or ""),
+                "artifact_refs": refs,
+            })
+        except Exception:
+            continue
+    return None
+
+
+__all__ = ["load_session_boundary_scope", "load_session_data_catalog"]

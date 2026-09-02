@@ -1,8 +1,8 @@
 """Read-only loader for already collected AMap/Tianditu/Tencent caches.
 
-This module intentionally has no HTTP/provider imports.  It turns normalized
+This module intentionally has no HTTP/provider imports. It turns normalized
 JSONL records into provenance-bearing observations used by Evidence and
-Cognition; it never mutates a VillageBundle or creates planning geometry.
+Cognition; it never mutates DATA products or creates planning geometry.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from app.contracts.evidence.external_observation_contracts import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_CACHE_ROOT = PROJECT_ROOT / "output" / "map_validation"
+DEFAULT_CACHE_ROOT = PROJECT_ROOT / "data" / "cache" / "map_observations"
 DEFAULT_PROVIDERS = ("amap", "tianditu", "tencent")
 DEFAULT_STAGES = ("01_admin_scope", "02_l1_place_names")
 DEFAULT_SCOPES = frozenset({"project_local", "township_local", "county_local"})
@@ -444,13 +444,7 @@ def _read_manifest(path: Path) -> dict[str, Any]:
 
 
 def _manifest_status_counts(manifest: dict[str, Any]) -> dict[str, int]:
-    """Collect status counters from old and current provider manifests.
-
-    Historical runs used top-level ``missing``/``failed`` counters, while
-    newer runs use ``status_counts`` and some legacy migrations use
-    ``operation_status``.  We retain all observed states but never infer a
-    successful record from a counter alone.
-    """
+    """Collect status counters from the current provider manifest contract."""
 
     counts: dict[str, int] = {}
 
@@ -467,28 +461,6 @@ def _manifest_status_counts(manifest: dict[str, Any]) -> dict[str, int]:
     if isinstance(status_counts, dict):
         for key, value in status_counts.items():
             add(key, value)
-    operation_status = manifest.get("operation_status")
-    if isinstance(operation_status, dict):
-        for value in operation_status.values():
-            if isinstance(value, dict):
-                for key, amount in value.items():
-                    add(key, amount)
-
-    # Do not double-count a status that is already represented by a detailed
-    # status_counts map.  Top-level counters are still needed by migrated
-    # manifests which have no per-operation map.
-    for key in (
-        "success_nonempty",
-        "successful_nonempty",
-        "success_empty",
-        "missing",
-        "missing_capability",
-        "not_attempted",
-        "failed",
-    ):
-        if key in manifest and not status_counts and not operation_status:
-            canonical = "success_nonempty" if key == "successful_nonempty" else key
-            add(canonical, manifest.get(key))
     return counts
 
 
@@ -549,9 +521,6 @@ def _classify_run_status(
     not_attempted = counts.get("not_attempted", 0)
     missing = counts.get("missing", 0)
     success_nonempty = counts.get("success_nonempty", 0)
-    # Legacy manifests call this ``successful_nonempty``; the helper normally
-    # canonicalizes it, but retain this lookup for hand-written manifests.
-    success_nonempty += counts.get("successful_nonempty", 0)
     success_empty = counts.get("success_empty", 0)
     attempted = sum(
         value
@@ -968,9 +937,8 @@ def cluster_external_observations(
         if root_left != root_right:
             parents[max(root_left, root_right)] = min(root_left, root_right)
 
-    # The old implementation naturally returned singleton clusters for a
-    # negative/NaN tolerance.  Preserve that result without building a grid
-    # (and avoid the accidental all-pairs behaviour of infinity).
+    # Non-positive or non-finite tolerance means no spatial merge. Preserve
+    # singleton observations without building a grid.
     if not math.isfinite(tolerance_m) or tolerance_m <= 0:
         if tolerance_m == 0:
             # Exact coordinate equality is the zero-distance contract.  Do
@@ -993,9 +961,8 @@ def cluster_external_observations(
         return _cluster_ids(parents, find)
 
     radius = 6_371_000.0
-    # Haversine distance is bounded by pi*R.  Beyond that threshold every
-    # pair of finite valid points is a candidate, so the spatial hash cannot
-    # improve the work and the exact legacy comparison is simplest.
+    # Haversine distance is bounded by pi*R. Beyond that threshold every pair
+    # of finite valid points is a candidate, so the spatial hash cannot help.
     if tolerance_m >= math.pi * radius:
         for index, left in enumerate(items):
             left_location = left.location_wgs84
@@ -1076,7 +1043,7 @@ def _cluster_ids(
     parents: dict[str, str],
     find: Any,
 ) -> dict[str, str]:
-    """Build stable IDs from the union-find state (legacy algorithm)."""
+    """Build stable IDs from the union-find state."""
     groups: dict[str, list[str]] = {}
     for observation_id in parents:
         groups.setdefault(find(observation_id), []).append(observation_id)
@@ -1231,7 +1198,7 @@ def load_cached_external_observation_snapshot(
                             row,
                             index,
                             project_name,
-                            cache_root,
+                                cache_root,
                             manifest=manifest,
                             run_metadata=run_record,
                         )

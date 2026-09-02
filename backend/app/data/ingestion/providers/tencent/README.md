@@ -1,37 +1,19 @@
-# data.providers.tencent — 腾讯地图适配器
+# Tencent Map provider client
 
-## 职责边界
+`provider.py` 封装腾讯位置服务的区域搜索和周边搜索，返回受控的
+`TencentMapResult`。provider 不负责 session 组装、外部锚点绑定或 provider 间 fallback。
 
-- 外部地图/地理编码服务商（腾讯）适配器，统一封装腾讯位置服务 Web API。
-- `provider.py`：`TencentMapProvider` 核心封装——区域搜索 `search_region`
-  （boundary=region(...)）、周边搜索 `search_nearby`（boundary=nearby(lat,lng,
-  radius)）、POI 解析 `_parse_pois`。统一结果信封 `TencentMapResult`
-  （success/data/metadata/error）。
-- 坐标系：默认 GCJ02，通过 `coord_type=wgs84` 直接返回 WGS84。
-- `anchor_service.py`：`TencentAnchorService` 并发拉取外源锚点——行政村
-  （region 搜"村"）、设施/道路/水体（周边搜索），输出与 AmapAnchorService
-  同结构的 4 类数据 + errors。
-- `constants.py`：URL、coord_type、分页、filter 分类关键词（FILTER_CATEGORIES）。
-- `types.py`：`TencentMapResult` 信封类型。
+## 输入与输出
 
-## 输入输出契约
+- 输入：由 `BoundaryScopeArtifact` 派生的 query geometry，以及明确的关键字、分页和过滤条件。
+- 输出：带 provider、请求范围、坐标契约和状态的 observation response。
+- 坐标：使用服务声明的 WGS84 返回模式；坐标契约不明确时拒绝消费。
+- 凭据：从 connection/settings 读取，不写入 URL、manifest 或日志。
 
-- 输入：单关键字 + boundary（region/nearby），可选 filter=category 与分页；
-  nearby 半径上限 1000 米，lat 在前。
-- 输出：统一 POI dict（id/name/lon/lat/address/tel/category/type/distance/
-  adcode/province/city/district）。
-- 失败不抛异常：返回 `TencentMapResult(success=False, error=...)`；
-  429/5xx 指数退避重试。
+## 运行边界
 
-## 依赖方向
+三家地图采集脚本负责 `ProviderAcquisitionPlan`、lease、writer 和 coverage manifest；Tencent client 不直接
+写 `data/cache/map_observations`。缓存由
+`app.data.catalog.provider_run_lease.ProviderObservationWriter` 统一发布。
 
-- 依赖 `app.core.settings`（TECENT_MAP_API_KEY 等）、
-  `app.data.ingestion.connections`（RateLimiter，key="tencent_map"）。
-- 被 `app.data.catalog.external_anchors` 消费（source="tencent_map"）。
-
-## 禁止行为
-
-- 禁止硬编码 API Key（必须读 settings）。
-- 禁止绕过 RateLimiter 直接请求。
-- 禁止返回 GCJ02 坐标冒充 WGS-84（须用 coord_type=wgs84）。
-- 禁止在 provider 内做业务聚合（聚合归 anchor_service/catalog）。
+禁止在 provider 内做 POI 聚合、外部锚点注入、地名词典构建或本地 DATA geometry 覆盖。

@@ -16,9 +16,27 @@ from fastapi import UploadFile
 from app.database.operations import create_uploaded_file_async
 from app.data.ingestion.documents.document_loader import classify_file_type
 from app.data.ingestion.documents.mineru_loader import MinerULoader
+from app.infrastructure.paths import run_tmp_root
 
 logger = logging.getLogger(__name__)
 _MARKDOWN_MEDIA_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+
+
+async def _read_upload_with_budget(file: UploadFile, max_bytes: int) -> tuple[bytes, int, str, bool]:
+    """Read a bounded prefix while hashing the complete upload stream."""
+
+    hasher = hashlib.sha256()
+    prefix = await file.read(max_bytes + 1)
+    hasher.update(prefix)
+    total = len(prefix)
+    exceeded = len(prefix) > max_bytes
+    while exceeded:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        hasher.update(chunk)
+        total += len(chunk)
+    return prefix[:max_bytes], total, "sha256:" + hasher.hexdigest(), exceeded
 
 
 def _normalized_upload_filename(value: str | None) -> str:
@@ -43,6 +61,21 @@ def _normalized_upload_filename(value: str | None) -> str:
         decoded = raw
     basename = Path(decoded.replace("\\", "/")).name.replace("\x00", "").strip()
     return basename or "unknown"
+
+
+def _upload_declared_crs(parsed: dict[str, Any]) -> str:
+    """Extract a declared CRS; only normalize the explicit CRS84 alias."""
+
+    raw = parsed.get("gis_data")
+    if not isinstance(raw, dict):
+        return "non-spatial" if parsed.get("parsed_text") else ""
+    value = raw.get("crs") or raw.get("source_crs") or raw.get("crs_name") or ""
+    if isinstance(value, dict):
+        value = (value.get("properties") or {}).get("name") or value.get("name") or ""
+    text = str(value or "").strip()
+    if text.casefold() in {"crs84", "urn:ogc:def:crs:ogc:1.3:crs84"}:
+        return "EPSG:4326"
+    return text
 
 
 def infer_data_type_from_filename(filename: str) -> str | None:
@@ -457,39 +490,222 @@ async def process_uploaded_file(
     file_category: str,
     input_role: str = "",
 ) -> dict[str, Any]:
-    from app.data.ingestion.source_admission import assess_source_admission
+    from app.core.settings import (
+        DATA_MAX_TABLE_ROWS,
+        DATA_MAX_TEXT_CHARS,
+        DATA_MAX_UPLOAD_BYTES,
+        DATA_TEMPORAL_ADMISSION_LLM_ENABLED,
+    )
+    from app.data.ingestion.source_admission import (
+        assess_uploaded_source_admission,
+    )
+    from app.modules.data.application import DataAdmissionFacade
+    from app.contracts.data.admission_contracts import DataAdmissionRequest
 
     original_filename = file.filename or "unknown"
     filename = _normalized_upload_filename(original_filename)
-    content = await file.read()
-    source_digest = "sha256:" + hashlib.sha256(content).hexdigest()
-    parsed = await _parse_upload(file, content, file_category=file_category)
+    content, total_size, source_digest, budget_exceeded = await _read_upload_with_budget(
+        file,
+        DATA_MAX_UPLOAD_BYTES,
+    )
+    if budget_exceeded:
+        parsed = {
+            "file_type": classify_file_type(filename),
+            "parsed_text": None,
+            "gis_data": None,
+            "gis_data_type": None,
+            "parse_status": "failed",
+            "parse_error": "upload_size_exceeded",
+            "geometry_audit": None,
+            "parsed_text_format": None,
+            "text_parser": None,
+            "media_refs": [],
+            "source_format": Path(filename).suffix.lower().lstrip("."),
+        }
+    else:
+        parsed = await _parse_upload(file, content, file_category=file_category)
     dtype = infer_data_type_from_filename(filename) or parsed.get("gis_data_type")
     parsed["gis_data_type"] = dtype
-    assessment = assess_source_admission(
-        input_role=input_role,
-        source="upload",
-        category=file_category,
-        filename=filename,
-        parsed_text=str(parsed.get("parsed_text") or ""),
-        gis_data=(
-            parsed.get("gis_data")
-            if isinstance(parsed.get("gis_data"), dict)
-            else None
-        ),
-        gis_data_type=str(dtype or ""),
+    table_rows = 0
+    if isinstance(parsed.get("gis_data"), dict) and str(parsed["gis_data"].get("type") or "").casefold() == "tableresource":
+        table_rows = sum(
+            len(table.get("rows") or ())
+            for table in parsed["gis_data"].get("tables") or ()
+            if isinstance(table, dict)
+        )
+    text_exceeded = len(str(parsed.get("parsed_text") or "")) > DATA_MAX_TEXT_CHARS
+    table_exceeded = table_rows > DATA_MAX_TABLE_ROWS
+    budget_error = (
+        "upload_size_exceeded"
+        if budget_exceeded
+        else "text_length_exceeded"
+        if text_exceeded
+        else "table_row_count_exceeded"
+        if table_exceeded
+        else ""
     )
+    if budget_error:
+        from app.data.ingestion.source_admission import SourceAdmissionAssessment
+
+        assessment = SourceAdmissionAssessment(
+            declared_role=input_role or "unclassified",
+            input_role="unclassified",
+            status="quarantined",
+            reason=budget_error,
+            signals=(
+                f"budget:max_upload_bytes={DATA_MAX_UPLOAD_BYTES}",
+                f"budget:max_text_chars={DATA_MAX_TEXT_CHARS}",
+                f"budget:max_table_rows={DATA_MAX_TABLE_ROWS}",
+            ),
+        )
+    else:
+        assessment = await assess_uploaded_source_admission(
+            input_role=input_role,
+            source="upload",
+            category=file_category,
+            filename=filename,
+            parsed_text=str(parsed.get("parsed_text") or ""),
+            gis_data=(
+                parsed.get("gis_data")
+                if isinstance(parsed.get("gis_data"), dict)
+                else None
+            ),
+            gis_data_type=str(dtype or ""),
+            parse_status=str(parsed.get("parse_status") or "failed"),
+            temporal_llm_enabled=DATA_TEMPORAL_ADMISSION_LLM_ENABLED,
+        )
+    suffix = Path(filename).suffix.casefold()
+    declared_media_type = {
+        ".geojson": "application/geo+json",
+        ".json": "application/geo+json",
+        ".zip": "application/x-esri-shapefile",
+        ".shp": "application/x-esri-shapefile",
+        ".gpkg": "application/geopackage+sqlite3",
+        ".gdb": "application/geopackage+sqlite3",
+        ".kml": "application/vnd.google-earth.kml+xml",
+        ".kmz": "application/vnd.google-earth.kml+xml",
+        ".gml": "application/gml+xml",
+        ".csv": "text/csv",
+        ".tsv": "text/tab-separated-values",
+        ".xls": "application/vnd.ms-excel",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".tif": "image/tiff",
+        ".tiff": "image/tiff",
+        ".img": "image/tiff",
+        ".asc": "image/tiff",
+        ".md": "text/markdown",
+        ".markdown": "text/markdown",
+    }.get(suffix, "text/markdown" if parsed.get("parsed_text") else "application/octet-stream")
+    adapter_hint = (
+        "file_vector"
+        if declared_media_type in {
+            "application/geo+json", "application/x-esri-shapefile",
+            "application/geopackage+sqlite3", "application/vnd.google-earth.kml+xml",
+            "application/gml+xml",
+        }
+        else "table"
+        if declared_media_type in {
+            "text/csv", "text/tab-separated-values", "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }
+        else "local_raster"
+        if declared_media_type == "image/tiff"
+        else "document"
+        if declared_media_type == "text/markdown"
+        else "unsupported"
+    )
+    raw_input = parsed.get("gis_data") or parsed.get("parsed_text")
+    request = DataAdmissionRequest(
+        session_id=session_id,
+        source_ref=f"upload:{session_id}:{source_digest}",
+        content_digest=source_digest,
+        content=raw_input,
+        normalized_input=raw_input,
+        source_kind="upload",
+        declared_media_type=declared_media_type,
+        declared_encoding="UTF-8",
+        declared_crs=_upload_declared_crs(parsed),
+        adapter_hint=adapter_hint,
+        expected_role=assessment.input_role,
+        policy_context={
+            "artifact_root": str(run_tmp_root()),
+            "source_admission": assessment.reason,
+            "classifier_ref": assessment.classifier_ref,
+            "classifier_input_digest": assessment.classifier_input_digest,
+            "classifier_output_digest": assessment.classifier_output_digest,
+            "classifier_model": assessment.classifier_model,
+            "classifier_confidence": assessment.classifier_confidence,
+            "layer_ref": str(dtype or ""),
+            "boundary_scope_mode": (
+                "admitted_boundary"
+                if (
+                    str(dtype or "").casefold() == "boundary"
+                    and any(
+                        str((feature.get("geometry") or {}).get("type") or "")
+                        in {"Polygon", "MultiPolygon"}
+                        for feature in (parsed.get("gis_data") or {}).get("features", [])
+                        if isinstance(feature, dict)
+                    )
+                )
+                else ""
+            ),
+            "source_filename": filename,
+            "content_size_bytes": total_size,
+            "budget_state": {
+                "max_upload_bytes": DATA_MAX_UPLOAD_BYTES,
+                "observed_upload_bytes": total_size,
+            },
+            "budget_error": budget_error,
+        },
+    )
+    facade = DataAdmissionFacade()
+    if assessment.status == "admitted":
+        admission_result = await facade.admit(request)
+    else:
+        admission_result = facade.record_ingress_admission(request, assessment)
+    if admission_result.receipt.state == "ADMITTED":
+        persisted_role = "current_evidence"
+        persisted_status = "admitted"
+    elif assessment.status in {"control_only", "reference_only", "excluded"}:
+        persisted_role = assessment.input_role
+        persisted_status = assessment.status
+    else:
+        persisted_role = "unclassified"
+        persisted_status = "quarantined"
+    receipt_descriptor = admission_result.receipt_artifact_ref
+    gap_descriptor = admission_result.gap_artifact_ref
+    lifecycle = list(admission_result.receipt.lifecycle)
+    artifact_refs = dict(admission_result.to_state_patch().get("artifact_refs") or {})
+    artifact_root = str(request.policy_context.get("artifact_root") or run_tmp_root())
     file_id = await create_uploaded_file_async(
         session_id=session_id,
         file_category=file_category,
-        input_role=assessment.input_role,
-        admission_status=assessment.status,
-        admission_reason=assessment.reason,
+        input_role=persisted_role,
+        admission_status=persisted_status,
+        admission_reason=(
+            assessment.reason
+            if admission_result.receipt.state == "ADMITTED"
+            else admission_result.receipt.reason_code
+        ),
         admission_signals=list(assessment.signals),
+        admission_attempt_ref=admission_result.receipt.attempt_ref,
+        admission_receipt_ref=(
+            receipt_descriptor.model_dump(mode="json")
+            if receipt_descriptor is not None
+            else None
+        ),
+        admission_gap_ref=(
+            gap_descriptor.model_dump(mode="json")
+            if gap_descriptor is not None
+            else None
+        ),
+        admission_lifecycle=lifecycle,
+        admission_artifact_refs=artifact_refs,
+        admission_artifact_root=artifact_root,
         file_type=parsed["file_type"],
         filename=filename,
         original_filename=original_filename,
-        file_size=len(content),
+        file_size=total_size,
         content_type=file.content_type or "application/octet-stream",
         source_digest=source_digest,
         parsed_text=parsed.get("parsed_text"),
@@ -502,12 +718,30 @@ async def process_uploaded_file(
         "id": file_id,
         "filename": filename,
         "file_category": file_category,
-        "input_role": assessment.input_role,
-        "admission_status": assessment.status,
-        "admission_reason": assessment.reason,
+        "input_role": persisted_role,
+        "admission_status": persisted_status,
+        "admission_reason": (
+            assessment.reason
+            if admission_result.receipt.state == "ADMITTED"
+            else admission_result.receipt.reason_code
+        ),
         "admission_signals": list(assessment.signals),
+        "admission_attempt_ref": admission_result.receipt.attempt_ref,
+        "admission_receipt_ref": (
+            receipt_descriptor.model_dump(mode="json")
+            if receipt_descriptor is not None
+            else None
+        ),
+        "admission_gap_ref": (
+            gap_descriptor.model_dump(mode="json")
+            if gap_descriptor is not None
+            else None
+        ),
+        "admission_lifecycle": lifecycle,
+        "admission_artifact_refs": artifact_refs,
+        "admission_artifact_root": artifact_root,
         "file_type": parsed["file_type"],
-        "size_bytes": len(content),
+        "size_bytes": total_size,
         "checksum": source_digest.removeprefix("sha256:"),
         "source_digest": source_digest,
         **parsed,
