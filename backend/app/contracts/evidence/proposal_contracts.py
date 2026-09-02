@@ -159,6 +159,7 @@ class EvidenceProposalBatch(BaseModel):
 
     round_id: str = Field(min_length=1)
     wm_epoch: str = Field(min_length=1)
+    parent_world_model_snapshot_ref: str = Field(min_length=1)
     parent_world_model_digest: str = Field(min_length=1)
     requirement_set_digest: str = Field(min_length=1)
     evidence_packet_digest: str = Field(min_length=1)

@@ -16,6 +16,7 @@ from app.contracts.evidence.evidence_contracts import (
     ExplorationResult,
 )
 from app.contracts.artifacts.ref import ArtifactRef
+from app.contracts.cognition_round import CognitionRound
 from app.contracts.evidence.policy_contracts import EvidencePolicyRegistry
 from app.contracts.evidence.provider_attempt import ProviderAttempt
 from app.infrastructure.evidence_runtime.query_planner import build_query_plan
@@ -355,6 +356,14 @@ def test_retrieval_cas_uses_business_digests_not_physical_snapshot_handles():
         external_cache_digest="P0",
         gap_ledger_ref=ref("gap-0"),
         world_model_mode="v2_only",
+        cognition_round=CognitionRound(
+            round_id="round-1",
+            round_number=0,
+            wm_epoch="wm-epoch-1",
+            parent_world_model_snapshot_ref="S0",
+            parent_world_model_snapshot_digest="C0",
+            requirement_set_digest="requirements-1",
+        ),
     )
     request = _request()
     plan = build_query_plan(request)

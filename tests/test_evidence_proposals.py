@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from app.contracts.cognition_round import CognitionRound, requirement_set_digest
 from app.contracts.evidence.acquisition_contracts import EvidenceObservationSnapshot
 from app.contracts.evidence.evidence_contracts import (
     EvidenceBundle,
@@ -64,6 +65,17 @@ def _requirement(kind: str = "claim", *, metadata: dict | None = None) -> Eviden
         subject_refs=("road:R1",),
         policy_ref="road_identity.v1",
         metadata=metadata or {},
+    )
+
+
+def _round(requirements: tuple[EvidenceRequirement, ...], *, round_id: str = "round-1") -> CognitionRound:
+    return CognitionRound(
+        round_id=round_id,
+        round_number=0,
+        wm_epoch="wm-7",
+        parent_world_model_snapshot_ref="world-model://session-1/7/wm-7",
+        parent_world_model_snapshot_digest="wm-7",
+        requirement_set_digest=requirement_set_digest(requirements),
     )
 
 
@@ -160,9 +172,7 @@ def test_sufficient_identity_requirement_produces_entity_support():
 
     batch = build_evidence_proposals(
         result,
-        round_id="round-1",
-        wm_epoch="7",
-        parent_world_model_digest="wm-7",
+        cognition_round=_round((requirement,)),
     )
 
     assert [item.proposal_kind for item in batch.proposals] == ["entity_support"]
@@ -195,13 +205,16 @@ def test_relation_property_and_local_representation_are_distinct_proposals():
         )],
         relation_evidence=[relation],
     )
-    result = _result(_requirement("spatial"), candidates=(candidate,), packet=packet)
+    requirement = _requirement("spatial")
+    result = _result(requirement, candidates=(candidate,), packet=packet)
 
     batch = build_evidence_proposals(
         result,
-        round_id="r",
-        wm_epoch="8",
-        parent_world_model_digest="wm-8",
+        cognition_round=_round((requirement,)).model_copy(update={
+            "round_id": "r",
+            "wm_epoch": "8",
+            "parent_world_model_snapshot_digest": "wm-8",
+        }),
     )
 
     assert {item.proposal_kind for item in batch.proposals} == {
@@ -214,12 +227,15 @@ def test_relation_property_and_local_representation_are_distinct_proposals():
     )
     assert relation_proposal.object_ref == "junction:J1"
 
-    property_result = _result(_requirement("claim"), packet=EvidencePacket(request="road R1 exists"))
+    property_requirement = _requirement("claim")
+    property_result = _result(property_requirement, packet=EvidencePacket(request="road R1 exists"))
     property_batch = build_evidence_proposals(
         property_result,
-        round_id="r",
-        wm_epoch="8",
-        parent_world_model_digest="wm-8",
+        cognition_round=_round((property_requirement,)).model_copy(update={
+            "round_id": "r",
+            "wm_epoch": "8",
+            "parent_world_model_snapshot_digest": "wm-8",
+        }),
     )
     assert property_batch.proposals[0].proposal_kind == "property_assertion"
 
@@ -231,9 +247,11 @@ def test_non_sufficient_decision_produces_no_wm_proposal(status: str):
 
     batch = build_evidence_proposals(
         result,
-        round_id="r",
-        wm_epoch="8",
-        parent_world_model_digest="wm-8",
+        cognition_round=_round((requirement,)).model_copy(update={
+            "round_id": "r",
+            "wm_epoch": "8",
+            "parent_world_model_snapshot_digest": "wm-8",
+        }),
     )
 
     assert batch.proposals == ()
@@ -251,9 +269,11 @@ def test_authorized_absence_produces_only_an_absence_property_proposal():
 
     batch = build_evidence_proposals(
         result,
-        round_id="r",
-        wm_epoch="8",
-        parent_world_model_digest="wm-8",
+        cognition_round=_round((requirement,)).model_copy(update={
+            "round_id": "r",
+            "wm_epoch": "8",
+            "parent_world_model_snapshot_digest": "wm-8",
+        }),
     )
 
     assert len(batch.proposals) == 1
@@ -272,25 +292,31 @@ def test_external_locator_cannot_become_representation_support():
             representation_refs=["representation:external"],
         )],
     )
-    result = _result(_requirement("spatial"), candidates=(candidate,), packet=packet)
+    requirement = _requirement("spatial")
+    result = _result(requirement, candidates=(candidate,), packet=packet)
 
     batch = build_evidence_proposals(
         result,
-        round_id="r",
-        wm_epoch="8",
-        parent_world_model_digest="wm-8",
+        cognition_round=_round((requirement,)).model_copy(update={
+            "round_id": "r",
+            "wm_epoch": "8",
+            "parent_world_model_snapshot_digest": "wm-8",
+        }),
     )
 
     assert all(item.proposal_kind != "representation_support" for item in batch.proposals)
 
 
 def test_cognition_adapter_is_conversion_only_and_preserves_lineage():
-    result = _result(_requirement("identity"))
+    requirement = _requirement("identity")
+    result = _result(requirement)
     batch = build_evidence_proposals(
         result,
-        round_id="r",
-        wm_epoch="8",
-        parent_world_model_digest="wm-8",
+        cognition_round=_round((requirement,)).model_copy(update={
+            "round_id": "r",
+            "wm_epoch": "8",
+            "parent_world_model_snapshot_digest": "wm-8",
+        }),
     )
 
     proposals = to_cognition_assertion_proposals(batch)

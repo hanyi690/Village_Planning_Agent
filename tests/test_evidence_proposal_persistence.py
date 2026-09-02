@@ -12,6 +12,7 @@ from app.infrastructure.evidence_runtime.artifact_store import _result_semantics
 from app.modules.evidence.proposals import build_evidence_proposals
 
 from test_evidence_proposals import _requirement, _result
+from test_evidence_proposals import _round
 
 
 def _ref(seed: str, *, schema_id: str = "Test") -> ArtifactRef:
@@ -42,13 +43,16 @@ def _artifact(result, batch) -> EvidenceRetrievalArtifact:
         data_snapshot_ref=_ref("data"),
         data_snapshot_digest="data-digest",
         world_model_artifact_ref=_ref("world"),
-        world_model_snapshot_ref="wm-7",
+        world_model_snapshot_ref="world-model://session-1/7/wm-7",
         world_model_snapshot_digest="wm-7",
         evidence_snapshot_ref=_ref("evidence"),
         external_observations_ref=_ref("external"),
         external_cache_digest="cache-digest",
         gap_ledger_ref=_ref("gaps"),
         world_model_mode="v2_only",
+        cognition_round=_round((_requirement("identity"),)).freeze(
+            batch.proposal_fingerprint
+        ),
     )
     request = ExplorationRequest(
         run_id="run-1",
@@ -78,9 +82,7 @@ def test_exploration_result_and_retrieval_artifact_reload_proposals():
     result = _result(_requirement("identity"))
     batch = build_evidence_proposals(
         result,
-        round_id="round-1",
-        wm_epoch="wm-7",
-        parent_world_model_digest="wm-7",
+        cognition_round=_round((_requirement("identity"),)),
         evidence_artifact_ref="evidence-retrieval:1",
     )
     result = result.model_copy(update={"proposal_batch": batch})
@@ -97,9 +99,7 @@ def test_retrieval_semantics_change_when_proposal_batch_changes():
     result = _result(_requirement("identity"))
     batch = build_evidence_proposals(
         result,
-        round_id="round-1",
-        wm_epoch="wm-7",
-        parent_world_model_digest="wm-7",
+        cognition_round=_round((_requirement("identity"),)),
     )
     artifact = _artifact(result, batch)
     changed_batch = batch.model_copy(update={"round_id": "round-2"})

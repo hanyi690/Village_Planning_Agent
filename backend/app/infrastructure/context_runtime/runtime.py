@@ -27,6 +27,7 @@ from typing import Any, Dict, List
 
 from app.data.model.snapshot import SessionDataSnapshot
 from app.contracts.ports.planning_ports import PlanningPorts
+from app.contracts.cognition_round import CognitionRound
 from app.spatial.model.workspace import SpatialWorkspace
 
 
@@ -89,6 +90,7 @@ class PlanningContext:
     demands: Dict[str, Any] = field(default_factory=dict)
     kg: Any = None
     world_model: Any = None
+    cognition_round: CognitionRound | None = None
     kg_session_ref: str = ""
     kg_version: int = 0
     # Migration mode remains explicit for World Model rollout diagnostics.

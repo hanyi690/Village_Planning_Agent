@@ -15,6 +15,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.contracts.artifacts.ref import ArtifactRef
+from app.contracts.cognition_round import CognitionRound, requirement_set_digest
 from app.contracts.evidence.stage_contracts import (
     EvidenceExternalObservationSnapshot,
     EvidenceGapLedger,
@@ -300,6 +301,7 @@ class EvidenceContext(BaseModel):
     current_world: Any = None
     kg_version: str = ""
     l1_snapshot_ref: str = ""
+    cognition_round: CognitionRound | None = None
 
     @classmethod
     def from_state(
@@ -311,6 +313,14 @@ class EvidenceContext(BaseModel):
         request_type: str = "evidence_gap",
     ) -> "EvidenceContext":
         config = state.get("config") or {}
+        cognition_round = None
+        if state.get("cognition_round") is not None:
+            try:
+                cognition_round = CognitionRound.model_validate(
+                    state.get("cognition_round")
+                )
+            except Exception as exc:
+                raise ArtifactReplayError("Evidence checkpoint has invalid CognitionRound") from exc
         session_id = str(state.get("session_id") or "")
         workflow_run_id = str(state.get("run_id") or session_id)
         branch_id = str(state.get("branch_id") or "main")
@@ -681,6 +691,7 @@ class EvidenceContext(BaseModel):
                 )
                 or ""
             ),
+            cognition_round=cognition_round,
         )
 
     @classmethod
@@ -696,6 +707,7 @@ class EvidenceContext(BaseModel):
         dimension_key: str = "",
         context_refs: Iterable[str] = (),
         state_authority: Mapping[str, Any] | None = None,
+        cognition_round: CognitionRound | None = None,
     ) -> "EvidenceContext":
         """Project one PlanningContext through the single Evidence boundary."""
 
@@ -728,6 +740,7 @@ class EvidenceContext(BaseModel):
                 getattr(context, "l1_snapshot_ref", "") or ""
             ),
             "reports": getattr(context, "reports", None),
+            "cognition_round": cognition_round or getattr(context, "cognition_round", None),
         }
         result = cls.from_state(
             state,
@@ -751,6 +764,10 @@ class EvidenceContext(BaseModel):
     def retrieval_authority(self) -> EvidenceRetrievalAuthority:
         """Build the authority record required before a retrieval can replay."""
 
+        if self.cognition_round is None:
+            raise ArtifactReplayError(
+                "Evidence retrieval requires an explicit CognitionRound"
+            )
         if self.replay_status != "bound":
             raise ArtifactReplayError(
                 "Evidence retrieval is unbound; provide checkpoint authority before CAS replay"
@@ -775,6 +792,15 @@ class EvidenceContext(BaseModel):
                 raise ArtifactReplayError(
                     f"Evidence retrieval authority ref is outside the active branch: {name}"
                 )
+        if (
+            self.cognition_round.parent_world_model_snapshot_ref
+            != snapshot.world_model_snapshot_ref
+            or self.cognition_round.parent_world_model_snapshot_digest
+            != snapshot.world_model_snapshot_digest
+        ):
+            raise ArtifactReplayError(
+                "CognitionRound parent does not match the Evidence checkpoint World Model"
+            )
         return EvidenceRetrievalAuthority(
             session_id=self.session_id,
             workflow_run_id=self.workflow_run_id,
@@ -793,6 +819,7 @@ class EvidenceContext(BaseModel):
             external_cache_digest=snapshot.external_cache_digest,
             gap_ledger_ref=required_refs["gap_ledger"],
             world_model_mode=self.world_model_mode,
+            cognition_round=self.cognition_round,
             cache_only_policy={"external": self.external_cache_only},
         )
 
@@ -996,6 +1023,7 @@ def _coverage_and_outcome(
     result: ExplorationResult,
     *,
     failed: bool = False,
+    requirement_set_digest_value: str | None = None,
 ) -> ExplorationResult:
     """Ensure every retrieval preserves its least-sufficient business state."""
 
@@ -1040,6 +1068,7 @@ def _coverage_and_outcome(
             if isinstance(item, Mapping)
         ),
         source_scope="project_wide" if request.project_wide else "scoped",
+        requirement_set_digest=requirement_set_digest_value,
     )
     human_required = (
         coverage.stop_reason == "human_required"
@@ -1171,6 +1200,7 @@ def _commit_retrieval_artifact(
         requirements,
         result,
         failed=failed,
+        requirement_set_digest_value=authority.cognition_round.requirement_set_digest,
     )
     packet = normalized.evidence_packet
     coverage = normalized.coverage
@@ -1221,14 +1251,13 @@ def _commit_retrieval_artifact(
 
     proposal_batch = build_evidence_proposals(
         normalized,
-        round_id=f"evidence:{authority.workflow_run_id}:{fingerprint[:16]}",
-        wm_epoch=(
-            authority.world_model_snapshot_ref
-            or authority.world_model_snapshot_digest
-        ),
-        parent_world_model_digest=authority.world_model_snapshot_digest,
+        cognition_round=authority.cognition_round,
         evidence_artifact_ref=f"evidence-retrieval:{fingerprint}",
     )
+    frozen_round = authority.cognition_round.freeze(
+        proposal_batch.proposal_fingerprint
+    )
+    authority = authority.model_copy(update={"cognition_round": frozen_round})
     artifact = EvidenceRetrievalArtifact(
         context_version=authority.context_version,
         context_fingerprint=authority.context_fingerprint,
@@ -2101,6 +2130,14 @@ class EvidenceApplication:
         candidate_limit: int = 12,
     ) -> ExplorationResult:
         requirements = _as_requirements(requirement)
+        if context.cognition_round is None:
+            raise ArtifactReplayError(
+                "Evidence retrieval requires an explicit CognitionRound"
+            )
+        if requirement_set_digest(requirements) != context.cognition_round.requirement_set_digest:
+            raise ArtifactReplayError(
+                "Evidence requirements do not match CognitionRound requirement_set_digest"
+            )
         from app.infrastructure.evidence_runtime.gap_scheduler import schedule_requirements
 
         requirements, schedule_trace = schedule_requirements(

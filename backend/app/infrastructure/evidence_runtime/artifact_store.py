@@ -79,9 +79,9 @@ def _sha256(value: Any) -> str:
 def _authority_replay_identity(authority: EvidenceRetrievalAuthority) -> dict[str, Any]:
     """Return the business identity used to validate a replay.
 
-    Snapshot refs and context-version labels are physical/runtime handles. A
-    World Model rebuild may replace those handles while preserving the same
-    current-world business digest; that case must remain a CAS replay hit.
+    The explicit CognitionRound is part of the replay boundary. A changed
+    parent snapshot, WM epoch, or requirement set therefore requires a new
+    round even when the business digest happens to be unchanged.
     """
 
     return {
@@ -93,6 +93,18 @@ def _authority_replay_identity(authority: EvidenceRetrievalAuthority) -> dict[st
         "world_model_snapshot_digest": authority.world_model_snapshot_digest,
         "external_cache_digest": authority.external_cache_digest,
         "world_model_mode": authority.world_model_mode,
+        "cognition_round": {
+            "round_id": authority.cognition_round.round_id,
+            "round_number": authority.cognition_round.round_number,
+            "wm_epoch": authority.cognition_round.wm_epoch,
+            "parent_world_model_snapshot_ref": (
+                authority.cognition_round.parent_world_model_snapshot_ref
+            ),
+            "parent_world_model_snapshot_digest": (
+                authority.cognition_round.parent_world_model_snapshot_digest
+            ),
+            "requirement_set_digest": authority.cognition_round.requirement_set_digest,
+        },
         "engine": authority.engine,
         "engine_version": authority.engine_version,
         "cache_only_policy": authority.cache_only_policy,

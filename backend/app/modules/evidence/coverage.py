@@ -225,6 +225,7 @@ def build_evidence_coverage(
     source_families_queried: tuple[str, ...] | None = None,
     query_trace: tuple[dict[str, Any], ...] = (),
     source_scope: str | None = None,
+    requirement_set_digest: str | None = None,
 ) -> EvidenceCoverage:
     """Build a bounded, per-requirement coverage artifact from retrieval output."""
 
@@ -344,7 +345,10 @@ def build_evidence_coverage(
     return EvidenceCoverage(
         run_id=request.run_id,
         request_id=request.run_id,
-        requirement_set_fingerprint=requirement_set_fingerprint(compiled),
+        requirement_set_fingerprint=(
+            requirement_set_digest
+            or requirement_set_fingerprint(compiled)
+        ),
         source_scope=scope,
         source_families_queried=queried,
         requirements=compiled,

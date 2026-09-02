@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Annotated, Any, TypedDict
 
 from app.contracts.artifacts import ArtifactRef
+from app.contracts.cognition_round import CognitionRound
 from app.contracts.workflow.workflow_contracts import GateDecision
 
 
@@ -351,6 +352,8 @@ class WorkflowState(TypedDict, total=False):
     world_model_mode: Annotated[str, _merge_control]
     world_model_snapshot_ref: Annotated[str, _merge_control]
     world_model_snapshot_digest: Annotated[str, _merge_control]
+    world_model_epoch: Annotated[str, _merge_control]
+    cognition_round: Annotated[CognitionRound | None, _merge_control]
     world_model_shadow_diff_ref: Annotated[str, _merge_control]
     context_fingerprint: Annotated[str, _merge_control]
     artifact_root: Annotated[str, _merge_identity]

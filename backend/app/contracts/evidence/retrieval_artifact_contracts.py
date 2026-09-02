@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.contracts.artifacts.contract_meta import ContractMeta
 from app.contracts.evidence.evidence_contracts import (
@@ -59,6 +59,26 @@ class EvidenceRetrievalArtifact(ContractMeta):
         default_factory=EvidenceAuthority
     )
     proposal_batch: EvidenceProposalBatch | None = None
+
+    @model_validator(mode="after")
+    def _validate_round_lineage(self) -> "EvidenceRetrievalArtifact":
+        if self.proposal_batch is None:
+            return self
+        round_contract = self.authority.cognition_round
+        if (
+            self.proposal_batch.round_id != round_contract.round_id
+            or self.proposal_batch.wm_epoch != round_contract.wm_epoch
+            or self.proposal_batch.parent_world_model_snapshot_ref
+            != round_contract.parent_world_model_snapshot_ref
+            or self.proposal_batch.parent_world_model_digest
+            != round_contract.parent_world_model_snapshot_digest
+            or self.proposal_batch.requirement_set_digest
+            != round_contract.requirement_set_digest
+            or round_contract.proposal_fingerprint
+            != self.proposal_batch.proposal_fingerprint
+        ):
+            raise ValueError("retrieval artifact proposal batch is outside CognitionRound")
+        return self
 
     @field_validator("fingerprint")
     @classmethod

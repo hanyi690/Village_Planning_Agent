@@ -613,12 +613,22 @@ async def l1_aggregate(
             ),
         })
         semaphore = asyncio.Semaphore(4)
+        from app.workflow.cognition_context import open_cognition_round
 
         async def retrieve_one(requirement: Any) -> Any:
             async with semaphore:
+                round_contract = open_cognition_round(
+                    state,
+                    (requirement,),
+                    workflow_run_id=f"{session_id}:l1:{requirement.requirement_id}",
+                    branch_id=str(state.get("branch_id") or "main"),
+                    round_number=0,
+                )
                 return await EvidenceApplication().retrieve(
                     (requirement,),
-                    evidence_context,
+                    evidence_context.model_copy(update={
+                        "cognition_round": round_contract,
+                    }),
                     candidate_limit=8,
                 )
 

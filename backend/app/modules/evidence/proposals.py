@@ -21,6 +21,7 @@ from app.contracts.evidence.proposal_contracts import (
 )
 from app.contracts.evidence.provider_attempt import EvidenceAuthority, EvidenceConfidence
 from app.contracts.evidence.requirement_contracts import EvidenceClaim, EvidenceRequirement
+from app.contracts.cognition_round import CognitionRound
 
 
 def _digest(value: Any) -> str:
@@ -447,9 +448,7 @@ def _compile_requirement(
 def build_evidence_proposals(
     result: ExplorationResult,
     *,
-    round_id: str,
-    wm_epoch: str,
-    parent_world_model_digest: str,
+    cognition_round: CognitionRound,
     evidence_artifact_ref: str = "",
 ) -> EvidenceProposalBatch:
     """Compile only EV-02-authorized conclusions into a frozen proposal batch."""
@@ -457,17 +456,13 @@ def build_evidence_proposals(
     packet = result.evidence_packet
     coverage = result.coverage
     packet_digest = _digest(packet) if packet is not None else "sha256:empty-evidence-packet"
-    requirement_digest = (
-        coverage.requirement_set_fingerprint
-        if coverage is not None
-        else "sha256:empty-requirement-set"
-    )
     if coverage is None or coverage.sufficiency_decision is None:
         return EvidenceProposalBatch(
-            round_id=round_id,
-            wm_epoch=wm_epoch,
-            parent_world_model_digest=parent_world_model_digest,
-            requirement_set_digest=requirement_digest,
+            round_id=cognition_round.round_id,
+            wm_epoch=cognition_round.wm_epoch,
+            parent_world_model_snapshot_ref=cognition_round.parent_world_model_snapshot_ref,
+            parent_world_model_digest=cognition_round.parent_world_model_snapshot_digest,
+            requirement_set_digest=cognition_round.requirement_set_digest,
             evidence_packet_digest=packet_digest,
         )
     requirements = {item.requirement_ref: item for item in coverage.requirements}
@@ -480,15 +475,16 @@ def build_evidence_proposals(
             result,
             requirement,
             decision,
-            parent_world_model_digest=parent_world_model_digest,
+            parent_world_model_digest=cognition_round.parent_world_model_snapshot_digest,
             evidence_packet_digest=packet_digest,
             evidence_artifact_ref=evidence_artifact_ref,
         ))
     return EvidenceProposalBatch(
-        round_id=round_id,
-        wm_epoch=wm_epoch,
-        parent_world_model_digest=parent_world_model_digest,
-        requirement_set_digest=requirement_digest,
+        round_id=cognition_round.round_id,
+        wm_epoch=cognition_round.wm_epoch,
+        parent_world_model_snapshot_ref=cognition_round.parent_world_model_snapshot_ref,
+        parent_world_model_digest=cognition_round.parent_world_model_snapshot_digest,
+        requirement_set_digest=cognition_round.requirement_set_digest,
         evidence_packet_digest=packet_digest,
         proposals=tuple(proposals),
     )

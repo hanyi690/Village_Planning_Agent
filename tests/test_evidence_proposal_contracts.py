@@ -36,6 +36,7 @@ def test_proposal_batch_is_immutable_and_has_all_round_lineage():
     batch = EvidenceProposalBatch(
         round_id="round-1",
         wm_epoch="wm-epoch-1",
+        parent_world_model_snapshot_ref="world-model://session-1/1/wm-1",
         parent_world_model_digest="wm-1",
         requirement_set_digest="requirements-1",
         evidence_packet_digest="packet-1",
@@ -72,6 +73,7 @@ def test_batch_rejects_proposal_from_another_world_model_parent():
         EvidenceProposalBatch(
             round_id="round-1",
             wm_epoch="wm-epoch-1",
+            parent_world_model_snapshot_ref="world-model://session-1/1/wm-1",
             parent_world_model_digest="wm-1",
             requirement_set_digest="requirements-1",
             evidence_packet_digest="packet-1",

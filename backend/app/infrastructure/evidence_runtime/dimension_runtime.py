@@ -767,6 +767,7 @@ async def run_rag(
         if getattr(context, "data_resource_catalog", None) is not None:
             from app.contracts.evidence.requirement_contracts import EvidenceRequirement
             from app.modules.evidence.application import EvidenceApplication, EvidenceContext
+            from app.workflow.cognition_context import open_cognition_round
 
             requirement = EvidenceRequirement(
                 requirement_id=f"{session_id}:{dimension_key}:dimension",
@@ -790,6 +791,13 @@ async def run_rag(
                     purpose="context_injection",
                     request_type=request.request_type,
                     context_refs=tuple(request.context_refs),
+                    cognition_round=open_cognition_round(
+                        context,
+                        (requirement,),
+                        workflow_run_id=request.run_id,
+                        branch_id="main",
+                        round_number=0,
+                    ),
                 ),
                 candidate_limit=32,
             )
@@ -944,6 +952,7 @@ async def run_targeted_evidence(
         if getattr(context, "data_resource_catalog", None) is not None:
             from app.contracts.evidence.requirement_contracts import EvidenceRequirement
             from app.modules.evidence.application import EvidenceApplication, EvidenceContext
+            from app.workflow.cognition_context import open_cognition_round
 
             requirement = EvidenceRequirement(
                 requirement_id=f"{session_id}:{dimension_key}:followup",
@@ -967,6 +976,13 @@ async def run_targeted_evidence(
                     purpose="fact_check",
                     request_type=request.request_type,
                     context_refs=tuple(request.context_refs),
+                    cognition_round=open_cognition_round(
+                        context,
+                        (requirement,),
+                        workflow_run_id=request.run_id,
+                        branch_id="main",
+                        round_number=0,
+                    ),
                 ),
                 candidate_limit=32,
             )

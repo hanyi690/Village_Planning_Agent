@@ -32,6 +32,13 @@ observation/claim、source、policy、authority、valid time、packet digest 与
 digest。它只通过转换函数生成 Cognition 的 `AssertionProposal` 输入，Evidence 不拥有
 decision，也不调用 `WorldModelCommitPort`。
 
+每次 retrieval 必须由 workflow/Cognition context 先打开一个 `CognitionRound`，绑定
+`round_id`、`round_number`、`wm_epoch`、parent World Model snapshot ref/digest 和
+requirement set digest，再通过 `EvidenceContext.cognition_round` 传入 Evidence。Evidence
+不会根据 request/run id 推断 round；完成后只把 proposal fingerprint 绑定回冻结的 round
+authority。round contract 位于 `app.contracts.cognition_round`，workflow factory 位于
+`app.workflow.cognition_context`。
+
 Frozen external cache 使用独立的 `frozen_cache` acquisition attempt；原始
 provider 的状态只作为 `origin_*` provenance 保存。即使完整读取一个
 `QUOTA_EXHAUSTED` 或 `PARTIAL` 的历史缓存，本次 cache read 也不能被解释为
@@ -52,9 +59,13 @@ result = await EvidenceApplication().retrieve(
         stage="L1",
         purpose="snapshot_fact_production",
         request_type="spatial_lookup",
+        cognition_round=round_contract,
     ),
 )
 ```
+
+其中 `round_contract` 必须由 workflow 使用 `open_cognition_round(...)` 创建，不能在
+Evidence 内部拼接 `round_id` 或 `wm_epoch`。
 
 `retrieve_evidence` 等符号只为 API/workflow 适配器保留；新的业务阶段不得直接
 导入它们。L1/L2/L3 的维度 worker 如需一次性获得当前维度的 bounded analysis

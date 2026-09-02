@@ -62,6 +62,11 @@ def _context_authority(context: Any, *, session_id: str) -> tuple[str, str, dict
         "world_model_mode": world_model_mode,
         "world_model_snapshot_ref": world_ref,
         "world_model_snapshot_digest": world_digest,
+        "world_model_epoch": str(
+            getattr(world_model, "version", "")
+            or getattr(legacy_kg, "version", "")
+            or ""
+        ),
         "world_model_shadow_snapshot_ref": str(
             getattr(shadow, "snapshot_ref", "") or ""
         ),
@@ -379,6 +384,7 @@ async def _persist_context_stage_artifacts(
         "data_resource_catalog_digest": data_result.catalog.digest,
         "world_model_snapshot_ref": cognition_result.snapshot.snapshot_ref,
         "world_model_snapshot_digest": cognition_result.snapshot.graph_digest,
+        "world_model_epoch": str(cognition_result.snapshot.version),
     }
     artifact_state["context_ref"] = final_authority
     artifact_state["world_model_snapshot_ref"] = (
@@ -387,6 +393,7 @@ async def _persist_context_stage_artifacts(
     artifact_state["world_model_snapshot_digest"] = (
         cognition_result.snapshot.graph_digest
     )
+    artifact_state["world_model_epoch"] = str(cognition_result.snapshot.version)
 
     from app.infrastructure.context_runtime.manager import (
         context_has_cognition_ports,
@@ -421,6 +428,7 @@ async def _persist_context_stage_artifacts(
         "data_snapshot_digest": str(getattr(data_snapshot, "digest", "") or ""),
         "world_model_snapshot_ref": cognition_result.snapshot.snapshot_ref,
         "world_model_snapshot_digest": cognition_result.snapshot.graph_digest,
+        "world_model_epoch": str(cognition_result.snapshot.version),
         "context_version": version,
         "context_fingerprint": fingerprint,
         "context_ref": {

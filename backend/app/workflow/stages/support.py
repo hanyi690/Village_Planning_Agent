@@ -292,6 +292,11 @@ def _adopt_context(state: Dict[str, Any], context: Any) -> Dict[str, Any]:
             or getattr(getattr(context, "kg", None), "snapshot_digest", "")
             or ""
         ),
+        "world_model_epoch": str(
+            getattr(getattr(context, "world_model", None), "version", "")
+            or getattr(getattr(context, "kg", None), "version", "")
+            or ""
+        ),
         "world_model_shadow_snapshot_ref": str(
             getattr(getattr(context, "world_model_shadow", None), "snapshot_ref", "")
             or ""

@@ -5,7 +5,7 @@ from app.modules.evidence.proposals import (
     to_cognition_assertion_proposals,
 )
 
-from test_evidence_proposals import _requirement, _result
+from test_evidence_proposals import _requirement, _result, _round
 
 
 def test_evidence_proposal_compiler_has_no_world_model_writer_dependency():
@@ -17,12 +17,11 @@ def test_evidence_proposal_compiler_has_no_world_model_writer_dependency():
 
 
 def test_cognition_conversion_does_not_mutate_the_evidence_batch():
-    result = _result(_requirement("identity"))
+    requirement = _requirement("identity")
+    result = _result(requirement)
     batch = build_evidence_proposals(
         result,
-        round_id="round-1",
-        wm_epoch="wm-7",
-        parent_world_model_digest="wm-7",
+        cognition_round=_round((requirement,)),
     )
     before = batch.model_dump(mode="json")
 
@@ -32,8 +31,9 @@ def test_cognition_conversion_does_not_mutate_the_evidence_batch():
 
 
 def test_absence_proposal_can_cross_the_cognition_contract_boundary():
+    requirement = _requirement("claim", metadata={"predicate": "exists"})
     result = _result(
-        _requirement("claim", metadata={"predicate": "exists"}),
+        requirement,
         conclusion_kind="absence",
         candidates=(),
         claims=(),
@@ -41,9 +41,7 @@ def test_absence_proposal_can_cross_the_cognition_contract_boundary():
     )
     batch = build_evidence_proposals(
         result,
-        round_id="round-1",
-        wm_epoch="wm-7",
-        parent_world_model_digest="wm-7",
+        cognition_round=_round((requirement,)),
     )
 
     assertion = to_cognition_assertion_proposals(batch)[0]

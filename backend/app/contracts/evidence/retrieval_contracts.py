@@ -5,9 +5,10 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.contracts.artifacts.ref import ArtifactRef
+from app.contracts.cognition_round import CognitionRound
 
 
 _FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
@@ -46,11 +47,23 @@ class EvidenceRetrievalAuthority(BaseModel):
     external_cache_digest: str
     gap_ledger_ref: ArtifactRef
     world_model_mode: str
+    cognition_round: CognitionRound
     engine: str = "evidence_application"
     engine_version: str = EVIDENCE_RETRIEVAL_ENGINE_VERSION
     cache_only_policy: dict[str, bool] = Field(
         default_factory=lambda: {"external": True}
     )
+
+    @model_validator(mode="after")
+    def _validate_round_parent(self) -> "EvidenceRetrievalAuthority":
+        if (
+            self.cognition_round.parent_world_model_snapshot_ref
+            != self.world_model_snapshot_ref
+            or self.cognition_round.parent_world_model_snapshot_digest
+            != self.world_model_snapshot_digest
+        ):
+            raise ValueError("CognitionRound parent does not match retrieval authority")
+        return self
 
 
 class EvidenceRetrievalOutcome(BaseModel):

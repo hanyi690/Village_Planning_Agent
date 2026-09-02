@@ -31,6 +31,11 @@ from .query import (
     RepresentationRequirement,
 )
 from .representation import SpatialRepresentation
+from app.contracts.cognition_round import (
+    CognitionRound,
+    CognitionRoundStatus,
+    requirement_set_digest,
+)
 from .snapshot import SessionWorldModelSnapshot
 from .stage_contracts import (
     CognitionGapRecord,
@@ -59,6 +64,9 @@ __all__ = [
     "SessionWorldModelSnapshot",
     "CognitionStageSnapshot",
     "CognitionGapRecord",
+    "CognitionRound",
+    "CognitionRoundStatus",
+    "requirement_set_digest",
     "L1WorldProjectionSnapshot",
     "CognitionShadowDiff",
     "ShadowDiffItem",

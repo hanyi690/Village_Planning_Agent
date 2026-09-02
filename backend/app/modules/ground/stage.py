@@ -392,6 +392,7 @@ async def _retrieve_ground_evidence_packets(
         return {}, []
     from app.contracts.evidence.requirement_contracts import EvidenceRequirement
     from app.modules.evidence.application import EvidenceApplication, EvidenceContext
+    from app.workflow.cognition_context import open_cognition_round
 
     work: list[tuple[str, Any, str, list[str]]] = []
     for spec in list(specs or []):
@@ -457,6 +458,14 @@ async def _retrieve_ground_evidence_packets(
                             dimension_key="location",
                             purpose=f"grounding_candidate_resolution:round:{round_index}",
                             request_type="spatial_lookup",
+                            cognition_round=open_cognition_round(
+                                context,
+                                requirements,
+                                workflow_run_id=f"{session_id}:ground:r{round_index}",
+                                branch_id="main",
+                                round_number=round_index,
+                                max_rounds=16,
+                            ),
                         ),
                         spatial_spec=_spec,
                         candidate_offset=offset,
@@ -536,6 +545,7 @@ async def _retrieve_ground_gap_evidence(
     from app.contracts.evidence.requirement_contracts import EvidenceRequirement
     from app.contracts.ground.grounding_contracts import SpatialQueryEvidence
     from app.modules.evidence.application import EvidenceApplication, EvidenceContext
+    from app.workflow.cognition_context import open_cognition_round
 
     request_targets = [
         statement.partition("target_id=")[2].partition(";")[0].strip()
@@ -573,6 +583,13 @@ async def _retrieve_ground_gap_evidence(
                 dimension_key="location",
                 purpose="grounding_gap_resolution",
                 request_type="evidence_gap",
+                cognition_round=open_cognition_round(
+                    context,
+                    requirements,
+                    workflow_run_id=f"{session_id}:ground:gap",
+                    branch_id="main",
+                    round_number=0,
+                ),
             ),
         )
     except Exception as exc:  # noqa: BLE001 - retry remains structured

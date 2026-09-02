@@ -146,6 +146,16 @@ async def _retrieve_l1_evidence_packets(
             },
         )
         try:
+            from app.workflow.cognition_context import open_cognition_round
+
+            cognition_round = open_cognition_round(
+                context,
+                (requirement,),
+                workflow_run_id=f"{session_id}:ground:l1-location:r{round_index}",
+                branch_id="main",
+                round_number=round_index,
+                max_rounds=16,
+            )
             evidence_context = EvidenceContext.from_runtime_context(
                 context,
                 session_id=session_id,
@@ -154,6 +164,7 @@ async def _retrieve_l1_evidence_packets(
                 dimension_key="location",
                 purpose=f"l1_location_resolution:round:{round_index}",
                 request_type="spatial_lookup",
+                cognition_round=cognition_round,
                 context_refs=tuple(
                     value
                     for value in (
