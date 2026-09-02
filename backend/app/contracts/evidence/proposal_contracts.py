@@ -80,15 +80,23 @@ class EvidenceProposalBase(BaseModel):
 
         from app.contracts.cognition.proposals import AssertionProposal
 
+        assertion_value = self.value
+        if self.conclusion_kind == "absence" and assertion_value is None:
+            assertion_value = False
+
         return AssertionProposal(
             proposal_ref=self.proposal_ref,
             proposal_kind=self.proposal_kind,
             subject_ref=self.subject_ref,
             predicate=self.predicate,
             object_ref=self.object_ref,
-            value=self.value,
+            value=assertion_value,
             source_refs=self.source_refs,
-            evidence_refs=self.evidence_refs,
+            evidence_refs=tuple(dict.fromkeys((
+                *self.evidence_refs,
+                *self.supporting_evidence_refs,
+                *self.opposing_evidence_refs,
+            ))),
             requirement_refs=(self.requirement_ref,),
             authority={
                 "source_authority": self.authority.source_authority,
@@ -159,6 +167,9 @@ class EvidenceProposalBatch(BaseModel):
 
     @model_validator(mode="after")
     def _validate_and_freeze_fingerprint(self) -> "EvidenceProposalBatch":
+        proposal_refs = tuple(proposal.proposal_ref for proposal in self.proposals)
+        if len(proposal_refs) != len(set(proposal_refs)):
+            raise ValueError("proposal_refs must be unique within a batch")
         for proposal in self.proposals:
             if proposal.parent_world_model_digest != self.parent_world_model_digest:
                 raise ValueError("proposal parent digest does not match batch")

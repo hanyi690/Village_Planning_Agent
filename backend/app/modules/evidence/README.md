@@ -17,13 +17,20 @@ EvidenceRequirement
     -> ProviderAttempt / ProviderPageRecord
     -> EvidenceObservationSnapshot
     -> EvidenceAcquisitionReceipt
+    -> CandidateEvidence / ConflictSet / Coverage / Sufficiency
+    -> EvidenceProposalBatch
     -> EvidenceRetrievalArtifact
 ```
 
 其中 QueryPlan 只声明 requirement、scope、来源 route、分页和预算语义；endpoint、
 凭据、网络、lease/fencing 与 raw response 持久化仍属于 DATA/provider acquisition
 runtime。`EvidenceAcquisitionReceipt` 只描述采集是否完成，不替代后续
-policy-driven sufficiency 判断。
+policy-driven sufficiency 判断。EV-03 的 `proposals.py` 只把已通过 sufficiency 的
+requirement 编译为 `EntitySupportProposal`、`RelationSupportProposal`、
+`PropertyAssertionProposal` 或 `RepresentationSupportProposal`，保留 candidate、
+observation/claim、source、policy、authority、valid time、packet digest 与 WM parent
+digest。它只通过转换函数生成 Cognition 的 `AssertionProposal` 输入，Evidence 不拥有
+decision，也不调用 `WorldModelCommitPort`。
 
 Frozen external cache 使用独立的 `frozen_cache` acquisition attempt；原始
 provider 的状态只作为 `origin_*` provenance 保存。即使完整读取一个

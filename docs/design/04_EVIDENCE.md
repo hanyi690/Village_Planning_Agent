@@ -96,7 +96,7 @@ Requirement ≠ Query ≠ Observation ≠ Candidate ≠ Conclusion
 | provider observation | 已有统一 attempt taxonomy、route/page/observation lineage；local DATA/WM/source-span 不生成伪 page | online provider-native acquisition、lease/retry 仍后续实现 |
 | gap ledger | 已有 immutable ledger 与 scheduler row | 补齐 lease、next-attempt、dedupe 与 dependency row |
 | sufficiency | EV-02 已按 requirement-specific policy 运行十项 gate，并持久化 candidate/conflict/gate artifact | 校准更多 provider/source 组合与下游回归 |
-| Cognition proposal | 本轮不触碰；Evidence 只停在 ObservationSnapshot/Receipt | 统一为 proposal artifact，永不由 Evidence 直接 commit |
+| Cognition proposal | EV-03 已将 sufficient EvidencePacket/coverage 编译为四类不可变 proposal artifact；Evidence 只生成并持久化 proposal，不执行 WM 写入 | Cognition 对 proposal 做 decision，并通过统一 commit transaction 写入；Evidence 永不直接 commit |
 
 EV-01B/EV-01C 已落地的采集脊柱为：`EvidenceQueryPlanV1` 由 runtime 的
 `AcquisitionRouteExecutor` 逐 route 产出 terminal attempt；Application 只校验和汇总，
@@ -533,6 +533,7 @@ provider policy version
 ~~~text
 contracts/evidence/requirement_contracts.py
 contracts/evidence/reasoning_contracts.py
+contracts/evidence/proposal_contracts.py
 contracts/evidence/retrieval_contracts.py
 contracts/evidence/retrieval_artifact_contracts.py
 contracts/evidence/stage_contracts.py
@@ -541,6 +542,7 @@ modules/evidence/application.py
 modules/evidence/requirements.py
 modules/evidence/coverage.py
 modules/evidence/sufficiency.py
+modules/evidence/proposals.py
 infrastructure/evidence_runtime/artifact_store.py
 infrastructure/evidence_runtime/gap_scheduler.py
 ~~~
@@ -550,7 +552,6 @@ infrastructure/evidence_runtime/gap_scheduler.py
 ~~~text
 modules/evidence/query_planning.py
 modules/evidence/conflict_resolution.py
-modules/evidence/proposals.py
 infrastructure/evidence_runtime/provider_attempts.py
 infrastructure/evidence_runtime/fusion.py
 ~~~
@@ -579,9 +580,9 @@ proposal_accept/reject/ambiguous_rate
 2. 分页缺失不能产生 absence 结论；
 3. requirement-specific authority/sufficiency 有 fixture；
 4. 相同 query fingerprint 幂等重放；
-5. EvidencePacket 可重载且 provenance 闭合；
+5. EvidencePacket、Sufficiency 和 proposal batch 可重载且 provenance 闭合；
 6. 外源 observation 无法直接进入 executable geometry；
-7. proposal 必经 Cognition commit；
+7. proposal 必经 Cognition decision/commit；
 8. 新 evidence 只唤醒依赖 gap；
 9. 语义 benchmark 覆盖 sufficiency 误判和冲突处理；
 10. 所有业务阶段只通过统一 Evidence facade。

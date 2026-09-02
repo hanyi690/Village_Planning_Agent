@@ -204,8 +204,15 @@ def test_relation_property_and_local_representation_are_distinct_proposals():
         parent_world_model_digest="wm-8",
     )
 
-    assert [item.proposal_kind for item in batch.proposals] == ["relation_support"]
-    assert batch.proposals[0].object_ref == "junction:J1"
+    assert {item.proposal_kind for item in batch.proposals} == {
+        "relation_support",
+        "property_assertion",
+        "representation_support",
+    }
+    relation_proposal = next(
+        item for item in batch.proposals if item.proposal_kind == "relation_support"
+    )
+    assert relation_proposal.object_ref == "junction:J1"
 
     property_result = _result(_requirement("claim"), packet=EvidencePacket(request="road R1 exists"))
     property_batch = build_evidence_proposals(

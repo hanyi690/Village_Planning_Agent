@@ -2,10 +2,12 @@
 
 设计 owner：<code>../04_EVIDENCE.md</code>。
 
-本轮完成 EV-02 的 Evidence reasoning vertical slice：在 EV-01B acquisition spine
+本轮完成 EV-03 的 Evidence reasoning/proposal vertical slice：在 EV-01B acquisition spine
 之上，按 `Observation → CandidateEvidence → ConflictSet → Coverage → Sufficiency`
-执行 requirement-specific policy gates。EV-03 Proposal、Gap scheduler、Cognition
-proposal/commit 与 online provider 仍属于后续阶段。
+执行 requirement-specific policy gates，再按 `EvidencePacket →
+EvidenceProposalBatch → Cognition AssertionProposal` 生成可重放提案。Cognition
+仍独占 decision/commit；Evidence 不直接写 WM。Gap scheduler 与 online provider
+仍属于后续阶段。
 
 ## 当前目标：P0 / Loop Ready
 
@@ -23,6 +25,7 @@ Requirement ≠ Query ≠ Observation ≠ Candidate ≠ Conclusion
 | Recovery | provider 状态与 gap 可区分并按新输入调度 | <code>PARTIAL</code> |
 | Sufficiency | 十个 policy gate 逐 requirement 运行并可重放 | <code>PASS (EV-02 policy evaluator)</code> |
 | Absence | 仅在完整权威采集、分页耗尽、独立来源满足且无冲突时结论化 | <code>PASS (EV-02 late gate)</code> |
+| Proposal | sufficient requirement 生成四类 proposal，保留完整 lineage 并可经 Cognition adapter 转换 | <code>PASS (EV-03 proposal artifact)</code> |
 
 ## P0 必测探针
 
@@ -54,8 +57,6 @@ receipt、provider origin 或 pagination 未闭合时输出 absence conclusion�
 ## Deferred
 
 - P1：MVP provider/source 组合的稳定覆盖、sufficiency 校准和下游回归；
-- EV-03：把 EvidencePacket 转换为 Entity/Relation/Property/Representation Support Proposal，
-  并仅通过 WM v0.5 Cognition Transaction 提交；Evidence 不直接写 WM；
 - P2：配额治理、并发、缓存一致性、隐私/许可、安全和 provider SLO。
 
 Remaining gaps 见 <code>../05_MIGRATION.md</code>。

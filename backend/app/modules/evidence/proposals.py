@@ -15,7 +15,6 @@ from app.contracts.evidence.proposal_contracts import (
     EntitySupportProposal,
     EvidenceProposal,
     EvidenceProposalBatch,
-    EvidenceProposalBase,
     PropertyAssertionProposal,
     RelationSupportProposal,
     RepresentationSupportProposal,
@@ -393,15 +392,14 @@ def _compile_requirement(
         value=_first(candidate.statement for candidate in candidate_rows),
     )
 
+    proposals: list[EvidenceProposal] = []
     relations = result.evidence_packet.relation_evidence if result.evidence_packet else ()
     if requirement.kind == "spatial" and relations:
-        proposals = tuple(
+        proposals.extend(
             proposal
             for relation in relations
             if (proposal := _proposal_for_relation(relation, payload=payload)) is not None
         )
-        if proposals:
-            return proposals
 
     representation_refs = _refs(
         candidate.representation_refs
@@ -423,25 +421,27 @@ def _compile_requirement(
             "object_ref": representation_ref,
             "value": None,
         })
-        return (_typed_proposal(
+        proposals.append(_typed_proposal(
             "representation_support",
             representation_payload,
             representation_ref=representation_ref,
             geometry_authority=geometry_authority,
-        ),)
+        ))
 
     claim = claims[0] if claims else None
     fact = facts_by_claim.get(claim.claim_id) if claim is not None else None
-    predicate, value = _claim_value(requirement, claim, fact)
-    property_payload = dict(payload)
-    property_payload.update({
-        "subject_ref": subject_ref,
-        "predicate": predicate,
-        "value": value,
-    })
     if requirement.kind == "identity":
-        return (_typed_proposal("entity_support", payload),)
-    return (_typed_proposal("property_assertion", property_payload),)
+        proposals.insert(0, _typed_proposal("entity_support", payload))
+    else:
+        predicate, value = _claim_value(requirement, claim, fact)
+        property_payload = dict(payload)
+        property_payload.update({
+            "subject_ref": subject_ref,
+            "predicate": predicate,
+            "value": value,
+        })
+        proposals.append(_typed_proposal("property_assertion", property_payload))
+    return tuple(proposals)
 
 
 def build_evidence_proposals(

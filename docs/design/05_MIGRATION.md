@@ -26,7 +26,7 @@
 |---|---|---|---|
 | DATA | 统一 local/remote declaration admission、四类 immutable product、BoundaryScope、provider lease/writer、DATA-only DataChangeSet、WM/Evidence consumer 和旧 DATA 物理删除均已落地 | CURRENT（本地） | 真实 provider 在线 coverage、部署 ACL、灾备 restore、线上 SLO/RPO/RTO |
 | Cognition/WM | 有 DATA-backed store、snapshot/CAS、source/entity/representation contracts、identity commit | PARTIAL | assertion 全生命周期、merge/split、typed views、dependency digest、多进程 writer |
-| Evidence | 有 requirement、retrieval authority/outcome、CAS artifact、coverage、gap ledger 和 scheduler | PARTIAL | authority/sufficiency policy、provider attempt 细状态、融合冲突、proposal contract |
+| Evidence | 有 requirement、retrieval authority/outcome、CAS artifact、coverage、EV-02 sufficiency 和 EV-03 proposal batch | PARTIAL | online provider coverage、gap lease/依赖精化、proposal 下游 acceptance/rejection benchmark |
 | L1 | 有 bounded dimension input、typed facts/mentions/gaps、aggregation、gate 和 CAS | PARTIAL | source-span report、冲突组、L1ProductManifest、最终视图 Gate |
 | L1-GROUND | 有 observation/binding sidecars、闭集候选、identity commit 调用和 projection receipt | PARTIAL | 统一终态 taxonomy、proposal ownership、revalidation、状态迁移测试 |
 | L2 | 有 typed strategy/decision rows 和依赖输入 | PARTIAL | 以稳定 L1 final view 完成 fresh 四维消费 |
@@ -112,7 +112,8 @@ workflow。
 
 - requirement compilation 与 requirement fingerprint；
 - frozen retrieval authority、typed outcome、write-once artifact；
-- coverage/sufficiency 的基础计算；
+- coverage/sufficiency 的十项 requirement-specific policy gate；
+- EvidencePacket 到四类 Cognition proposal 的确定性编译与 CAS replay；
 - immutable gap ledger 和 scheduler row；
 - external observation 的坐标信任与 advisory 边界。
 
@@ -121,7 +122,6 @@ workflow。
 - required authority、独立来源、max age、legal effective time、conflict policy；
 - retryable/permanent/quota/partial 的统一 provider attempt contract；
 - 完整分页证书、跨 provider candidate cluster 和 conflict set；
-- Evidence→Cognition proposal artifact；
 - requirement-specific sufficiency benchmark。
 
 ### 3.4 L1
