@@ -39,11 +39,11 @@ L1BindingSnapshot
 
 BindingProposal[]
 AssertionProposal[]
-WorldModelCommitRequest optional
 ~~~
 
-提交成功并重验证后的 binding 与 observation 一起形成 L1 final product；proposal 本身不是
-current-world fact。
+L1-GROUND 的 public output 在 `ProposalBatch` 处终止。提交、World Model snapshot 生成和
+binding revalidation 属于 Cognition 与 L1 finalization，不是 Ground evaluation 的输出。proposal
+本身不是 current-world fact。
 
 ## 4. Public Facade
 
@@ -72,12 +72,8 @@ NEW
               → IDENTITY_SCOPE_VERIFY
               → RELATION_VERIFY
               → BINDING_PROPOSAL
-              → COGNITION_VALIDATION
-              ├─ COMMITTED
-              ├─ REJECTED
-              └─ STALE_PARENT
-                  → REVALIDATED
-                  → TERMINAL
+              → PROPOSAL_BATCHED
+              → TERMINAL
 ~~~
 
 合法主终态：
@@ -106,16 +102,20 @@ NEW
 
 ~~~text
 binding evaluation
-  → immutable proposal batch
-  → Cognition validation
+  → immutable ProposalBatch
+  → terminal GroundEvaluation
+  → Cognition validation/decision
   → WorldModelCommitPort CAS
   → new WorldModelSnapshot
-  → binding revalidation
+  → L1 finalization binding revalidation
   → publish L1BindingSnapshot
 ~~~
 
-proposal batch 原子提交；任一硬不变量失败时整批不写。stale parent 必须重读受影响 subgraph
-并重新评估，不能只替换 parent ref 重试。
+Ground 只发布 proposal，不知道 commit 如何发生。Cognition 的提交单位不是整个 Ground 输出批次，
+而是一个 subject 或 identity-connected component。只有共享同一 identity invariant 的 proposal
+才组成一个 `CommitGroup`；停车场、公交站、道路和河流等互不相关 subject 必须可以分别得到
+`committed`、`ambiguous` 或 `rejected`。最外层通过 `CognitionCommitManifest` 汇总每个 group 的
+结果。stale parent 必须由 Cognition 重读受影响 subgraph 并重新评估，不能只替换 parent ref 重试。
 
 ## 7. Invariants
 

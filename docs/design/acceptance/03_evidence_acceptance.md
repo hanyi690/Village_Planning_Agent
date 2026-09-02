@@ -30,8 +30,9 @@ Requirement ≠ Query ≠ Observation ≠ Candidate ≠ Conclusion
 - confidence 分离 acquisition、semantic、binding；
 - authority 分离 source、geometry、legal；
 - Observation 不能直接升级为 Conclusion 或 executable geometry；
-- 从 <code>output/map_validation/amap/</code>、<code>tianditu/</code>、<code>tencent/</code> 的
-  本地缓存重建外源 observation snapshot；每个 provider/stage 的 manifest、normalized
+- 从 <code>data/cache/map_observations/amap/</code>、<code>tianditu/</code>、<code>tencent/</code> 的
+  本地缓存（旧 <code>output/map_validation/</code> 已物理删除）重建外源 observation snapshot；
+  每个 provider/stage 的 manifest、normalized
   rows、attempt status、采集时间、范围与 raw/cache ref 可重载。腾讯当前未完成的阶段必须
   保留 <code>NOT_ATTEMPTED</code> 或失败 gap；
 - 新 receipt 只唤醒受影响 requirement/consumer；无新依赖时停止。

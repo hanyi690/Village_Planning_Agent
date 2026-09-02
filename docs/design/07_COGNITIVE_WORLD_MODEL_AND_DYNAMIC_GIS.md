@@ -155,6 +155,25 @@ display_geometry
 系统不设置跨用途的“默认 geometry”。调用方必须声明 purpose；只有明确登记的派生规则才能
 从一个 representation 生成另一个。
 
+### 4.4 Bootstrap identity levels
+
+DATA admission 的 <code>SourceRecord</code> 不等于 canonical identity acceptance。bootstrap 只做
+确定性的 source-local projection：
+
+~~~text
+SourceRecord
+  → SourceLocalIdentity
+      identity_status = source_local | provisional | canonical | superseded
+  → EntitySupportProposal
+  → identity validation
+  → canonical WorldEntity (only when accepted)
+~~~
+
+没有名称或没有足够 identity evidence 的 source record 仍可进入 WM 索引，但只能是
+<code>source_local</code> 或 <code>provisional</code>。所谓 bootstrap acceptance 只表示该 source-local
+identity 可以被认知查询索引，不表示它已经被确认是某个现实世界 canonical entity。只有经过
+Cognition identity assertion 和 decision 的对象，才能成为 <code>canonical</code> WorldEntity。
+
 ## 5. Assertion 生命周期
 
 ### 5.1 状态
@@ -281,9 +300,9 @@ previous WorldModelSnapshot optional
 
 1. 校验 current-world admission 和 DATA digest；
 2. 建立 source graph；
-3. 生成 source-local entity/part/representation proposals；
-4. 校验 schema mapping；
-5. 构建 accepted bootstrap projection；
+3. 生成 source-local identity/part/representation proposals；
+4. 校验 schema mapping 和 source-local identity invariants；
+5. 构建可进入认知索引的 provisional bootstrap projection，不自动产生 canonical identity；
 6. 写临时 CAS artifact；
 7. 重载并重算 graph digest；
 8. compare-and-set 发布 named ref。

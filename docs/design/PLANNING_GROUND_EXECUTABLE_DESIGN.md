@@ -128,6 +128,12 @@ target → entity → representation → resource → geometry/capability → re
 依赖必须显式索引。WM merge/split、source/geometry/CRS、L1 anchor、Evidence 或 evaluator 变化时，
 只失效相关 target domain；若闭集 digest 不变则不得重复求解前置过程。
 
+跨模块失效的唯一 owner 是 Dependency Runtime。DATA 只发布 DATA-owned `DataChangeSet`，不直接
+清理 WM/Evidence cache，也不直接决定 Planning Ground 的 stale row。Dependency Runtime 将 DATA
+change set、WM change set、Evidence packet 和 Ground dependency index 合并后，按
+target → entity → representation → resource → geometry/capability → relation/constraint → problem
+的反向边精确唤醒受影响 domain；没有完整 dependency metadata 时才采用声明的保守策略。
+
 ## 13. Deterministic vs LLM Boundary
 
 确定性逻辑负责 capability blocking、geometry/CRS、valid time、authority、关系测量、硬约束 IR、

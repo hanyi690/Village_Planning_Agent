@@ -15,14 +15,16 @@
 | <code>BLOCKED</code> | 外部资料/权限/服务明确阻断，并有恢复指针 |
 | <code>RETIRE</code> | 旧实现无调用者且退出门已通过 |
 
-所有主要阶段当前保持 <code>PARTIAL</code>。这不否定技术路线；它表示尚未形成一条满足全部
-Gate 的 fresh、非空、可重放 DATA→DELIVER 会话。
+本账本只记录跨模块规划闭环的总体状态；DATA 自身的详细实现和删除边界以
+<code>DATA_EXECUTABLE_DESIGN.md</code> 为准。DATA 的本地 admission/catalog/WM/Evidence
+消费链已通过本地验收；真实远程 provider、部署 ACL、灾备 restore 和线上 SLO 仍是发布环境
+门禁，不应通过恢复旧兼容代码解决。
 
 ## 2. 当前实现矩阵
 
 | 阶段 | 当前实现事实 | 状态 | 最近出口 |
 |---|---|---|---|
-| DATA | 有 resource catalog、admission、snapshot、GIS/document adapters；current/planned 隔离已有实现 | PARTIAL | 统一六类 fail-closed 终态、receipt/DataGap、catalog CAS 与声明能力 probe |
+| DATA | 统一 local/remote declaration admission、四类 immutable product、BoundaryScope、provider lease/writer、DATA-only DataChangeSet、WM/Evidence consumer 和旧 DATA 物理删除均已落地 | CURRENT（本地） | 真实 provider 在线 coverage、部署 ACL、灾备 restore、线上 SLO/RPO/RTO |
 | Cognition/WM | 有 DATA-backed store、snapshot/CAS、source/entity/representation contracts、identity commit | PARTIAL | assertion 全生命周期、merge/split、typed views、dependency digest、多进程 writer |
 | Evidence | 有 requirement、retrieval authority/outcome、CAS artifact、coverage、gap ledger 和 scheduler | PARTIAL | authority/sufficiency policy、provider attempt 细状态、融合冲突、proposal contract |
 | L1 | 有 bounded dimension input、typed facts/mentions/gaps、aggregation、gate 和 CAS | PARTIAL | source-span report、冲突组、L1ProductManifest、最终视图 Gate |
@@ -41,20 +43,49 @@ Gate 的 fresh、非空、可重放 DATA→DELIVER 会话。
 
 ### 3.1 DATA
 
-已实现：
+已实现并本地验证：
 
-- source admission、session resource catalog 与 source snapshot；
-- document、table、feature、parcel 等 adapter 的现有窄能力；
-- resource/representation/capability 相关 contract 和 selection 逻辑；
-- current/reference/planned role 的部分隔离。
+- `process_uploaded_file` → `DataAdmissionFacade.admit` 的唯一上传写边界；
+- local GeoJSON/矢量/GeoTIFF/表格/Markdown 的 bounded parse 和 current-role admission；
+- `RemoteSourceAdmissionRequest` 覆盖 API vector/WFS/MapServer/WMTS/remote raster；
+- SourceSnapshot、NormalizedResource、RepresentationSnapshot、CapabilityIndex 和轻量 catalog index；
+- BoundaryScopeArtifact、严格 CRS/type/geometry policy、topology repair audit；
+- provider lease/fencing/atomic writer/crash recovery 和完整 coverage manifest；
+- DATA-only `DataChangeSet` publication；跨模块 dependency/subgraph invalidation 归 Dependency Runtime；
+- Jintian upload → WM → Evidence → replay/stale-parent 的本地 E2E；
+- 旧 Bundle、BSM/DLBM 派生、external anchor、typed ingest adapter 和 output cache 的物理删除。
 
-仍缺：
+开放项只属于发布环境：真实 provider 在线 coverage、部署主机 ACL、CAS/SQLite 灾备恢复和
+实际 SLO/RPO/RTO 测量。
 
-- <code>DISCOVERED → … → ADMITTED</code> 的统一持久化状态机；
-- UNSUPPORTED、INVALID、CRS/ENCODING_UNRESOLVED、GEOMETRY_INVALID、POLICY_REJECTED 的统一 receipt；
-- DataGap、attempt lineage、catalog publish CAS 和并发 stale-parent probe；
-- 按 adapter/格式/geometry/CRS 明示的 P0 capability matrix；
-- source 变化到 WM/Evidence/Planning Ground 的精确 dependency invalidation。
+### 3.1.1 Provider validation harness 迁移检查项
+
+当前存在但未进入生产链的脚本：
+
+```text
+scripts/collect_amap_jintian_validation.py
+scripts/collect_three_provider_validation.py
+scripts/collect_tianditu_full.py
+```
+
+这些脚本暂时保留为 acceptance harness，不能作为正式业务采集入口，也不作为 DATA 或 Evidence 的第二个正式入口。AMap
+harness 已使用 `BoundaryScopeArtifact`、`ProviderAcquisitionPlan`、lease/fencing、
+`ProviderObservationWriter` 和统一 map observation cache，但仍直接使用 `requests.Session`，并
+保留自己的 retry/cache、Jintian/L1 查询编译、scope classifier 以及
+`retained_candidates.jsonl`/`rejected_candidates.jsonl` 筛选。因此它们的输出只能作为审计样本，
+不能作为 Evidence sufficiency 或 World Model identity 的权威来源。
+
+退出条件：
+
+- 正式 Evidence provider runtime 能接收 `EvidenceQueryPlan → AcquisitionRequest`；
+- 脚本直接 HTTP 和私有 retry/cache 已迁移到正式 runtime；
+- `ProviderAttempt`、分页完整性、quota/timeout/empty/missing 状态由正式 runtime 产生；
+- L1 mention 读取和业务 query 编译移入 EvidenceRequirement/QueryPlan；
+- retained/rejected 仅作为 Evidence candidate/ConflictSet 的受控投影，不再由脚本决定；
+- 迁移后 acceptance harness 仍能重放同一 acquisition fingerprint。
+
+在这些条件满足前，不能删除脚本的 acceptance 入口和审计产物；但也不能把脚本接入正式业务
+workflow。
 
 ### 3.2 Cognition / World Model
 
@@ -214,16 +245,12 @@ test count、session id、临时路径或 digest。
 7. VALIDATE/RECONCILE/DELIVER 产生非空、有 lineage 的成果；
 8. 无资料会话形成 HUMAN 或 diagnostic-only，而不是伪造完整规划。
 
-## 8. 旧 parcel 退出
+## 8. 上层 parcel/BSM 迁移边界
 
-parcel/BSM 只保留为显式地籍任务兼容路径。删除前要求：
-
-- generic task telemetry 不再依赖 <code>selected_bsm/source_bsms/landuse_current</code>；
-- 历史 BSM merge/split/remainder、面积守恒和回滚可重放；
-- generic geometry 和 parcel adapter 都携带 DATA resource/representation lineage；
-- 完整 MVP 会话不需要空 BSM 或现状复制图。
-
-在退出门满足前状态保持 PARTIAL，不因文档收缩而删除运行兼容代码。
+DATA 已不再提供 parcel/BSM typed ingest、Bundle assembly 或 BSM/DLBM 派生入口。仍被更高层
+规划契约引用的历史字段和响应容器不属于 DATA current path；它们必须在独立的上层迁移中处理，
+不能重新加回 DATA 作为兼容 shim。DATA 只向上层提供 generic resource/representation/capability
+lineage；上层若仍要求旧 typed contract，缺少对应投影时必须显式失败。
 
 ## 9. 更新规则
 

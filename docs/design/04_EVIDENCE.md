@@ -46,7 +46,30 @@ Evidence 不负责：
 - 用单一 confidence 数值替代 authority、时效和来源独立性；
 - 把调用失败、未尝试或额度耗尽解释为“现实中不存在”。
 
-### 2.1 五类对象不得合并
+### 2.1 Provider validation harness 的非生产地位
+
+`scripts/collect_amap_jintian_validation.py`、`scripts/collect_three_provider_validation.py` 和
+`scripts/collect_tianditu_full.py` 是开发/验收 acceptance harness，不能作为正式业务采集入口，也不是
+Evidence acquisition 的业务入口。
+它们可以调用正式 DATA/provider runtime 或在迁移期间生成审计样本，但不能成为 L1、L1-GROUND 或
+正式 session workflow 的隐藏依赖。
+
+当前 AMap harness 仍包含直接 HTTP、私有 retry/cache、Jintian/L1 query 编译、scope classifier
+以及 retained/rejected 投影。这些字段只用于审计和 fixture，不能替代：
+
+```text
+EvidenceRequirement
+EvidenceQueryPlan
+ProviderAttempt
+Coverage/Sufficiency
+Evidence Candidate/ConflictSet
+```
+
+Harness 的迁移出口是：脚本只读取冻结的 requirement/query/acquisition artifact，调用正式
+provider acquisition runtime，保存 `ProviderAttempt`、`AcquisitionReceipt` 和 observation，最后
+打印 acceptance summary。脚本不得自行判断 sufficient、absence、canonical identity 或写 WM。
+
+### 2.2 五类对象不得合并
 
 ~~~text
 Requirement ≠ Query ≠ Observation ≠ Candidate ≠ Conclusion
@@ -119,6 +142,24 @@ budget_class
 | 服务半径假设 | policy 或显式业务规则 | 1 | none | derived |
 
 不同用途不能共享一个固定 confidence threshold。
+
+### 4.2 EvidencePolicyRegistry
+
+证据标准由版本化的 <code>EvidencePolicyRegistry</code> 统一拥有，业务模块不能临时创建自己的
+authority 或 sufficiency threshold。每条 policy 至少包含：
+
+~~~text
+policy_id / policy_version
+requirement_kind / purpose
+required_authority / geometry_authority / legal_authority
+min_independent_sources / max_age / legal_effective_time
+allowed_inference / conflict_policy / absence_policy
+success_condition
+~~~
+
+L1、L1-GROUND、L2、L3 和 Planning Ground 只能引用已登记的 <code>policy_id</code>，并补充 subject、
+scope 和 valid time。LLM 不能选择 authority、source count、age 或 absence policy。Evidence 的
+coverage/sufficiency 必须先解析 policy version，再输出结论或 Cognition proposal。
 
 ## 5. Confidence 与 Authority
 
@@ -282,6 +323,29 @@ Reasoning 输出 <code>ConflictSet</code>，并按 requirement 的
 <code>conflict_policy</code> 得到 resolve/defer/human/reject；不得默认选第一项、最长几何或
 land-use fallback。
 
+### 9.4 DATA acquisition boundary
+
+Evidence 的 <code>EvidenceQueryPlan</code> 只描述业务语义：要证明什么、查询哪些 subject/scope、
+使用哪些 provider route、什么条件表示 requirement 已经充分。Evidence 不负责 endpoint、credential、
+lease、fencing、网络重试的物理执行。
+
+执行边界固定为：
+
+~~~text
+EvidenceRequirement
+  → EvidenceQueryPlan
+  → AcquisitionRequest
+  → DATA ProviderAcquisitionPlan / RemoteAcquisitionExecutionPlan
+  → AcquisitionReceipt
+  → ExternalObservationSnapshot
+  → Evidence Reasoning
+~~~
+
+<code>ProviderAcquisitionPlan</code> 是 DATA 的执行输入，包含 boundary/query digest、CRS、请求几何、
+provider transport 和 coverage contract；它不能回答 EvidenceRequirement 是否已经满足。
+Evidence 不能把自己的 <code>EvidenceQueryPlan</code> 写进 DATA catalog，DATA 也不能替 Evidence
+决定 provider route、分页完成条件或 sufficiency。
+
 ## 10. Coverage 与 Sufficiency
 
 Coverage 回答“查到了哪些要求”，Sufficiency 回答“对当前用途是否够用”。
@@ -344,6 +408,34 @@ lease_owner / lease_expiry
 
 相同 fingerprint 的并发请求只执行一次。新证据到达时 scheduler 找到依赖该 gap 的 row，
 只触发这些 row 的重新评价。
+
+## 11.1 Evidence ↔ World Model cognition round
+
+Evidence 与 WM 之间采用显式 round/epoch 协议，禁止无界的相互唤醒：
+
+~~~text
+CognitionRound N
+  → pin World Model vN
+  → evaluate affected EvidenceRequirements
+  → freeze EvidencePacket N
+  → produce CognitionProposalBatch N
+  → Cognition commit → World Model vN+1
+  → calculate affected dependency set
+  → wake only affected requirements
+  → no-change / no-new-evidence stop
+~~~
+
+每一轮必须绑定 <code>round</code>、<code>wm_epoch</code>、parent snapshot digest、requirement set digest
+和 proposal fingerprint。停止条件包括：
+
+- affected requirement 没有新的 output digest；
+- 没有新的 evidence observation；
+- proposal fingerprint 与上一轮相同；
+- 达到 <code>max_rounds</code>；
+- 需要 HumanDecision。
+
+WM vN 只读固定 parent；EvidencePacket N 在本轮冻结后不可因 vN+1 原地修改。新一轮只由
+Dependency Runtime 唤醒真正受影响的 requirements。
 
 ## 12. Evidence→Cognition proposal
 

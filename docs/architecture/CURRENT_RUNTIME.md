@@ -60,6 +60,11 @@ backend/app/spatial/model/workspace.py
 
 代码存在这些边界不等于所有格式、媒体和复杂来源都已完成验收。
 
+当前 DATA 运行路径只有一个层次：upload/admission 产生 session-owned generic
+<code>DataResourceCatalog</code>/<code>SessionDataSnapshot</code>，context bootstrap、World Model
+和 Evidence 均从这些 immutable products 重建。旧 Bundle loader、固定 boundary fallback 和
+legacy session KG bootstrap 已删除，不是 DATA MVP 的输入契约或 V2 fallback。
+
 ## 3. Cognition / World Model
 
 当前 V2 实现：

@@ -11,7 +11,7 @@
 | 文档治理 | <code>design/DOCUMENTATION_AUTHORITY.md</code> | owner、保留和冲突规则 |
 | 可执行设计标准 | <code>design/EXECUTABLE_DESIGN_STANDARD.md</code> | 16 个必答章节、成熟度和证据规则 |
 | 总体目标 | <code>design/00_SYSTEM_DESIGN.md</code> | 业务主链、阶段目标、总不变量 |
-| DATA | <code>design/DATA_EXECUTABLE_DESIGN.md</code> | capability、admission、resource/representation、DataGap |
+| DATA | <code>design/DATA_EXECUTABLE_DESIGN.md</code> | DATA MVP 真实输入闭包、当前实现地图、capability、admission、resource/representation、DataGap 与兼容边界 |
 | L1 | <code>design/01_CONTRACTS_AND_INVARIANTS.md</code> | observation、fact、mention、L1 product |
 | L2 | <code>design/02_PLANNING_COGNITION.md</code> | cognition strategy |
 | L3 | <code>design/03_PLANNING_INTENT.md</code> | claims、program、intent |

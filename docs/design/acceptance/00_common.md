@@ -47,10 +47,11 @@ L1、L1-GROUND 或 L2。任何把 MVP 写成下游模块实现的方案都超出
 
 - 10 个 <code>data/gis/jintian/current/*.geojson</code> 现状图层：行政界线、注记、村界、
   建设分区、生态保护、耕地保护、地质灾害点、历史保护、现状地类、道路；
-- <code>data/gis/jintian/terrain/dem.tif</code>，以及作为原始 source package 的
-  <code>data/gis/广东DEM30M.zip</code>；
+- 唯一 DEM 文件 <code>data/gis/jintian/terrain/dem.tif</code>；本轮不假设存在额外 source
+  package；
 - <code>docs/MinerU_markdown_泗水镇金田村现状报告_2056637054755487744.md</code>；
-- <code>output/map_validation/amap/</code>、<code>tianditu/</code>、<code>tencent/</code> 的统一
+- <code>data/cache/map_observations/amap/</code>、<code>tianditu/</code>、<code>tencent/</code> 的统一
+  缓存；旧 <code>output/map_validation/</code> 已物理删除；
   provider cache manifest、normalized rows、attempt/request lineage、raw response/cache refs；
   这些是独立缓存盘点输入，不是本轮 DATA current catalog 的文件。
 
