@@ -55,5 +55,5 @@ projection，使用 `EvidenceFacade.retrieve_dimension_context()`；该方法仍
 业务维度、当前状态和排除项，query planning、retriever 路由、来源访问与表格投影
 均留在 runtime 内部。Evidence 结果可以通过既有 CAS artifact runtime 持久化，
 `EvidencePacket` 中的 query fingerprint、来源、locator、coverage 和 unresolved
-状态必须可重载。旧的 provider-run 状态只允许通过显式 legacy adapter 读取，
-新采集事实统一使用 `ProviderAttemptStatus`，不得新写宽泛的 `failed` 或 `missing`。
+状态必须可重载。当前采集事实统一使用 `ProviderAttemptStatus`，不得新写宽泛的
+`failed` 或 `missing`；Evidence 不再读取或写入旧的 provider-run 状态。

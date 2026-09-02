@@ -13,6 +13,13 @@ from .requirement_contracts import (
     EvidenceRequirement,
     RequirementCoverage,
 )
+from .reasoning_contracts import (
+    CandidateEvidence,
+    ConflictSet,
+    EvidenceSufficiencyResult,
+    RequirementSufficiencyDecision,
+    SufficiencyCheck,
+)
 from .source_semantic_contracts import (
     SourceFeatureDescriptor,
     SourceFeatureSemanticDecision,
@@ -73,6 +80,11 @@ __all__ = [
     "EvidenceCoverage",
     "EvidenceRequirement",
     "RequirementCoverage",
+    "CandidateEvidence",
+    "ConflictSet",
+    "EvidenceSufficiencyResult",
+    "RequirementSufficiencyDecision",
+    "SufficiencyCheck",
     "SourceFeatureDescriptor",
     "SourceFeatureSemanticDecision",
     "SourceFeatureSemanticProposal",

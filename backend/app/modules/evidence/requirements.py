@@ -86,7 +86,7 @@ def compile_requirements(request: ExplorationRequest) -> tuple[EvidenceRequireme
 
     Source selection belongs to the evidence runtime.  This module only
     preserves producer-declared families and supplies neutral defaults when a
-    legacy request has not declared them.
+    request has not declared them.
     """
 
     if request.requirements:

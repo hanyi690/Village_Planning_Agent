@@ -1,6 +1,6 @@
 # 04 Evidence 可执行设计：采集、推理、缺口调度与认知提议
 
-> Status: TARGET with PARTIAL implementation; EV-01B acquisition spine implemented
+> Status: TARGET with PARTIAL implementation; EV-01B acquisition spine and EV-02 policy sufficiency implemented
 >
 > 本文件是 Evidence requirement、采集状态、融合、充分性、gap 调度和 Evidence→Cognition
 > 提议的设计权威。provider 审计报告只提供样本证据，不定义系统契约。
@@ -95,7 +95,7 @@ Requirement ≠ Query ≠ Observation ≠ Candidate ≠ Conclusion
 | retrieval outcome | 已区分 sufficient/partial/insufficient/human/failed | 保留，补齐 provider attempt 的细粒度状态 |
 | provider observation | 已有统一 attempt taxonomy、route/page/observation lineage；local DATA/WM/source-span 不生成伪 page | online provider-native acquisition、lease/retry 仍后续实现 |
 | gap ledger | 已有 immutable ledger 与 scheduler row | 补齐 lease、next-attempt、dedupe 与 dependency row |
-| sufficiency | 已有 coverage/sufficiency 实现 | 从通用文本覆盖提升为 requirement-specific policy |
+| sufficiency | EV-02 已按 requirement-specific policy 运行十项 gate，并持久化 candidate/conflict/gate artifact | 校准更多 provider/source 组合与下游回归 |
 | Cognition proposal | 本轮不触碰；Evidence 只停在 ObservationSnapshot/Receipt | 统一为 proposal artifact，永不由 Evidence 直接 commit |
 
 EV-01B/EV-01C 已落地的采集脊柱为：`EvidenceQueryPlanV1` 由 runtime 的
@@ -356,16 +356,34 @@ Evidence 不能把自己的 <code>EvidenceQueryPlan</code> 写进 DATA catalog�
 
 Coverage 回答“查到了哪些要求”，Sufficiency 回答“对当前用途是否够用”。
 
-计算顺序：
+计算顺序（EV-02）：
 
-1. requirement 是否有可定位 claim；
-2. source family 和 authority 是否满足；
-3. 独立来源数是否满足；
-4. valid time/max age 是否满足；
-5. geometry/legal authority 是否满足；
-6. conflict 是否按策略闭合；
-7. allowed inference 是否越界；
-8. pagination 和 provider attempt 是否足以支持 absence 结论。
+~~~text
+Observation
+  → CandidateEvidence
+  → ConflictSet
+  → Coverage
+  → Sufficiency
+~~~
+
+Sufficiency 必须按 resolved policy 对每个 required requirement 依次执行以下十个 gate：
+
+1. source family；
+2. source authority；
+3. independent sources；
+4. temporal fit（valid time/max age）；
+5. geometry/legal authority；
+6. conflict policy；
+7. allowed inference；
+8. acquisition completeness；
+9. provider origin completeness；
+10. absence policy。
+
+前九个 gate 通过后，最后才允许执行 absence policy。`SUCCESS_EMPTY` 只表示一次已完成的空返回，
+不能单独推出“不存在”。只有 policy 允许 absence，并且 required source authority、source/provider
+acquisition、pagination/provider exhaustion、independent-source rule 和 conflict closure 全部
+满足时，Sufficiency 才能产生 `conclusion_kind=absence`。所有 gate 结果、候选和冲突都必须以
+typed reasoning artifact 持久化；LLM 或自然语言理由不能覆盖 deterministic gate。
 
 终态：
 
@@ -514,6 +532,7 @@ provider policy version
 
 ~~~text
 contracts/evidence/requirement_contracts.py
+contracts/evidence/reasoning_contracts.py
 contracts/evidence/retrieval_contracts.py
 contracts/evidence/retrieval_artifact_contracts.py
 contracts/evidence/stage_contracts.py

@@ -179,28 +179,6 @@ def _claims(result: ExplorationResult) -> tuple[EvidenceClaim, ...]:
     return tuple(claims)
 
 
-def _normalized(value: str) -> str:
-    return "".join(str(value or "").casefold().split())
-
-
-def _text_matches(requirement: EvidenceRequirement, statement: str) -> bool:
-    statement = _normalized(statement)
-    required = _normalized(requirement.statement)
-    if not required:
-        return False
-    if required in statement:
-        return True
-    tokens = [token for token in requirement.statement.casefold().split() if len(token) > 1]
-    return bool(tokens) and all(token in statement.casefold() for token in tokens)
-
-
-def _packet_supports_requirement(requirement: EvidenceRequirement, result: ExplorationResult) -> bool:
-    packet = result.evidence_packet
-    if packet is None or not packet.candidate_refs:
-        return False
-    return _normalized(requirement.statement) in _normalized(packet.request)
-
-
 def _stop_reason(
     decision: SufficiencyDecision,
     query_trace: Iterable[Mapping[str, Any]],
@@ -212,7 +190,7 @@ def _stop_reason(
         return "budget_exhausted"
     if decision.status.value == "sufficient":
         return "source_exhausted" if unresolved else "sufficient"
-    if decision.status.value in {"ambiguous", "insufficient_geometry"}:
+    if decision.status.value == "human_required":
         return "human_required"
     return "source_exhausted"
 
@@ -231,36 +209,71 @@ def build_evidence_coverage(
 
     compiled = requirements or compile_requirements(request)
     claims = _claims(result)
-    missing = {_normalized(item) for item in decision.missing_facts}
-    ambiguous = {_normalized(item) for item in decision.ambiguous_facts}
+    policy_result = decision.policy_result
+    policy_decisions = {
+        item.requirement_ref: item
+        for item in (policy_result.requirement_decisions if policy_result else ())
+    }
     requirement_coverage: list[RequirementCoverage] = []
     for requirement in compiled:
-        packet_support = _packet_supports_requirement(requirement, result)
-        matched = [
+        policy_decision = policy_decisions.get(requirement.requirement_ref)
+        candidate_rows = tuple(
+            candidate
+            for candidate in (policy_result.candidates if policy_result else ())
+            if candidate.requirement_ref == requirement.requirement_ref
+            and (
+                policy_decision is None
+                or candidate.candidate_ref in policy_decision.candidate_refs
+            )
+        )
+        candidate_claim_refs = tuple(
+            dict.fromkeys(
+                claim_ref
+                for candidate in candidate_rows
+                for claim_ref in candidate.claim_refs
+            )
+        )
+        matched = tuple(
             claim
             for claim in claims
-            if _text_matches(requirement, claim.statement)
-        ]
-        if packet_support:
-            matched.extend(
-                claim
-                for claim in claims
-                if claim.metadata.get("evidence_packet")
-                and claim not in matched
+            if claim.claim_id in candidate_claim_refs
+        )
+        claim_refs = tuple(dict.fromkeys((*candidate_claim_refs, *(claim.claim_id for claim in matched))))
+        families = tuple(dict.fromkeys(
+            family
+            for candidate in candidate_rows
+            for family in candidate.source_families
+        )) or tuple(dict.fromkeys(
+            family for claim in matched for family in claim.source_families
+        ))
+        locator_complete = (
+            bool(candidate_rows)
+            and all(candidate.locator_refs for candidate in candidate_rows)
+        ) or (bool(matched) and all(claim.locator_complete for claim in matched))
+        if policy_decision and policy_decision.status == "sufficient":
+            status = "supported"
+            reason = (
+                "authorized absence conclusion"
+                if policy_decision.conclusion_kind == "absence"
+                else "all requirement-specific policy gates passed"
             )
-        claim_refs = tuple(claim.claim_id for claim in matched)
-        families = tuple(dict.fromkeys(family for claim in matched for family in claim.source_families))
-        locator_complete = bool(matched) and all(claim.locator_complete for claim in matched)
-        required_key = _normalized(requirement.statement)
-        if not result.evidence_bundle.sources:
+            if policy_decision.conclusion_kind == "absence":
+                locator_complete = True
+        elif not result.evidence_bundle.sources:
             status = "unavailable"
             reason = "no retriever returned an available source"
-        elif required_key in ambiguous:
+        elif policy_decision and policy_decision.status == "human_required":
             status = "ambiguous"
-            reason = "multiple candidate claims require disambiguation"
-        elif required_key in missing:
+            reason = policy_decision.reason
+        elif policy_decision and policy_decision.status == "contradicted":
+            status = "contradicted"
+            reason = policy_decision.reason
+        elif policy_decision and policy_decision.status == "not_available":
+            status = "unavailable"
+            reason = policy_decision.reason
+        elif policy_decision and policy_decision.status != "sufficient":
             status = "unresolved"
-            reason = "required claim is not covered by retrieved evidence"
+            reason = policy_decision.reason
         elif matched and all(claim.status == "contradicted" for claim in matched):
             status = "contradicted"
             reason = "all matched claims contradict the requirement"
@@ -278,6 +291,12 @@ def build_evidence_coverage(
                 source_families_covered=families,
                 locators_complete=locator_complete,
                 unresolved_reason=reason if status != "supported" else "",
+                policy_ref=policy_decision.policy_ref if policy_decision else requirement.policy_ref,
+                policy_version=policy_decision.policy_version if policy_decision else "",
+                candidate_refs=policy_decision.candidate_refs if policy_decision else (),
+                sufficiency_status=policy_decision.status if policy_decision else None,
+                sufficiency_checks=policy_decision.checks if policy_decision else (),
+                conclusion_kind=policy_decision.conclusion_kind if policy_decision else "none",
             )
         )
 
@@ -318,6 +337,15 @@ def build_evidence_coverage(
             unresolved=bool(unresolved),
         ),
         query_trace=query_trace,
+        candidate_evidence=policy_result.candidates if policy_result else (),
+        conflict_sets=policy_result.conflicts if policy_result else (),
+        conflict_refs=tuple(
+            dict.fromkeys(
+                item.conflict_ref
+                for item in (policy_result.conflicts if policy_result else ())
+            )
+        ),
+        sufficiency_decision=policy_result,
     )
 
 

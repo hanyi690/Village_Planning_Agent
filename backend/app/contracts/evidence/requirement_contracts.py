@@ -7,6 +7,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.contracts.artifacts.contract_meta import ContractMeta
+from app.contracts.evidence.reasoning_contracts import (
+    CandidateEvidence,
+    ConflictSet,
+    EvidenceSufficiencyResult,
+    SufficiencyCheck,
+    SufficiencyTerminalStatus,
+)
 
 
 RequirementKind = Literal[
@@ -147,6 +154,12 @@ class RequirementCoverage(BaseModel):
     locators_complete: bool = False
     conflict_refs: tuple[str, ...] = Field(default_factory=tuple)
     unresolved_reason: str = ""
+    policy_ref: str = ""
+    policy_version: str = ""
+    candidate_refs: tuple[str, ...] = Field(default_factory=tuple)
+    sufficiency_status: SufficiencyTerminalStatus | None = None
+    sufficiency_checks: tuple[SufficiencyCheck, ...] = Field(default_factory=tuple)
+    conclusion_kind: Literal["presence", "absence", "none"] = "none"
 
     @field_validator("requirement_id")
     @classmethod
@@ -173,6 +186,9 @@ class EvidenceCoverage(ContractMeta):
     conflict_refs: tuple[str, ...] = Field(default_factory=tuple)
     stop_reason: CoverageStopReason
     query_trace: tuple[dict[str, Any], ...] = Field(default_factory=tuple)
+    candidate_evidence: tuple[CandidateEvidence, ...] = Field(default_factory=tuple)
+    conflict_sets: tuple[ConflictSet, ...] = Field(default_factory=tuple)
+    sufficiency_decision: EvidenceSufficiencyResult | None = None
 
     @field_validator("requirement_set_fingerprint")
     @classmethod

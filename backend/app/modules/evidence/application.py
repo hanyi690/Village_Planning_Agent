@@ -364,7 +364,7 @@ class EvidenceContext(BaseModel):
             )
             evidence_gate_verified = True
         external_snapshot = None
-        replay_status = "legacy_checkpoint"
+        replay_status = "unbound_checkpoint"
         if evidence_snapshot is not None and (
             external_observations_ref is not None and gap_ledger_ref is not None
         ):
@@ -1015,6 +1015,22 @@ def _coverage_and_outcome(
     )
     result = result.model_copy(update={"evidence_packet": packet})
     decision = evaluate_sufficiency(request, result)
+    packet_status = (
+        "sufficient"
+        if decision.status.value == "sufficient"
+        else "partial"
+        if decision.candidate_evidence
+        else "insufficient"
+    )
+    packet = packet.model_copy(update={
+        "sufficiency": packet_status,
+        "ambiguity_status": (
+            "multiple" if decision.ambiguous_facts
+            else "resolved" if decision.status.value == "sufficient"
+            else "unresolved"
+        ),
+    })
+    result = result.model_copy(update={"evidence_packet": packet})
     coverage = build_evidence_coverage(
         request,
         result,
@@ -1039,6 +1055,7 @@ def _coverage_and_outcome(
     )
     sufficient = (
         not failed
+        and decision.status.value == "sufficient"
         and coverage.sufficient
         and packet.sufficiency == "sufficient"
         and not result.evidence_bundle.unresolved

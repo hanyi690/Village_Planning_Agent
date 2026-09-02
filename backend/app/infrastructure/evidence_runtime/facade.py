@@ -906,7 +906,7 @@ async def retrieve_evidence(
     result.evidence_bundle.facts = unique_facts
     result.evidence_bundle.sources = unique_sources
     unresolved = list(decision.missing_facts or decision.ambiguous_facts)
-    if decision.status.value in {"source_unavailable", "insufficient_geometry"} and not unresolved:
+    if decision.status.value in {"not_available", "insufficient"} and not unresolved:
         unresolved = [decision.reason]
     external_failures = []
     for trace in external_trace:
@@ -933,7 +933,7 @@ async def retrieve_evidence(
     decision_status = str(decision.status.value)
     packet_status = {
         "sufficient": "resolved",
-        "ambiguous": "multiple",
+        "human_required": "multiple",
     }.get(decision_status, "unresolved")
     sufficiency = (
         "sufficient"
@@ -1071,7 +1071,7 @@ async def retrieve_evidence(
         packet_trace = [
             {
                 **trace,
-                "status": "insufficient_geometry",
+                "status": final_status,
                 "reason": reason,
             }
             if isinstance(trace, dict) and trace.get("step") == "sufficiency"
@@ -1097,7 +1097,6 @@ async def retrieve_evidence(
     result = result.model_copy(update={
         "evidence_bundle": apply_fact_quality(result.evidence_bundle),
     })
-    coverage_decision = evaluate_sufficiency(request, result)
     (
         provider_attempts,
         page_records,
@@ -1109,6 +1108,27 @@ async def retrieve_evidence(
         "page_records": page_records,
         "observation_snapshot": observation_snapshot,
         "acquisition_receipt": acquisition_receipt,
+    })
+    coverage_decision = evaluate_sufficiency(request, result)
+    packet = result.evidence_packet
+    if packet is not None:
+        result = result.model_copy(update={
+            "evidence_packet": packet.model_copy(update={
+                "sufficiency": (
+                    "sufficient"
+                    if coverage_decision.status.value == "sufficient"
+                    else "partial"
+                    if coverage_decision.candidate_evidence
+                    else "insufficient"
+                ),
+                "ambiguity_status": (
+                    "multiple" if coverage_decision.ambiguous_facts
+                    else "resolved" if coverage_decision.status.value == "sufficient"
+                    else "unresolved"
+                ),
+            }),
+        })
+    result = result.model_copy(update={
         "coverage": build_evidence_coverage(
             request,
             result,
