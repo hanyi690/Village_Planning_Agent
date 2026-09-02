@@ -77,6 +77,8 @@ class EvidenceRetrievalReceipt(BaseModel):
     retrieval_ref: ArtifactRef
     fingerprint: str
     dedup_hit: bool = False
+    query_plan_ref: str = ""
+    acquisition_receipt_ref: str = ""
 
     @field_validator("fingerprint")
     @classmethod

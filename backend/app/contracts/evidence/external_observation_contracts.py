@@ -179,7 +179,6 @@ class ExternalObservationSnapshot(BaseModel):
     scope_bbox_wgs84: tuple[float, float, float, float] | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     observations: list[ExternalObservation] = Field(default_factory=list)
-    provider_runs: list[dict[str, Any]] = Field(default_factory=list)
     provider_attempts: tuple[ProviderAttempt, ...] = ()
     excluded_counts: dict[str, int] = Field(default_factory=dict)
     complete: bool = False
@@ -209,7 +208,6 @@ class ExternalObservationSnapshot(BaseModel):
             administrative_scope=self.administrative_scope,
             scope_bbox_wgs84=self.scope_bbox_wgs84,
             observations=self.observations,
-            provider_runs=self.provider_runs,
             provider_attempts=self.provider_attempts,
             excluded_counts=self.excluded_counts,
             complete=self.complete,
@@ -270,7 +268,6 @@ def canonical_external_observation_payload(
     administrative_scope: Mapping[str, Any],
     scope_bbox_wgs84: Any,
     observations: Iterable[Any],
-    provider_runs: Iterable[Mapping[str, Any]],
     excluded_counts: Mapping[str, Any],
     complete: bool,
     provider_attempts: Iterable[Any] = (),
@@ -281,18 +278,11 @@ def canonical_external_observation_payload(
     observation_values.sort(
         key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
     )
-    run_values = [_canonical_semantic_value(item) for item in provider_runs]
-    run_values.sort(key=lambda item: (
-        str(item.get("provider", "")),
-        str(item.get("stage", "")),
-        str(item.get("run_id", "")),
-    ))
     return {
         "project_name": project_name,
         "administrative_scope": _canonical_semantic_value(administrative_scope),
         "scope_bbox_wgs84": _canonical_semantic_value(scope_bbox_wgs84),
         "observations": observation_values,
-        "provider_runs": run_values,
         "provider_attempts": [
             _canonical_semantic_value(item)
             for item in sorted(

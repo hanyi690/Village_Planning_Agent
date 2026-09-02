@@ -12,6 +12,12 @@ from pydantic import BaseModel, Field, model_validator
 from app.contracts.artifacts.contract_meta import ContractMeta
 from app.contracts.artifacts.provenance import Provenance
 from app.contracts.evidence.evidence_packet_contracts import EvidencePacket
+from app.contracts.evidence.acquisition_contracts import (
+    EvidenceAcquisitionReceipt,
+    EvidenceObservationSnapshot,
+    ProviderPageRecord,
+)
+from app.contracts.evidence.provider_attempt import ProviderAttempt
 from app.contracts.evidence.requirement_contracts import EvidenceCoverage, EvidenceRequirement
 from app.contracts.evidence.retrieval_contracts import (
     EvidenceRetrievalOutcome,
@@ -181,6 +187,10 @@ class ExplorationResult(BaseModel):
     coverage: EvidenceCoverage | None = None
     outcome: EvidenceRetrievalOutcome | None = None
     receipt: EvidenceRetrievalReceipt | None = None
+    acquisition_receipt: EvidenceAcquisitionReceipt | None = None
+    observation_snapshot: EvidenceObservationSnapshot | None = None
+    provider_attempts: tuple[ProviderAttempt, ...] = ()
+    page_records: tuple[ProviderPageRecord, ...] = ()
 
 
 __all__ = [

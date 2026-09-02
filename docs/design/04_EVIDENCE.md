@@ -1,6 +1,6 @@
 # 04 Evidence 可执行设计：采集、推理、缺口调度与认知提议
 
-> Status: TARGET with PARTIAL implementation
+> Status: TARGET with PARTIAL implementation; EV-01B acquisition spine implemented
 >
 > 本文件是 Evidence requirement、采集状态、融合、充分性、gap 调度和 Evidence→Cognition
 > 提议的设计权威。provider 审计报告只提供样本证据，不定义系统契约。
@@ -90,13 +90,20 @@ Requirement ≠ Query ≠ Observation ≠ Candidate ≠ Conclusion
 
 | 能力 | 当前代码事实 | 设计终态 |
 |---|---|---|
-| requirement | 已有 typed requirement、coverage、gap metadata | 增加 authority、独立来源、时效、法定时间和冲突策略 |
+| requirement | typed requirement 已绑定 purpose、policy_ref、subject/valid-time 基础字段；authority/时效策略由 policy registry 提供 | 继续补齐 requirement-specific coverage/conflict 执行 |
 | retrieval authority | 已冻结 session/run/branch/context/WM/cache refs | 保留，并把 query plan 与分页清单纳入 receipt |
 | retrieval outcome | 已区分 sufficient/partial/insufficient/human/failed | 保留，补齐 provider attempt 的细粒度状态 |
-| provider observation | 已区分 nonempty/empty/missing/failed/not_attempted | 迁移到统一 provider attempt taxonomy，保留兼容映射 |
+| provider observation | 已有统一 attempt taxonomy、route/page/observation lineage；local DATA/WM/source-span 不生成伪 page | online provider-native acquisition、lease/retry 仍后续实现 |
 | gap ledger | 已有 immutable ledger 与 scheduler row | 补齐 lease、next-attempt、dedupe 与 dependency row |
 | sufficiency | 已有 coverage/sufficiency 实现 | 从通用文本覆盖提升为 requirement-specific policy |
-| Cognition proposal | 已有外源 observation adapter 和部分 identity support | 统一为 proposal artifact，永不由 Evidence 直接 commit |
+| Cognition proposal | 本轮不触碰；Evidence 只停在 ObservationSnapshot/Receipt | 统一为 proposal artifact，永不由 Evidence 直接 commit |
+
+EV-01B/EV-01C 已落地的采集脊柱为：`EvidenceQueryPlanV1` 由 runtime 的
+`AcquisitionRouteExecutor` 逐 route 产出 terminal attempt；Application 只校验和汇总，
+不得从 query trace 反推 attempt。Receipt 按 `required_for_acquisition` route 完成度判定，
+  `SUCCESS_EMPTY` 只表示有界查询完成为空，不产生 absence conclusion。Frozen cache 使用
+  独立的 `frozen_cache` attempt；cache read completeness 与 origin provider completeness
+  分开记录，origin provider 的 page/status 只作为 provenance，不计入本次分页。
 
 ## 4. EvidenceRequirement
 
@@ -210,8 +217,8 @@ NOT_ATTEMPTED
 - <code>MISSING_CAPABILITY</code> 表示 provider 不支持该查询，不是现实对象缺失；
 - 只有 query plan 声明的完整性条件满足时，空结果才可参与 unavailable 判断。
 
-当前 <code>ExternalObservationStatus</code> 的 <code>failed</code> 是兼容状态；新写入应保留
-retryable/permanent/quota 的 reason code，直至 contract 完成枚举迁移。
+当前 <code>ExternalObservationStatus</code> 仅用于冻结外部 observation 的原始记录；采集运行状态
+统一使用 <code>ProviderAttemptStatus</code>，不得再写入未分型的 <code>failed</code> 状态。
 
 ## 7. Query plan
 
@@ -333,11 +340,10 @@ lease、fencing、网络重试的物理执行。
 
 ~~~text
 EvidenceRequirement
-  → EvidenceQueryPlan
-  → AcquisitionRequest
-  → DATA ProviderAcquisitionPlan / RemoteAcquisitionExecutionPlan
-  → AcquisitionReceipt
-  → ExternalObservationSnapshot
+  → EvidenceQueryPlanV1
+  → AcquisitionRouteExecutor
+  → AcquisitionRouteResult
+  → EvidenceAcquisitionReceipt / EvidenceObservationSnapshot
   → Evidence Reasoning
 ~~~
 

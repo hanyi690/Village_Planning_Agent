@@ -1,6 +1,12 @@
 from pathlib import Path
 
-from app.contracts.evidence.external_observation_contracts import ExternalObservation
+import pytest
+
+from app.contracts.evidence.external_observation_contracts import (
+    ExternalObservation,
+    ExternalObservationSnapshot,
+)
+from app.contracts.evidence.provider_attempt import ProviderAttempt
 from app.data.catalog.external_observation_cache import (
     cluster_external_observations,
     load_cached_external_observation_snapshot,
@@ -56,6 +62,17 @@ def test_cache_loader_normalizes_provider_coordinates_and_preserves_aliases(tmp_
     assert "村委会" in amap.aliases
     assert amap.raw_response_ref == ""
     assert snapshot.digest.startswith("sha256:")
+    assert snapshot.provider_attempts
+    assert all(isinstance(item, ProviderAttempt) for item in snapshot.provider_attempts)
+
+
+def test_external_snapshot_rejects_removed_provider_run_collection():
+    assert "provider_runs" not in ExternalObservationSnapshot.model_fields
+    with pytest.raises(ValueError, match="provider_runs"):
+        ExternalObservationSnapshot.model_validate({
+            "snapshot_id": "invalid-provider-runs",
+            "provider_runs": [],
+        })
 
 
 def test_same_coordinate_observations_share_cluster_without_collapsing_rows():

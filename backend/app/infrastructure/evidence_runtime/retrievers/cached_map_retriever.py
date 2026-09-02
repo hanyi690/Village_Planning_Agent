@@ -94,6 +94,15 @@ def _fact_and_source(
     snapshot: ExternalObservationSnapshot,
 ) -> tuple[EvidenceFact, EvidenceSource]:
     ref = _canonical_observation_ref(observation.observation_id)
+    origin_attempt = next(
+        (
+            attempt
+            for attempt in snapshot.provider_attempts
+            if attempt.provider == observation.provider
+            and attempt.stage == observation.stage
+        ),
+        None,
+    )
     coordinate_supported = (
         observation.location_wgs84 is not None
         and observation.coordinate_trust_status in {"verified_direct", "verified_transformed"}
@@ -136,6 +145,26 @@ def _fact_and_source(
         "spatial_evidence_role": observation.spatial_evidence_role,
         "geometry_semantics": observation.geometry_semantics,
         "cluster_id": observation.cluster_id,
+        "origin_provider": observation.provider,
+        "origin_record_ref": observation.source_record_ref or observation.observation_id,
+        "origin_attempt_ref": (
+            origin_attempt.attempt_ref if origin_attempt is not None else ""
+        ),
+        "origin_status": (
+            origin_attempt.status
+            if origin_attempt is not None
+            else observation.status.upper()
+        ),
+        "origin_query_fingerprint": (
+            origin_attempt.query_fingerprint if origin_attempt is not None else ""
+        ),
+        "origin_page_refs": _json(
+            origin_attempt.page_record_refs if origin_attempt is not None else ()
+        ),
+        "cache_snapshot_ref": snapshot.snapshot_id,
+        "cache_digest": snapshot.digest,
+        "raw_payload_ref": observation.raw_response_ref,
+        "locator_crs": observation.coordinate_target_crs,
     }
     if observation.query_name:
         fields["query_name"] = observation.query_name

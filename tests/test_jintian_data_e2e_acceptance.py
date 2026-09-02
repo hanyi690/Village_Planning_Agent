@@ -149,7 +149,7 @@ async def test_real_jintian_upload_to_evidence_replay_and_read_only_scope(
     )
     context.external_observation_snapshot = external
     facts, sources, trace = retrieve_from_cached_map(context, limit=8)
-    assert external.provider_runs
+    assert external.provider_attempts
     assert trace["cache_only"] is True
     assert len(facts) == len(sources)
     assert trace["status"] in {"returned", "empty"}

@@ -13,6 +13,11 @@ from app.contracts.evidence.evidence_contracts import (
     SpatialCognitionEvidence,
 )
 from app.contracts.evidence.evidence_packet_contracts import EvidencePacket
+from app.contracts.evidence.acquisition_contracts import (
+    EvidenceAcquisitionReceipt,
+    EvidenceObservationSnapshot,
+    ProviderPageRecord,
+)
 from app.contracts.evidence.requirement_contracts import EvidenceCoverage
 from app.contracts.evidence.retrieval_contracts import (
     EvidenceRetrievalAuthority,
@@ -40,6 +45,10 @@ class EvidenceRetrievalArtifact(ContractMeta):
     outcome: EvidenceRetrievalOutcome
     authority: EvidenceRetrievalAuthority
     bootstrap_refs: EvidenceRetrievalBootstrapRefs
+    query_plan_ref: str = ""
+    observation_snapshot: EvidenceObservationSnapshot | None = None
+    acquisition_receipt: EvidenceAcquisitionReceipt | None = None
+    page_records: tuple[ProviderPageRecord, ...] = ()
     spatial_cognition: SpatialCognitionEvidence | None = None
     provider_attempts: tuple[ProviderAttempt, ...] = ()
     confidence_components: EvidenceConfidence = Field(

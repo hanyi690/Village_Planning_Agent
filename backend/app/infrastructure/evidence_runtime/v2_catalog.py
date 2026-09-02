@@ -16,6 +16,7 @@ from app.contracts.evidence.evidence_contracts import (
     EvidenceBundle,
     EvidenceFact,
     EvidenceSource,
+    ExplorationRequest,
     ExplorationResult,
     SpatialCognitionEvidence,
 )
@@ -28,6 +29,8 @@ from app.contracts.evidence.requirement_contracts import EvidenceRequirement
 from app.contracts.evidence.external_observation_contracts import (
     is_wgs84_equivalent_crs,
 )
+from app.infrastructure.evidence_runtime.acquisition_executor import AcquisitionRouteExecutor
+from app.infrastructure.evidence_runtime.query_planner import build_query_plan
 
 
 def _text(value: Any) -> str:
@@ -716,6 +719,7 @@ def retrieve_catalog_evidence(
     *,
     candidate_offset: int = 0,
     candidate_limit: int = 12,
+    query_plan: Any | None = None,
 ) -> ExplorationResult:
     catalog = getattr(context, "data_catalog", None) or getattr(
         context, "data_resource_catalog", None
@@ -727,6 +731,14 @@ def retrieve_catalog_evidence(
         assert_current_world_catalog(snapshot)
     features = list(getattr(snapshot, "features", ()) or ())
     requirements = tuple(requirements)
+    if query_plan is None:
+        query_plan = build_query_plan(ExplorationRequest(
+            run_id="evidence-v2",
+            request_type="spatial_lookup",
+            query="；".join(item.statement for item in requirements),
+            requirements=list(requirements),
+            entity_scope=sorted({scope for item in requirements for scope in item.scope}),
+        ))
     local_requirements = tuple(
         item for item in requirements if _allows_source(item, _LOCAL_SOURCE_FAMILIES)
     )
@@ -781,22 +793,36 @@ def retrieve_catalog_evidence(
     external_facts: list[EvidenceFact] = []
     external_sources: list[EvidenceSource] = []
     external_trace: dict[str, Any] = {}
+    frozen_cache_result = None
     if external_requirements:
         try:
-            from app.infrastructure.evidence_runtime.retrievers.cached_map_retriever import (
-                retrieve_from_cached_map,
+            from app.infrastructure.evidence_runtime.frozen_cache_adapter import (
+                read_frozen_external_cache,
             )
 
-            external_facts, external_sources, external_trace = retrieve_from_cached_map(
-                context,
-                query=_external_query(external_requirements),
-                entity_scope=sorted({
-                    scope
-                    for item in external_requirements
-                    for scope in item.scope
-                }),
-                limit=min(64, max(8, int(candidate_limit) * 4)),
+            external_route = next(
+                (
+                    route for route in query_plan.provider_routes
+                    if route.retriever == "external"
+                ),
+                None,
             )
+            if external_route is not None:
+                frozen_cache_result = read_frozen_external_cache(
+                    context,
+                    query_plan,
+                    external_route,
+                    query=_external_query(external_requirements),
+                    entity_scope=sorted({
+                        scope
+                        for item in external_requirements
+                        for scope in item.scope
+                    }),
+                    limit=min(64, max(8, int(candidate_limit) * 4)),
+                )
+                external_facts = list(frozen_cache_result.facts)
+                external_sources = list(frozen_cache_result.sources)
+                external_trace = dict(frozen_cache_result.trace or {})
         except Exception as exc:
             external_facts, external_sources = [], []
             external_trace = {
@@ -1107,10 +1133,93 @@ def retrieve_catalog_evidence(
             else [item.requirement_id for item in requirements]
         ),
     )
+    executor = AcquisitionRouteExecutor(query_plan)
+    route_results = []
+    world_facts: list[EvidenceFact] = []
+    world_sources: list[EvidenceSource] = []
+    for feature in page:
+        source_key = (
+            _text(getattr(feature, "dataset_ref", "")),
+            _text(getattr(feature, "source_feature_ref", "")),
+        )
+        for row in kg_entities_by_feature.get(source_key, ()):
+            entity_ref = _text(row.get("entity_ref"))
+            if not entity_ref:
+                continue
+            world_ref = f"world:{entity_ref}"
+            world_facts.append(EvidenceFact(
+                statement=(
+                    f"WorldEntity {entity_ref} represents "
+                    f"{_text(row.get('canonical_name')) or source_key[1]}"
+                ),
+                source_refs=[world_ref],
+                fact_type="kg_world_entity",
+                fields={
+                    "entity_ref": entity_ref,
+                    "canonical_name": _text(row.get("canonical_name")),
+                    "source_feature_ref": source_key[1],
+                },
+                source_kind="kg",
+                evidence_role="entity_identity",
+            ))
+            world_sources.append(EvidenceSource(
+                source_type="kg",
+                reference=world_ref,
+                authority="semantic",
+                evidence_role="entity_identity",
+            ))
+            for representation in representations_by_feature.get(source_key, ()) or ():
+                representation_ref = _text(getattr(representation, "representation_ref", ""))
+                if not representation_ref:
+                    continue
+                world_facts.append(EvidenceFact(
+                    statement=f"WorldEntity {entity_ref} is linked to DATA representation",
+                    source_refs=[world_ref],
+                    fact_type="world_representation",
+                    fields={
+                        "entity_ref": entity_ref,
+                        "representation_ref": representation_ref,
+                        "resource_ref": f"resource:{source_key[0]}:{source_key[1]}",
+                    },
+                    source_kind="kg",
+                    evidence_role="entity_representation",
+                ))
+    for route in query_plan.provider_routes:
+        if route.retriever == "data_catalog":
+            route_results.append(executor.complete_route(
+                route,
+                status="SUCCESS_NONEMPTY" if facts else "SUCCESS_EMPTY",
+                facts=facts,
+                sources=[
+                    source for source in bundle.sources
+                    if source.source_type == "gis_layer"
+                ],
+                candidate_refs=candidate_refs,
+            ))
+        elif route.retriever == "kg":
+            route_results.append(executor.complete_route(
+                route,
+                status="SUCCESS_NONEMPTY" if world_facts else "SUCCESS_EMPTY",
+                facts=world_facts,
+                sources=world_sources,
+            ))
+        elif route.retriever == "external" and frozen_cache_result is not None:
+            route_results.append(frozen_cache_result.route_result)
+        else:
+            route_results.append(executor.complete_route(
+                route,
+                status="NOT_ATTEMPTED",
+                reason_code="not_executed_by_v2_catalog",
+            ))
+    provider_attempts, page_records, observation_snapshot, acquisition_receipt = executor.finalize(route_results)
     return ExplorationResult(
         evidence_bundle=bundle,
         evidence_packet=packet,
         spatial_cognition=SpatialCognitionEvidence(kg_confidence=0.8 if facts else 0.0),
+        provider_attempts=provider_attempts,
+        page_records=page_records,
+        observation_snapshot=observation_snapshot,
+        acquisition_receipt=acquisition_receipt,
     )
 
 

@@ -37,6 +37,7 @@ class EvidenceRequirement(BaseModel):
     """One auditable question that must be supported before a decision."""
 
     requirement_id: str
+    requirement_ref: str = ""
     schema_version: str = "1.0"
     request_id: str = ""
     requesting_artifact_ref: str = ""
@@ -44,10 +45,13 @@ class EvidenceRequirement(BaseModel):
     producer_stage: str = "EXPLORE"
     statement: str
     kind: RequirementKind = "claim"
+    subject_refs: tuple[str, ...] = Field(default_factory=tuple)
+    purpose: str = ""
     required: bool = True
     source_families: tuple[str, ...] = Field(default_factory=tuple)
     scope: tuple[str, ...] = Field(default_factory=tuple)
     temporal_scope: str = ""
+    valid_time: str = ""
     spatial_granularity: str = "none"
     allowed_inference: Literal["exact", "derived", "inferred", "text_only"] = "exact"
     evidence_role: str = "planning_background"
@@ -59,6 +63,8 @@ class EvidenceRequirement(BaseModel):
     earliest_resolution_stage: str = ""
     deferred_until: str = ""
     retrieval_capability: str = ""
+    policy_ref: str = "source_semantic_support.v1"
+    contract_version: Literal["1.0"] = "1.0"
     gap_status: Literal[
         "open",
         "ready_for_retrieval",
@@ -77,6 +83,28 @@ class EvidenceRequirement(BaseModel):
         if not normalized:
             raise ValueError("evidence requirement identity and statement are required")
         return normalized
+
+    @model_validator(mode="after")
+    def _normalize_identity_and_policy(self) -> "EvidenceRequirement":
+        if not self.requirement_ref:
+            object.__setattr__(self, "requirement_ref", self.requirement_id)
+        if self.requirement_ref != self.requirement_id:
+            raise ValueError("requirement_ref must match requirement_id")
+        if not self.purpose:
+            object.__setattr__(self, "purpose", self.evidence_role)
+        if not self.subject_refs and self.scope:
+            object.__setattr__(self, "subject_refs", self.scope)
+        if not self.valid_time and self.temporal_scope:
+            object.__setattr__(self, "valid_time", self.temporal_scope)
+        if self.policy_ref == "source_semantic_support.v1":
+            default_policy = {
+                "spatial": "location_identity_support.v1",
+                "identity": "facility_existence.v1",
+                "constraint": "legal_extent_support.v1",
+            }.get(self.kind)
+            if default_policy:
+                object.__setattr__(self, "policy_ref", default_policy)
+        return self
 
 
 class EvidenceClaim(BaseModel):

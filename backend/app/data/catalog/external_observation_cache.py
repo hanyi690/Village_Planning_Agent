@@ -25,6 +25,7 @@ from app.contracts.evidence.external_observation_contracts import (
     has_explicit_wgs84_direct_contract,
     is_wgs84_equivalent_crs,
 )
+from app.contracts.evidence.provider_attempt import ProviderAttempt
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_CACHE_ROOT = PROJECT_ROOT / "data" / "cache" / "map_observations"
@@ -486,6 +487,63 @@ def _int_value(value: Any) -> int:
         return 0
 
 
+def _cache_attempt_status(status: str) -> str:
+    return {
+        "success_nonempty": "SUCCESS_NONEMPTY",
+        "success_empty": "SUCCESS_EMPTY",
+        "partial": "PARTIAL",
+        "missing_capability": "MISSING_CAPABILITY",
+        "not_attempted": "NOT_ATTEMPTED",
+        "failed": "PARTIAL",
+        "missing": "PARTIAL",
+    }.get(status, "PARTIAL")
+
+
+def _provider_attempt(
+    provider: str,
+    stage: str,
+    run_id: str,
+    status: str,
+    *,
+    manifest: Mapping[str, Any],
+    normalized_count: int,
+    status_counts: Mapping[str, int],
+) -> ProviderAttempt:
+    query_fingerprint = str(manifest.get("query_fingerprint") or "").strip()
+    if not query_fingerprint:
+        query_fingerprint = hashlib.sha256(
+            json.dumps(
+                {"provider": provider, "stage": stage, "run_id": run_id},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    return ProviderAttempt(
+        attempt_ref=f"external-cache-attempt:{provider}:{stage}:{run_id}",
+        attempt_kind="external_provider",
+        provider=provider,
+        provider_name=provider,
+        stage=stage,
+        query_fingerprint=query_fingerprint,
+        status=_cache_attempt_status(status),
+        reason_code=str(manifest.get("completion_reason") or status),
+        item_count=normalized_count,
+        pages_completed=_int_value(manifest.get("pages_completed")),
+        response_digest=str(manifest.get("response_digest") or ""),
+        raw_response_ref=str(manifest.get("raw_response_ref") or ""),
+        started_at=_parse_datetime(manifest.get("started_at")),
+        finished_at=_parse_datetime(
+            manifest.get("finished_at") or manifest.get("completed_at")
+        ),
+        metadata={
+            "status_counts": dict(status_counts),
+            "normalized_record_count": normalized_count,
+            "cache_only": True,
+            "cache_reused": True,
+        },
+    )
+
+
 def _classify_run_status(
     manifest: dict[str, Any],
     *,
@@ -494,11 +552,9 @@ def _classify_run_status(
 ) -> str:
     """Classify a cached run without inventing observations.
 
-    ``status`` on ``provider_runs`` is intentionally a small, stable state
-    machine.  A mixed run (for example Tencent's 66 successful requests,
-    141 empty responses and 77 quota failures) is ``partial`` even when a
-    manifest exists.  The raw lifecycle label and counters remain attached to
-    the provider-run row for audit and later offline normalization.
+    A mixed run (for example Tencent's 66 successful requests, 141 empty
+    responses and 77 quota failures) is ``partial`` even when a manifest
+    exists. The normalized status is emitted as a typed ProviderAttempt.
     """
 
     declared = _manifest_declared_status(manifest)
@@ -1078,21 +1134,24 @@ def load_cached_external_observation_snapshot(
         resolved_admin_scope["village"] = str(project_name).strip()
     allowed_scopes = {str(value) for value in scopes}
     observations: list[ExternalObservation] = []
-    provider_runs: list[dict[str, Any]] = []
+    provider_attempts: list[ProviderAttempt] = []
     excluded_counts: dict[str, int] = {}
     complete = True
     for provider in providers:
         for stage in stages:
             run = _select_run(cache_root, str(provider), str(stage))
             if run is None:
-                provider_runs.append({
-                    "provider": provider,
-                    "stage": stage,
-                    "status": "not_attempted",
-                    "cache_only": True,
-                    "cache_reused": False,
-                    "api_calls": 0,
-                })
+                provider_attempts.append(
+                    _provider_attempt(
+                        str(provider),
+                        str(stage),
+                        "not-found",
+                        "not_attempted",
+                        manifest={},
+                        normalized_count=0,
+                        status_counts={},
+                    )
+                )
                 complete = False
                 continue
             manifest_path = run / "manifest.json"
@@ -1159,7 +1218,17 @@ def load_cached_external_observation_snapshot(
                 run_record["raw_response_directory"] = manifest.get("raw_response_directory")
             if manifest.get("cache_directory"):
                 run_record["cache_directory"] = manifest.get("cache_directory")
-            provider_runs.append(run_record)
+            provider_attempts.append(
+                _provider_attempt(
+                    str(provider),
+                    str(stage),
+                    str(manifest.get("run_id") or run.name),
+                    status,
+                    manifest=manifest,
+                    normalized_count=len(rows),
+                    status_counts=status_counts,
+                )
+            )
             if (
                 status not in {"success_nonempty", "success_empty"}
                 or not manifest_path.is_file()
@@ -1221,9 +1290,9 @@ def load_cached_external_observation_snapshot(
         administrative_scope=resolved_admin_scope,
         scope_bbox_wgs84=project_bbox_wgs84,
         observations=observations,
-        provider_runs=provider_runs,
         excluded_counts=excluded_counts,
-        complete=complete and bool(provider_runs),
+        complete=complete and bool(provider_attempts),
+        provider_attempts=provider_attempts,
     )
     payload_json = json.dumps(
         payload,
@@ -1239,9 +1308,9 @@ def load_cached_external_observation_snapshot(
         administrative_scope=resolved_admin_scope,
         scope_bbox_wgs84=project_bbox_wgs84,
         observations=observations,
-        provider_runs=provider_runs,
+        provider_attempts=tuple(provider_attempts),
         excluded_counts=excluded_counts,
-        complete=complete and bool(provider_runs),
+        complete=complete and bool(provider_attempts),
     )
 
 

@@ -25,6 +25,10 @@ from app.contracts.evidence.evidence_contracts import (
 from app.contracts.evidence.evidence_packet_contracts import EvidencePacket
 from app.infrastructure.logging import get_logger
 from app.infrastructure.evidence_runtime.coverage import build_evidence_coverage
+from app.infrastructure.evidence_runtime.acquisition_executor import (
+    AcquisitionRouteExecutor,
+    AcquisitionRouteResult,
+)
 from app.infrastructure.evidence_runtime.query_planner import build_query_plan, request_fingerprint
 from app.infrastructure.evidence_runtime.retriever_router import RetrieverKind
 from app.infrastructure.evidence_runtime.sufficiency import evaluate_sufficiency
@@ -521,6 +525,8 @@ async def retrieve_evidence(
     if project_wide_query:
         request = request.model_copy(update={"project_wide": True})
     plan = build_query_plan(request)
+    acquisition_executor = AcquisitionRouteExecutor(plan, stage=request.stage)
+    acquisition_results: dict[str, AcquisitionRouteResult] = {}
     failed_sources: list[str] = []
     retrieval_status: list[dict[str, Any]] = []
     if schedule_trace is not None:
@@ -542,9 +548,9 @@ async def retrieve_evidence(
     })
     kg_facts: List[EvidenceFact] = []
     cognition = SpatialCognitionEvidence()
-    for query in plan.queries:
+    for query in plan.provider_routes:
         try:
-            if query.retriever is RetrieverKind.LOCAL_TEXT:
+            if query.retriever == RetrieverKind.LOCAL_TEXT.value:
                 facts, sources = await _invoke(
                     retrieve_from_local_text,
                     session_id,
@@ -554,7 +560,7 @@ async def retrieve_evidence(
                     required_facts=list(query.required_facts),
                     entity_scope=list(query.entity_scope),
                 )
-            elif query.retriever is RetrieverKind.REPORT:
+            elif query.retriever == RetrieverKind.REPORT.value:
                 facts, sources = await _invoke(
                     retrieve_from_reports,
                     session_id,
@@ -564,7 +570,7 @@ async def retrieve_evidence(
                     required_facts=list(query.required_facts),
                     entity_scope=list(query.entity_scope),
                 )
-            elif query.retriever is RetrieverKind.RAG:
+            elif query.retriever == RetrieverKind.RAG.value:
                 from app.infrastructure.evidence_runtime.retrievers.rag_retriever import (
                     peek_rag_log,
                     retrieve_from_rag,
@@ -595,7 +601,7 @@ async def retrieve_evidence(
                         "status": rag_status,
                         "reason": skip_reason,
                     })
-            elif query.retriever is RetrieverKind.KG:
+            elif query.retriever == RetrieverKind.KG.value:
                 facts, cognition = await _invoke(
                     retrieve_from_kg,
                     session_id,
@@ -609,7 +615,7 @@ async def retrieve_evidence(
                 sources = []
                 if facts or cognition.kg_confidence > 0:
                     sources = [EvidenceSource(source_type="kg", reference=f"session_kg:{session_id}", confidence=cognition.kg_confidence)]
-            elif query.retriever is RetrieverKind.DATA_CATALOG:
+            elif query.retriever == RetrieverKind.DATA_CATALOG.value:
                 facts, sources = await _invoke(
                     retrieve_from_data_catalog,
                     session_id,
@@ -617,7 +623,7 @@ async def retrieve_evidence(
                     query=query.query,
                     required_facts=list(query.required_facts),
                 )
-            elif query.retriever is RetrieverKind.ARTIFACT:
+            elif query.retriever == RetrieverKind.ARTIFACT.value:
                 facts, sources = await _invoke(
                     retrieve_from_artifacts,
                     session_id,
@@ -625,16 +631,21 @@ async def retrieve_evidence(
                     source_refs=query.source_refs,
                     required_facts=query.required_facts,
                 )
-            elif query.retriever is RetrieverKind.EXTERNAL:
+            elif query.retriever == RetrieverKind.EXTERNAL.value:
                 # External retrieval is deferred until local sufficiency is
                 # evaluated below.  This guarantees that an injected
                 # provider is not contacted when L1/KG/bundle already answer.
                 retrieval_status.append({
                     "step": "retriever",
-                    "retriever": query.retriever.value,
+                    "retriever": query.retriever,
                     "status": "deferred",
                     "reason": "local_sufficiency_first",
                 })
+                acquisition_results[query.route_ref] = acquisition_executor.complete_route(
+                    query,
+                    status="NOT_ATTEMPTED",
+                    reason_code="local_sufficiency_first",
+                )
                 continue
             else:
                 facts, sources = await _invoke(
@@ -646,22 +657,39 @@ async def retrieve_evidence(
                 )
             retrieval_status.append({
                 "step": "retriever",
-                "retriever": query.retriever.value,
+                "retriever": query.retriever,
                 "status": "returned" if facts or sources else "empty",
                 "fact_count": len(facts),
                 "source_count": len(sources),
             })
+            acquisition_results[query.route_ref] = acquisition_executor.complete_route(
+                query,
+                status=("SUCCESS_NONEMPTY" if facts or sources else "SUCCESS_EMPTY"),
+                facts=facts,
+                sources=sources,
+            )
             all_facts.extend(facts)
             all_sources.extend(sources)
         except Exception as exc:
-            failed_sources.append(query.retriever.value)
+            terminal_status = (
+                "TIMEOUT"
+                if isinstance(exc, (TimeoutError, asyncio.TimeoutError))
+                else "FAILED_PERMANENT"
+            )
+            failed_sources.append(query.retriever)
             retrieval_status.append({
                 "step": "retriever",
-                "retriever": query.retriever.value,
+                "retriever": query.retriever,
                 "status": "failed",
                 "error": f"{type(exc).__name__}: {exc}",
             })
-            logger.warning("[retrieve_evidence] %s retriever failed: %s", query.retriever.value, exc)
+            acquisition_results[query.route_ref] = acquisition_executor.complete_route(
+                query,
+                status=terminal_status,
+                reason_code=f"{type(exc).__name__}: {exc}",
+                retryable=terminal_status == "TIMEOUT",
+            )
+            logger.warning("[retrieve_evidence] %s retriever failed: %s", query.retriever, exc)
 
     # Evidence found by a gate request is promoted into the next canonical
     # context request.  This gives the gate loop a real hand-off without
@@ -721,6 +749,26 @@ async def retrieve_evidence(
                 entity_scope=request.entity_scope,
                 limit=request.candidate_limit * 2,
             )
+            external_route = next(
+                (
+                    route for route in plan.provider_routes
+                    if route.retriever == RetrieverKind.EXTERNAL.value
+                ),
+                None,
+            )
+            if external_route is not None:
+                from app.infrastructure.evidence_runtime.frozen_cache_adapter import (
+                    materialize_frozen_cache_result,
+                )
+
+                acquisition_results[external_route.route_ref] = materialize_frozen_cache_result(
+                    cached_context,
+                    plan,
+                    external_route,
+                    facts=map_facts,
+                    sources=map_sources,
+                    trace=map_trace,
+                )
             all_facts.extend(map_facts)
             all_sources.extend(map_sources)
             retrieval_status.append({
@@ -801,6 +849,18 @@ async def retrieve_evidence(
                 source_refs=request.context_refs,
             )
             external_trace.append(trace)
+            external_route = next(
+                (item for item in plan.provider_routes if item.retriever == RetrieverKind.EXTERNAL.value),
+                None,
+            )
+            if external_route is not None:
+                acquisition_results[external_route.route_ref] = acquisition_executor.complete_route(
+                    external_route,
+                    status=("SUCCESS_NONEMPTY" if facts or sources else "SUCCESS_EMPTY"),
+                    facts=facts,
+                    sources=sources,
+                    reason_code=str(trace.get("status") or "external_provider_complete"),
+                )
             unique_facts = fuse_facts([*unique_facts, *facts])
             unique_sources = fuse_sources([*unique_sources, *sources])
             result.evidence_bundle.facts = unique_facts
@@ -819,6 +879,16 @@ async def retrieve_evidence(
             external_trace.append(
                 {"step": "external_exception", "status": "failed", "error": str(exc)}
             )
+            external_route = next(
+                (item for item in plan.provider_routes if item.retriever == RetrieverKind.EXTERNAL.value),
+                None,
+            )
+            if external_route is not None:
+                acquisition_results[external_route.route_ref] = acquisition_executor.complete_route(
+                    external_route,
+                    status="FAILED_PERMANENT",
+                    reason_code=f"{type(exc).__name__}: {exc}",
+                )
             logger.warning("[retrieve_evidence] external retriever failed: %s", exc)
     unique_sources = annotate_sources(
         unique_sources,
@@ -921,7 +991,7 @@ async def retrieve_evidence(
         query_trace=[
             {
                 "step": "retriever_plan",
-                "retrievers": [item.value for item in plan.retrievers],
+                "retrievers": [item.retriever for item in plan.provider_routes],
             },
             {"step": "sufficiency", "status": decision_status},
             *retrieval_status,
@@ -1028,12 +1098,22 @@ async def retrieve_evidence(
         "evidence_bundle": apply_fact_quality(result.evidence_bundle),
     })
     coverage_decision = evaluate_sufficiency(request, result)
+    (
+        provider_attempts,
+        page_records,
+        observation_snapshot,
+        acquisition_receipt,
+    ) = acquisition_executor.finalize(acquisition_results.values())
     result = result.model_copy(update={
+        "provider_attempts": provider_attempts,
+        "page_records": page_records,
+        "observation_snapshot": observation_snapshot,
+        "acquisition_receipt": acquisition_receipt,
         "coverage": build_evidence_coverage(
             request,
             result,
             coverage_decision,
-            source_families_queried=tuple(item.value for item in plan.retrievers),
+            source_families_queried=tuple(item.source_family for item in plan.provider_routes),
             query_trace=tuple(
                 trace
                 for trace in [*retrieval_status, *external_trace]

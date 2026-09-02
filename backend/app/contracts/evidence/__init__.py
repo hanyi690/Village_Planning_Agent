@@ -22,6 +22,22 @@ from .source_semantic_contracts import (
     SourceSemanticClassificationSnapshot,
 )
 from .retrieval_artifact_contracts import EvidenceRetrievalArtifact
+from .policy_contracts import EvidencePolicy, EvidencePolicyRegistry, resolve_policy
+from .acquisition_contracts import (
+    CompletionBasis,
+    EvidenceAcquisitionReceipt,
+    EvidenceObservationSnapshot,
+    OriginCompleteness,
+    ProviderPageRecord,
+)
+from .query_plan_contracts import (
+    EvidenceBudget,
+    EvidencePageStrategy,
+    EvidenceProviderRoute,
+    EvidenceQueryPlanV1,
+    EvidenceRetryPolicy,
+    EvidenceTimeoutPolicy,
+)
 from .retrieval_contracts import (
     EVIDENCE_RETRIEVAL_ENGINE_VERSION,
     EvidenceRetrievalAuthority,
@@ -35,7 +51,6 @@ from .provider_attempt import (
     EvidenceConclusion,
     EvidenceConfidence,
     EvidenceObservationRecord,
-    EvidenceQuery,
     ProviderAttempt,
     ProviderAttemptStatus,
 )
@@ -73,12 +88,25 @@ __all__ = [
     "EvidenceRetrievalBootstrapRefs",
     "EvidenceRetrievalOutcome",
     "EvidenceRetrievalReceipt",
+    "EvidencePolicy",
+    "EvidencePolicyRegistry",
+    "resolve_policy",
+    "EvidenceBudget",
+    "EvidencePageStrategy",
+    "EvidenceProviderRoute",
+    "EvidenceQueryPlanV1",
+    "EvidenceRetryPolicy",
+    "EvidenceTimeoutPolicy",
+    "EvidenceAcquisitionReceipt",
+    "CompletionBasis",
+    "OriginCompleteness",
+    "EvidenceObservationSnapshot",
+    "ProviderPageRecord",
     "EvidenceAuthority",
     "EvidenceCandidate",
     "EvidenceConclusion",
     "EvidenceConfidence",
     "EvidenceObservationRecord",
-    "EvidenceQuery",
     "ProviderAttempt",
     "ProviderAttemptStatus",
 ]

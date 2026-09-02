@@ -2,9 +2,10 @@
 
 设计 owner：<code>../04_EVIDENCE.md</code>。
 
-本轮 DATA-only MVP 不执行本卡的 Evidence enrichment/consumer 验收。高德、天地图、腾讯
-缓存只按 <code>01_data_acceptance.md</code> 的 cache inventory 规则盘点并保留原始状态；本卡
-的 provider、requirement、observation 和下游消费条件仍属于后续阶段。
+本轮完成 EV-01B 的 Evidence acquisition vertical slice：覆盖 requirement policy、
+immutable query plan、runtime route attempt、DATA/CurrentWorld observation lineage、
+bounded acquisition receipt 和 CAS replay。Sufficiency、absence conclusion、Gap
+scheduler、Cognition proposal/commit 与 online provider 仍属于后续阶段。
 
 ## 当前目标：P0 / Loop Ready
 
@@ -16,8 +17,8 @@ Requirement ≠ Query ≠ Observation ≠ Candidate ≠ Conclusion
 
 | Gate | P0 通过条件 | 当前证据状态 |
 |---|---|---|
-| Entry | typed requirement 带 consumer、purpose、authority 与 scope | <code>PARTIAL</code>：requirements/contracts 已存在 |
-| Product | retrieval receipts、observation snapshot、packet、gap ledger 可重载 | <code>PARTIAL</code> |
+| Entry | typed requirement 带 consumer、purpose、authority 与 scope | <code>PARTIAL</code>：purpose/policy/subject/scope 已落地，consumer-specific authority 仍由 policy 解析 |
+| Product | retrieval receipts、observation snapshot、packet、gap ledger 可重载 | <code>PASS (EV-01B acquisition)</code>：typed snapshot/receipt 已进入 retrieval artifact/CAS |
 | Consumer | L1/L2/L3/GROUND 通过 facade 消费 ref，不读取 provider 私有返回 | <code>PARTIAL</code> |
 | Recovery | provider 状态与 gap 可区分并按新输入调度 | <code>PARTIAL</code> |
 
@@ -36,6 +37,13 @@ Requirement ≠ Query ≠ Observation ≠ Candidate ≠ Conclusion
   rows、attempt status、采集时间、范围与 raw/cache ref 可重载。腾讯当前未完成的阶段必须
   保留 <code>NOT_ATTEMPTED</code> 或失败 gap；
 - 新 receipt 只唤醒受影响 requirement/consumer；无新依赖时停止。
+
+EV-01B/EV-01C 额外验收条件：required route 必须有 runtime terminal attempt；DATA 与
+CurrentWorld observation 必须分型并保留 route/attempt/query-plan lineage；bounded local
+query 不得伪造 PageRecord；`SUCCESS_EMPTY` 不得升级为 absence；同一业务 digest 和 plan
+fingerprint 必须 replay 同一 artifact，WM/DATA/policy business digest 改变才生成新 artifact。
+Frozen external cache 必须使用独立的 `frozen_cache` attempt，保留 origin provider
+attempt/status/query/page provenance，且 cache read complete 不得覆盖 origin incomplete。
 
 ## Deferred
 

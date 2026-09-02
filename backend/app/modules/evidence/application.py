@@ -7,6 +7,7 @@ provider routing, source access, fusion, caching and degradation stay inside
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Any
@@ -20,6 +21,11 @@ from app.contracts.evidence.stage_contracts import (
     EvidenceGapScheduleRecord,
     EvidenceStageSnapshot,
 )
+from app.contracts.evidence.acquisition_contracts import (
+    EvidenceAcquisitionReceipt,
+    EvidenceObservationSnapshot,
+    ProviderPageRecord,
+)
 from app.contracts.evidence.evidence_contracts import (
     ExplorationRequest,
     ExplorationResult,
@@ -29,8 +35,8 @@ from app.contracts.evidence.provider_attempt import (
     EvidenceAuthority,
     EvidenceConfidence,
     ProviderAttempt,
-    provider_attempt_from_legacy,
 )
+from app.contracts.evidence.query_plan_contracts import EvidenceQueryPlanV1
 from app.contracts.evidence.retrieval_artifact_contracts import (
     EvidenceRetrievalArtifact,
 )
@@ -97,26 +103,12 @@ def _frozen_external_snapshot(
     if value is None:
         return ExternalObservationSnapshot(snapshot_id="", project_name=project_name)
     payload = value.model_dump(mode="json") if hasattr(value, "model_dump") else dict(value)
-    provider_runs = []
-    for row in payload.get("provider_runs") or []:
-        item = dict(row) if isinstance(row, Mapping) else {}
-        for key in ("path", "cache_directory", "raw_response_directory"):
-            item.pop(key, None)
-        provider_runs.append(item)
-    payload["provider_runs"] = provider_runs
-    from app.contracts.evidence.provider_attempt import provider_attempt_from_legacy
-
     typed_attempts = tuple(
         getattr(value, "model_dump", lambda **_: value)()
         if hasattr(value, "model_dump")
         else value
         for value in (payload.get("provider_attempts") or ())
     )
-    if not typed_attempts:
-        typed_attempts = tuple(
-            provider_attempt_from_legacy(row).model_dump(mode="json")
-            for row in provider_runs
-        )
     payload["provider_attempts"] = typed_attempts
     payload["snapshot_id"] = ""
     payload["digest"] = ""
@@ -605,10 +597,9 @@ class EvidenceContext(BaseModel):
             capabilities.add("source_evidence")
         if cached_context is not None and getattr(cached_context, "bundle", None) is not None:
             sources.add("bundle")
-        # A persisted Evidence snapshot is historical authority.  Reload its
-        # child ref above and never replace it with a newer cache scan after a
-        # worker restart.  Only legacy checkpoints without that snapshot use
-        # the compatibility cache path, and they remain explicitly unbound.
+        # A persisted Evidence snapshot is authoritative. Reload its child ref
+        # above and never replace it with a newer cache scan after a worker
+        # restart.
         if evidence_snapshot is None:
             external_snapshot = state.get("external_observation_snapshot")
         if evidence_snapshot is None and external_snapshot is None and cached_context is not None:
@@ -639,7 +630,7 @@ class EvidenceContext(BaseModel):
             except Exception:
                 external_snapshot = None
         if external_snapshot is not None and (
-            getattr(external_snapshot, "provider_runs", None)
+            getattr(external_snapshot, "provider_attempts", None)
             or getattr(external_snapshot, "observations", None)
         ):
             sources.update({"external", "external_map_cache"})
@@ -875,6 +866,8 @@ def _request_for(
 def _scheduled_gap_result(
     requirements: tuple[EvidenceRequirement, ...],
     schedule_trace: Mapping[str, Any],
+    *,
+    query_plan: EvidenceQueryPlanV1 | None = None,
 ) -> ExplorationResult:
     """Return an explicit no-retrieval result for deferred/unavailable gaps."""
 
@@ -887,7 +880,7 @@ def _scheduled_gap_result(
         if item.gap_status != "resolved"
     ]
     request_text = "; ".join(item.statement for item in requirements)
-    return ExplorationResult(
+    result = ExplorationResult(
         evidence_bundle=EvidenceBundle(
             request=request_text,
             facts=[],
@@ -904,6 +897,23 @@ def _scheduled_gap_result(
             query_trace=[dict(schedule_trace)],
         ),
     )
+    if query_plan is None:
+        return result
+    from app.infrastructure.evidence_runtime.acquisition_executor import (
+        build_uniform_route_audit,
+    )
+
+    attempts, pages, snapshot, receipt = build_uniform_route_audit(
+        query_plan,
+        status="NOT_ATTEMPTED",
+        reason_code="deferred_by_gap_scheduler",
+    )
+    return result.model_copy(update={
+        "provider_attempts": attempts,
+        "page_records": pages,
+        "observation_snapshot": snapshot,
+        "acquisition_receipt": receipt,
+    })
 
 
 def _append_scheduled_gaps(
@@ -936,6 +946,8 @@ def _failed_retrieval_result(
     request: ExplorationRequest,
     requirements: tuple[EvidenceRequirement, ...],
     exc: Exception,
+    *,
+    query_plan: EvidenceQueryPlanV1 | None = None,
 ) -> ExplorationResult:
     """Normalize a retriever exception into a persisted, non-sufficient result."""
 
@@ -943,7 +955,7 @@ def _failed_retrieval_result(
     from app.contracts.evidence.evidence_packet_contracts import EvidencePacket
 
     missing = [item.requirement_id for item in requirements if item.required]
-    return ExplorationResult(
+    result = ExplorationResult(
         evidence_bundle=EvidenceBundle(
             request=request.query,
             unresolved=missing,
@@ -963,6 +975,24 @@ def _failed_retrieval_result(
             }],
         ),
     )
+    if query_plan is None:
+        return result
+    from app.infrastructure.evidence_runtime.acquisition_executor import (
+        build_uniform_route_audit,
+    )
+
+    attempts, pages, snapshot, receipt = build_uniform_route_audit(
+        query_plan,
+        status="FAILED_PERMANENT",
+        stage=request.stage,
+        reason_code=f"{type(exc).__name__}: {exc}",
+    )
+    return result.model_copy(update={
+        "provider_attempts": attempts,
+        "page_records": pages,
+        "observation_snapshot": snapshot,
+        "acquisition_receipt": receipt,
+    })
 
 
 def _coverage_and_outcome(
@@ -1059,7 +1089,54 @@ def _result_from_retrieval_artifact(
         coverage=artifact.coverage,
         outcome=artifact.outcome,
         receipt=receipt,
+        acquisition_receipt=artifact.acquisition_receipt,
+        observation_snapshot=artifact.observation_snapshot,
+        provider_attempts=artifact.provider_attempts,
+        page_records=artifact.page_records,
     )
+
+
+def _acquisition_audit(
+    result: ExplorationResult,
+    *,
+    query_plan: EvidenceQueryPlanV1,
+    context: EvidenceContext,
+) -> tuple[
+    tuple[ProviderAttempt, ...],
+    tuple[ProviderPageRecord, ...],
+    EvidenceObservationSnapshot,
+    EvidenceAcquisitionReceipt,
+]:
+    """Validate the runtime-produced acquisition audit and aggregate it."""
+
+    if (
+        result.observation_snapshot is None
+        or result.acquisition_receipt is None
+    ):
+        raise ArtifactReplayError(
+            "Evidence runtime must produce an acquisition snapshot and receipt"
+        )
+    attempts = tuple(result.provider_attempts)
+    pages = tuple(result.page_records)
+    snapshot = result.observation_snapshot
+    receipt = result.acquisition_receipt
+    if snapshot.query_plan_ref != query_plan.query_plan_ref:
+        raise ArtifactReplayError("acquisition snapshot is bound to another query plan")
+    if receipt.query_plan_ref != query_plan.query_plan_ref:
+        raise ArtifactReplayError("acquisition receipt is bound to another query plan")
+    attempt_refs = {item.attempt_ref for item in attempts}
+    if set(snapshot.attempt_refs) != attempt_refs:
+        raise ArtifactReplayError("acquisition snapshot attempt lineage is incomplete")
+    if set(receipt.attempt_refs) != attempt_refs:
+        raise ArtifactReplayError("acquisition receipt attempt lineage is incomplete")
+    page_refs = {item.page_ref for item in pages}
+    if not page_refs.issuperset(set(receipt.page_refs)):
+        raise ArtifactReplayError("acquisition receipt page lineage is incomplete")
+    observation_refs = {item.observation_ref for item in snapshot.records}
+    if set(snapshot.observation_refs) != observation_refs:
+        raise ArtifactReplayError("observation snapshot lineage is incomplete")
+    return attempts, pages, snapshot, receipt
+
 
 
 def _commit_retrieval_artifact(
@@ -1071,6 +1148,7 @@ def _commit_retrieval_artifact(
     authority: EvidenceRetrievalAuthority,
     fingerprint: str,
     store: Any,
+    query_plan: EvidenceQueryPlanV1,
     failed: bool = False,
 ) -> ExplorationResult:
     """Persist one normalized result and return only the committed replay view."""
@@ -1086,43 +1164,22 @@ def _commit_retrieval_artifact(
     outcome = normalized.outcome
     if packet is None or coverage is None or outcome is None:
         raise ArtifactReplayError("retrieval normalization did not produce replayable output")
-    provider_attempts = tuple(
-        getattr(
-            getattr(context, "external_observation_snapshot", None),
-            "provider_attempts",
-            (),
-        )
-        or ()
+    (
+        provider_attempts,
+        page_records,
+        observation_snapshot,
+        acquisition_receipt,
+    ) = _acquisition_audit(
+        normalized,
+        query_plan=query_plan,
+        context=context,
     )
-    if not provider_attempts:
-        provider_attempts = tuple(
-            provider_attempt_from_legacy(
-                {
-                    "provider": "local_evidence_runtime",
-                    "stage": str(getattr(context, "stage", "") or "evidence"),
-                    "run_id": str(getattr(context, "run_id", "") or fingerprint[:16]),
-                    "status": (
-                        "failed"
-                        if outcome.status == "failed"
-                        else "success_nonempty"
-                        if packet.candidate_total or normalized.evidence_bundle.facts
-                        else "success_empty"
-                    ),
-                    "reason_code": outcome.reason or outcome.status,
-                    "query_fingerprint": fingerprint,
-                },
-                requirement_refs=tuple(item.requirement_id for item in requirements),
-            )
-        ,)
-    acquisition_confidence = (
-        1.0
-        if provider_attempts
-        and all(
-            item.status in {"SUCCESS_NONEMPTY", "SUCCESS_EMPTY"}
-            for item in provider_attempts
-        )
-        else 0.0
-    )
+    acquisition_confidence = {
+        "complete": 1.0,
+        "partial": 0.5,
+        "failed": 0.0,
+        "not_available": 0.0,
+    }.get(acquisition_receipt.completion, 0.0)
     evidence_confidence = EvidenceConfidence(
         acquisition=acquisition_confidence,
         semantic=1.0 if normalized.evidence_bundle.facts else 0.0,
@@ -1163,6 +1220,10 @@ def _commit_retrieval_artifact(
             external_observations_ref=authority.external_observations_ref,
             gap_ledger_ref=authority.gap_ledger_ref,
         ),
+        query_plan_ref=query_plan.query_plan_ref,
+        observation_snapshot=observation_snapshot,
+        acquisition_receipt=acquisition_receipt,
+        page_records=page_records,
         spatial_cognition=normalized.spatial_cognition,
         provider_attempts=provider_attempts,
         confidence_components=evidence_confidence,
@@ -1437,16 +1498,12 @@ class EvidenceApplication:
         for observation in getattr(external_snapshot, "observations", ()) or ():
             status = str(getattr(observation, "status", "") or "missing")
             external_status_counts[status] = external_status_counts.get(status, 0) + 1
-        for provider_run in getattr(external_snapshot, "provider_runs", ()) or ():
-            status = str(
-                provider_run.get("status")
-                if isinstance(provider_run, Mapping)
-                else getattr(provider_run, "status", "")
-            ) or "missing"
-            key = f"provider_run:{status}"
+        for provider_attempt in provider_attempts:
+            status = str(getattr(provider_attempt, "status", "") or "PARTIAL")
+            key = f"provider_attempt:{status}"
             external_status_counts[key] = external_status_counts.get(key, 0) + 1
         if external_snapshot is not None and (
-            getattr(external_snapshot, "provider_runs", None)
+            getattr(external_snapshot, "provider_attempts", None)
             or getattr(external_snapshot, "observations", None)
         ):
             source_families.update({"external", "external_map_cache"})
@@ -1613,21 +1670,18 @@ class EvidenceApplication:
             return feature_by_resource_ref.get(value)
         scheduled_gap_rows: list[EvidenceGapScheduleRecord] = []
         immediate_supplement_count = 0
-        for provider_run in tuple(
-            getattr(external_snapshot, "provider_runs", ()) or ()
-        ):
-            run_row = (
-                dict(provider_run)
-                if isinstance(provider_run, Mapping)
-                else provider_run.model_dump(mode="json")
-            )
-            run_status = str(run_row.get("status") or "not_attempted").strip()
-            if run_status in {"success_nonempty", "success_empty"}:
+        for provider_attempt in tuple(provider_attempts):
+            run_status = str(
+                getattr(provider_attempt, "status", "") or "NOT_ATTEMPTED"
+            ).strip()
+            if run_status in {"SUCCESS_NONEMPTY", "SUCCESS_EMPTY"}:
                 continue
-            provider = str(run_row.get("provider") or "unknown").strip()
-            external_stage = str(run_row.get("stage") or "unknown").strip()
-            run_id = str(run_row.get("run_id") or "missing").strip()
-            status_counts = dict(run_row.get("status_counts") or {})
+            provider = str(getattr(provider_attempt, "provider", "") or "unknown").strip()
+            external_stage = str(getattr(provider_attempt, "stage", "") or "unknown").strip()
+            attempt_ref = str(getattr(provider_attempt, "attempt_ref", "") or "unknown").strip()
+            status_counts = dict(
+                getattr(provider_attempt, "metadata", {}).get("status_counts") or {}
+            )
             missing_statuses: set[str] = set()
             for key, value in status_counts.items():
                 try:
@@ -1642,19 +1696,17 @@ class EvidenceApplication:
             gap_ref = "evidence.gap.external." + semantic_checksum({
                 "provider": provider,
                 "stage": external_stage,
-                "run_id": run_id,
+                "attempt_ref": attempt_ref,
                 "status": run_status,
                 "source_digest": external_digest,
                 "missing_fields": missing_fields,
             })[:24]
-            normalized_count = int(
-                run_row.get("normalized_record_count") or 0
-            )
+            normalized_count = int(getattr(provider_attempt, "item_count", 0) or 0)
             scheduled_gap_rows.append(EvidenceGapScheduleRecord(
                 gap_ref=gap_ref,
                 producer_stage="evidence",
                 subject_refs=(
-                    f"external-provider-run:{provider}:{external_stage}:{run_id}",
+                    f"external-provider-attempt:{provider}:{external_stage}:{attempt_ref}",
                 ),
                 missing_fields=missing_fields,
                 source_digest=external_digest,
@@ -1668,9 +1720,9 @@ class EvidenceApplication:
                     if normalized_count > 0
                     else ()
                 ),
-                failure_reason=f"external_provider_run_{run_status}",
+                failure_reason=f"external_provider_attempt_{run_status}",
                 recovery_pointer=(
-                    f"external-cache:{provider}:{external_stage}:{run_id}"
+                    f"external-cache:{provider}:{external_stage}:{attempt_ref}"
                 ),
             ))
         for cognition_gap in tuple(getattr(cognition_stage, "gaps", ()) or ()):
@@ -2065,12 +2117,18 @@ class EvidenceApplication:
             canonicalize_request,
             retrieval_fingerprint,
         )
+        from app.infrastructure.evidence_runtime.query_planner import build_query_plan
 
         canonical_request = canonicalize_request(canonical_request)
+        query_plan = build_query_plan(
+            canonical_request,
+            project_wide=canonical_request.project_wide,
+        )
         fingerprint = retrieval_fingerprint(
             authority,
             canonical_request,
             spatial_spec=spatial_spec,
+            query_plan=query_plan,
         )
         store = EvidenceRetrievalArtifactStore(
             context.artifact_root,
@@ -2088,13 +2146,18 @@ class EvidenceApplication:
         )
         if not actionable:
             return _commit_retrieval_artifact(
-                _scheduled_gap_result(requirements, schedule_trace),
+                _scheduled_gap_result(
+                    requirements,
+                    schedule_trace,
+                    query_plan=query_plan,
+                ),
                 context=context,
                 request=canonical_request,
                 requirements=requirements,
                 authority=authority,
                 fingerprint=fingerprint,
                 store=store,
+                query_plan=query_plan,
             )
         request = _request_for(
             actionable,
@@ -2111,16 +2174,23 @@ class EvidenceApplication:
                     actionable,
                     candidate_offset=candidate_offset,
                     candidate_limit=candidate_limit,
+                    query_plan=query_plan,
                 )
             except Exception as exc:
                 return _commit_retrieval_artifact(
-                    _failed_retrieval_result(canonical_request, requirements, exc),
+                    _failed_retrieval_result(
+                        canonical_request,
+                        requirements,
+                        exc,
+                        query_plan=query_plan,
+                    ),
                     context=context,
                     request=canonical_request,
                     requirements=requirements,
                     authority=authority,
                     fingerprint=fingerprint,
                     store=store,
+                    query_plan=query_plan,
                     failed=True,
                 )
             return _commit_retrieval_artifact(
@@ -2131,6 +2201,7 @@ class EvidenceApplication:
                 authority=authority,
                 fingerprint=fingerprint,
                 store=store,
+                query_plan=query_plan,
             )
         from app.infrastructure.evidence_runtime.facade import retrieve_evidence as run_runtime
 
@@ -2143,13 +2214,19 @@ class EvidenceApplication:
             )
         except Exception as exc:
             return _commit_retrieval_artifact(
-                _failed_retrieval_result(canonical_request, requirements, exc),
+                _failed_retrieval_result(
+                    canonical_request,
+                    requirements,
+                    exc,
+                    query_plan=query_plan,
+                ),
                 context=context,
                 request=canonical_request,
                 requirements=requirements,
                 authority=authority,
                 fingerprint=fingerprint,
                 store=store,
+                query_plan=query_plan,
                 failed=True,
             )
         return _commit_retrieval_artifact(
@@ -2160,6 +2237,7 @@ class EvidenceApplication:
             authority=authority,
             fingerprint=fingerprint,
             store=store,
+            query_plan=query_plan,
         )
 
 

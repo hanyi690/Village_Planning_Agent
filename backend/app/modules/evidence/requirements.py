@@ -47,6 +47,30 @@ def _requirement_id(request: ExplorationRequest, index: int, statement: str) -> 
     return f"evidence-req-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:20]}"
 
 
+def _policy_for_requirement(
+    *,
+    kind: str,
+    evidence_role: str,
+    statement: str,
+) -> str:
+    """Map requirement semantics to a closed, versioned policy."""
+
+    text = f"{evidence_role} {statement}".casefold()
+    if "execution_geometry" in text or "执行几何" in text:
+        return "execution_geometry_support.v1"
+    if "legal" in text or "法定" in text or kind == "constraint":
+        return "legal_extent_support.v1"
+    if "relation" in text or "关系" in text or kind == "relation":
+        return "relation_support.v1"
+    if kind == "spatial" or "location_binding" in text or "定位" in text:
+        return "location_identity_support.v1"
+    if kind == "identity":
+        if "road" in text or "道路" in text:
+            return "road_identity.v1"
+        return "facility_existence.v1"
+    return "source_semantic_support.v1"
+
+
 def _request_revision(request: ExplorationRequest) -> str:
     raw = json.dumps(
         request.model_dump(mode="json", exclude={"requirements"}),
@@ -85,6 +109,7 @@ def compile_requirements(request: ExplorationRequest) -> tuple[EvidenceRequireme
     return tuple(
         EvidenceRequirement(
             requirement_id=_requirement_id(request, index, statement),
+            requirement_ref=_requirement_id(request, index, statement),
             request_id=request.run_id,
             requesting_artifact_ref=request.run_id,
             requesting_artifact_revision=_request_revision(request),
@@ -96,6 +121,12 @@ def compile_requirements(request: ExplorationRequest) -> tuple[EvidenceRequireme
             spatial_granularity="feature" if kind == "spatial" else "document",
             allowed_inference="exact" if kind == "spatial" else "text_only",
             evidence_role=("spatial_fact" if kind == "spatial" else "planning_background"),
+            purpose=request.query_purpose or request.request_type,
+            policy_ref=_policy_for_requirement(
+                kind=kind,
+                evidence_role=("spatial_fact" if kind == "spatial" else "planning_background"),
+                statement=statement,
+            ),
             success_condition="source-backed claim with locator and bounded coverage",
             metadata={
                 "request_type": request.request_type,
@@ -149,6 +180,8 @@ def _artifact_requirement(
     spatial_granularity: str = "none",
     allowed_inference: str = "exact",
     evidence_role: str = "planning_background",
+    purpose: str = "",
+    policy_ref: str = "",
     success_condition: str = "",
     source_artifact_refs: Iterable[str] = (),
     metadata: dict[str, Any] | None = None,
@@ -166,6 +199,7 @@ def _artifact_requirement(
     requirement_id = f"evidence-req-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:20]}"
     return EvidenceRequirement(
         requirement_id=requirement_id,
+        requirement_ref=requirement_id,
         request_id=str(getattr(artifact, "artifact_id", "") or ""),
         requesting_artifact_ref=artifact_ref,
         requesting_artifact_revision=revision,
@@ -178,6 +212,12 @@ def _artifact_requirement(
         spatial_granularity=spatial_granularity,
         allowed_inference=allowed_inference,
         evidence_role=evidence_role,
+        purpose=purpose or evidence_role,
+        policy_ref=policy_ref or _policy_for_requirement(
+            kind=kind,
+            evidence_role=evidence_role,
+            statement=normalized_statement,
+        ),
         success_condition=success_condition,
         source_artifact_refs=tuple(dict.fromkeys(str(item).strip() for item in source_artifact_refs if str(item).strip())),
         metadata=metadata or {},

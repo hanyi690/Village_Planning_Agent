@@ -18,6 +18,22 @@ GROUND may pass a typed spatial specification and candidate-page cursor through
 the Evidence facade; those values constrain one runtime request and do not
 expose retriever/provider selection to the business module.
 
+The acquisition spine is represented by an immutable `EvidenceQueryPlanV1`,
+typed `ProviderAttempt` rows, `ProviderPageRecord` rows, and an
+`EvidenceAcquisitionReceipt`. `AcquisitionRouteExecutor` emits terminal
+attempt and observation lineage at route execution time; the Evidence
+application only validates and aggregates those records. The runtime does not
+own DATA endpoint,
+credential, network, lease/fencing, or raw-response persistence. A receipt
+with incomplete pagination is never a complete acquisition result.
+
+Frozen external cache reads use `frozen_cache` as the current route authority
+and emit `EXTERNAL_OBSERVATION` records with the original provider attempt,
+query fingerprint, cache snapshot ref, and cache digest as provenance. Cache
+read completeness is independent from origin-provider completeness. A cache
+read never creates a current PageRecord and never grants local DATA geometry
+authority.
+
 ## Current-source retrieval boundary
 
 ``dimension_key`` identifies the business owner of a request. It is not a hard

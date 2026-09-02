@@ -64,6 +64,23 @@ def route_request(
         )
         for item in request.requirements
     )
+    identity_requirement = any(
+        item.required
+        and str(item.policy_ref).casefold() in {
+            "road_identity.v1",
+            "location_identity_support.v1",
+            "facility_existence.v1",
+        }
+        for item in request.requirements
+    )
+    frozen_external_requirement = any(
+        item.required
+        and any(
+            str(family).casefold() in {"external", "external_map_cache", "map_cache"}
+            for family in item.source_families
+        )
+        for item in request.requirements
+    )
 
     if request_type in {"fact_check", "evidence_gap", "spatial_lookup"}:
         selected.add(RetrieverKind.REPORT)
@@ -80,6 +97,10 @@ def route_request(
         selected.add(RetrieverKind.INTEGRITY)
     if spatial_requirement:
         selected.add(RetrieverKind.DATA_CATALOG)
+    if identity_requirement:
+        selected.update({RetrieverKind.KG, RetrieverKind.DATA_CATALOG})
+    if frozen_external_requirement:
+        selected.add(RetrieverKind.EXTERNAL)
 
     # A project-level query deliberately does not require the caller to know
     # which layer contains the answer.  When no entity scope was supplied,

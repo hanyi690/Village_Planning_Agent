@@ -37,7 +37,7 @@
 
 - [ ] **Step 2: 实现契约**
 
-`ExternalObservation` 至少包含 `observation_id`、`provider`、`stage`、`operation`、`status`、`scope_bucket`、`observed_name`、`aliases`、`location_wgs84`、`location_native`、`coordinate_contract`、`geometry`、`raw_response_ref`、`source_record_ref`、`metadata`。`ExternalObservationSnapshot` 包含 `snapshot_id`、`project_name`、`observations`、`provider_runs`、`digest`、`complete`。
+`ExternalObservation` 至少包含 `observation_id`、`provider`、`stage`、`operation`、`status`、`scope_bucket`、`observed_name`、`aliases`、`location_wgs84`、`location_native`、`coordinate_contract`、`geometry`、`raw_response_ref`、`source_record_ref`、`metadata`。`ExternalObservationSnapshot` 包含 `snapshot_id`、`project_name`、`observations`、`provider_attempts`、`digest`、`complete`。
 
 - [ ] **Step 3: 实现读取和聚类**
 

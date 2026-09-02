@@ -76,6 +76,29 @@ def _sha256(value: Any) -> str:
     return hashlib.sha256(_canonical_bytes(value)).hexdigest()
 
 
+def _authority_replay_identity(authority: EvidenceRetrievalAuthority) -> dict[str, Any]:
+    """Return the business identity used to validate a replay.
+
+    Snapshot refs and context-version labels are physical/runtime handles. A
+    World Model rebuild may replace those handles while preserving the same
+    current-world business digest; that case must remain a CAS replay hit.
+    """
+
+    return {
+        "session_id": authority.session_id,
+        "workflow_run_id": authority.workflow_run_id,
+        "branch_id": authority.branch_id,
+        "data_catalog_digest": authority.data_catalog_digest,
+        "data_snapshot_digest": authority.data_snapshot_digest,
+        "world_model_snapshot_digest": authority.world_model_snapshot_digest,
+        "external_cache_digest": authority.external_cache_digest,
+        "world_model_mode": authority.world_model_mode,
+        "engine": authority.engine,
+        "engine_version": authority.engine_version,
+        "cache_only_policy": authority.cache_only_policy,
+    }
+
+
 def _ref_identity(ref: ArtifactRef) -> dict[str, str]:
     """Use descriptor/business digests, never a filesystem locator."""
 
@@ -111,6 +134,7 @@ def retrieval_fingerprint(
     request: ExplorationRequest,
     *,
     spatial_spec: Any = None,
+    query_plan: Any = None,
 ) -> str:
     """Fingerprint every source of replay-relevant Evidence behavior."""
 
@@ -119,34 +143,26 @@ def retrieval_fingerprint(
         "session_id": authority.session_id,
         "workflow_run_id": authority.workflow_run_id,
         "branch_id": authority.branch_id,
-        "context_version": authority.context_version,
-        "context_fingerprint": authority.context_fingerprint,
         "data_catalog": {
-            "ref": _ref_identity(authority.data_catalog_ref),
             "business_digest": authority.data_catalog_digest,
         },
         "data_snapshot": {
-            "ref": _ref_identity(authority.data_snapshot_ref),
             "business_digest": authority.data_snapshot_digest,
         },
         "world_model": {
-            "ref": _ref_identity(authority.world_model_artifact_ref),
-            "snapshot_ref": authority.world_model_snapshot_ref,
             "business_digest": authority.world_model_snapshot_digest,
         },
-        "evidence_bootstrap_descriptor": _ref_identity(
-            authority.evidence_snapshot_ref
-        ),
         # Cache digest is deliberately used instead of a cache path or the
         # descriptor's volatile creation timestamp.
-        "external_observation_artifact": _ref_identity(
-            authority.external_observations_ref
-        ),
         "external_observation_cache_digest": authority.external_cache_digest,
         "world_model_mode": authority.world_model_mode,
         "engine": authority.engine,
         "engine_version": authority.engine_version,
         "cache_only_policy": authority.cache_only_policy,
+        "query_plan": {
+            "ref": str(getattr(query_plan, "query_plan_ref", "") or ""),
+            "fingerprint": str(getattr(query_plan, "plan_fingerprint", "") or ""),
+        },
         "canonical_request": canonical_request,
         "candidate_page": {
             "offset": canonical_request.candidate_offset,
@@ -166,6 +182,13 @@ def _result_semantics(artifact: EvidenceRetrievalArtifact) -> str:
         "evidence_packet": artifact.evidence_packet,
         "coverage": artifact.coverage,
         "outcome": artifact.outcome,
+        "query_plan_ref": artifact.query_plan_ref,
+        "observation_snapshot": artifact.observation_snapshot,
+        "acquisition_receipt": artifact.acquisition_receipt,
+        "page_records": artifact.page_records,
+        "provider_attempts": artifact.provider_attempts,
+        "confidence_components": artifact.confidence_components,
+        "evidence_authority": artifact.evidence_authority,
         "spatial_cognition": artifact.spatial_cognition,
     })
 
@@ -223,7 +246,9 @@ class EvidenceRetrievalArtifactStore:
             raise ArtifactReplayError("retrieval CAS artifact could not be reloaded") from exc
         if artifact.fingerprint != fingerprint:
             raise ArtifactReplayError("retrieval CAS fingerprint mismatch")
-        if _canonical_bytes(artifact.authority) != _canonical_bytes(authority):
+        if _canonical_bytes(_authority_replay_identity(artifact.authority)) != _canonical_bytes(
+            _authority_replay_identity(authority)
+        ):
             raise ArtifactReplayError("retrieval CAS authority mismatch")
         if candidate is not None and _result_semantics(artifact) != _result_semantics(candidate):
             raise ArtifactReplayError("retrieval CAS result conflicts with existing fingerprint")
@@ -248,6 +273,12 @@ class EvidenceRetrievalArtifactStore:
             retrieval_ref=descriptor,
             fingerprint=fingerprint,
             dedup_hit=True,
+            query_plan_ref=artifact.query_plan_ref,
+            acquisition_receipt_ref=(
+                artifact.acquisition_receipt.receipt_ref
+                if artifact.acquisition_receipt is not None
+                else ""
+            ),
         )
 
     def write_once(
@@ -269,6 +300,12 @@ class EvidenceRetrievalArtifactStore:
                 retrieval_ref=existing,
                 fingerprint=artifact.fingerprint,
                 dedup_hit=True,
+                query_plan_ref=loaded.query_plan_ref,
+                acquisition_receipt_ref=(
+                    loaded.acquisition_receipt.receipt_ref
+                    if loaded.acquisition_receipt is not None
+                    else ""
+                ),
             )
         descriptor = self.repository.put_json(
             artifact.model_dump(mode="json"),
@@ -316,11 +353,23 @@ class EvidenceRetrievalArtifactStore:
                 retrieval_ref=winner,
                 fingerprint=artifact.fingerprint,
                 dedup_hit=True,
+                query_plan_ref=loaded.query_plan_ref,
+                acquisition_receipt_ref=(
+                    loaded.acquisition_receipt.receipt_ref
+                    if loaded.acquisition_receipt is not None
+                    else ""
+                ),
             )
         return artifact, EvidenceRetrievalReceipt(
             retrieval_ref=descriptor,
             fingerprint=artifact.fingerprint,
             dedup_hit=False,
+            query_plan_ref=artifact.query_plan_ref,
+            acquisition_receipt_ref=(
+                artifact.acquisition_receipt.receipt_ref
+                if artifact.acquisition_receipt is not None
+                else ""
+            ),
         )
 
 
