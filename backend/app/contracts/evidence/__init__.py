@@ -20,6 +20,13 @@ from .reasoning_contracts import (
     RequirementSufficiencyDecision,
     SufficiencyCheck,
 )
+from .proposal_contracts import (
+    EntitySupportProposal,
+    EvidenceProposalBatch,
+    PropertyAssertionProposal,
+    RelationSupportProposal,
+    RepresentationSupportProposal,
+)
 from .source_semantic_contracts import (
     SourceFeatureDescriptor,
     SourceFeatureSemanticDecision,
@@ -85,6 +92,11 @@ __all__ = [
     "EvidenceSufficiencyResult",
     "RequirementSufficiencyDecision",
     "SufficiencyCheck",
+    "EntitySupportProposal",
+    "EvidenceProposalBatch",
+    "PropertyAssertionProposal",
+    "RelationSupportProposal",
+    "RepresentationSupportProposal",
     "SourceFeatureDescriptor",
     "SourceFeatureSemanticDecision",
     "SourceFeatureSemanticProposal",
