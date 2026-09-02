@@ -85,7 +85,7 @@ _POLICIES: dict[str, EvidencePolicy] = {
     "source_semantic_support.v1": EvidencePolicy(
         policy_ref="source_semantic_support",
         policy_version="1",
-        allowed_source_families=("bundle", "source_record", "report", "rag", "external"),
+        allowed_source_families=("data", "source_record", "report", "rag", "external"),
         allowed_inference=("exact", "text_only"),
     ),
     "execution_geometry_support.v1": EvidencePolicy(

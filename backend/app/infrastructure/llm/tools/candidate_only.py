@@ -20,7 +20,9 @@ def select_packet_candidate(
     requested = str(candidate_ref or "").strip()
     for candidate in packet.candidate_refs:
         refs = {
-            str(candidate.identity.bundle_feature_bsm),
+            str(candidate.identity.source_feature_id),
+            str(candidate.resource_ref),
+            str(candidate.geometry_ref or ""),
             *[str(ref) for ref in candidate.entity_refs],
         }
         if requested in refs:

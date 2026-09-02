@@ -1,56 +1,11 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from typing import Any, Dict
 
 from app.infrastructure.context_runtime.manager import build_planning_context
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
-
-
-def _jsonable(value: Any) -> Any:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if hasattr(value, "model_dump"):
-        try:
-            return _jsonable(value.model_dump(mode="json"))
-        except Exception:
-            pass
-    if hasattr(value, "to_dict"):
-        try:
-            return _jsonable(value.to_dict())
-        except Exception:
-            pass
-    if isinstance(value, dict):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [_jsonable(item) for item in value]
-    return str(value)
-
-
-def _spatial_hydration_key(
-    state: Dict[str, Any],
-    context: Any,
-    facts: list[Any],
-) -> str:
-    snapshot = getattr(context, "data_snapshot", None)
-    payload = {
-        "context_version": getattr(context, "version", 0),
-        "kg_version": getattr(context, "kg_version", 0),
-        "snapshot_digest": getattr(snapshot, "digest", ""),
-        "l1_snapshot_ref": _jsonable((state.get("artifact_refs") or {}).get("l1_snapshot")),
-        "facts": _jsonable(facts),
-    }
-    canonical = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _context_reports_text(context: Any) -> str:
@@ -481,7 +436,7 @@ async def _persist_context_stage_artifacts(
 
 
 async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
-    """Attach L1 facts and build the GIS/KG EvidenceGraph once per snapshot."""
+    """Attach persisted L1 observation inputs to the planning context."""
     try:
         from app.infrastructure.artifacts.runtime import load_artifact
         from app.contracts.l1.l1_contracts import L1Snapshot
@@ -560,32 +515,13 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
         except Exception as exc:
             logger.debug("[bootstrap] persisted L1 bindings unavailable: %s", exc)
 
-        hydration_key = _spatial_hydration_key(
-            state,
-            context,
-            [*facts, *fact_records],
-        )
-        if (
-            getattr(context, "evidence_graph", None) is not None
-            and getattr(context, "evidence_graph_key", "") == hydration_key
-        ):
-            logger.debug(
-                "[bootstrap] L1 spatial evidence already hydrated key=%s facts=%d",
-                hydration_key[:12],
-                len(facts),
-            )
-            return
-
-        context.evidence_graph_key = hydration_key
         gazetteer_entries = len(
             getattr(getattr(context, "gazetteer", None), "entries", []) or []
         )
         logger.info(
-            "[bootstrap] hydrated %d L1 location facts; gazetteer entries=%d; evidence entries=%d; key=%s",
+            "[bootstrap] hydrated %d L1 location facts; gazetteer entries=%d",
             len(facts),
             gazetteer_entries,
-            len(context.evidence_graph.iter_entries()) if context.evidence_graph is not None else 0,
-            hydration_key[:12],
         )
     except Exception as exc:
         logger.warning("[bootstrap] L1 spatial fact hydration failed: %s", exc)

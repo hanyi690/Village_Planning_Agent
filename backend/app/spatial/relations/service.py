@@ -33,8 +33,8 @@ class RelationEvaluationContext:
     network_refs: Mapping[str, NetworkRef] = field(default_factory=dict)
     network_capacities: Mapping[str, float] = field(default_factory=dict)
     demand_capacities: Mapping[str, float] = field(default_factory=dict)
-    # External entity/place-hint geometries are resolved from EvidenceGraph
-    # identities and read from bundle authority before relation evaluation.
+    # External entity/place-hint geometries are resolved from WM identities
+    # and read from DATA authority before relation evaluation.
     # They are internal ScenarioFeature inputs, never EvidencePacket payloads.
     reference_features: Mapping[str, ScenarioFeature] = field(default_factory=dict)
     reference_diagnostics: tuple[str, ...] = ()

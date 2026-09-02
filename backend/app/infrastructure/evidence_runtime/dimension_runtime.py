@@ -564,7 +564,7 @@ def _planning_evidence_query(
 
     The query is only a retrieval input.  It does not resolve a name or
     manufacture a spatial identity.  Typed L1 location facts add recall for
-    names that are absent from the KG/bundle labels; the EvidenceGraph still
+    names that are absent from the KG/DATA labels; Evidence retrieval still
     decides which Bundle feature is authoritative.
     """
     config = state.get("config") or {}
@@ -763,13 +763,8 @@ async def run_rag(
         project_cognition_digest=project_cognition.cognition_digest,
         project_scope=project_cognition.spatial_scope,
     )
-    world_model_mode = str(
-        getattr(context, "world_model_mode", "off") or "off"
-    ).strip().lower()
-    v2_mode = world_model_mode in {"prefer_v2", "v2_only"}
-    shadow_mode = world_model_mode == "shadow"
     try:
-        if (v2_mode or shadow_mode) and getattr(context, "data_resource_catalog", None) is not None:
+        if getattr(context, "data_resource_catalog", None) is not None:
             from app.contracts.evidence.requirement_contracts import EvidenceRequirement
             from app.modules.evidence.application import EvidenceApplication, EvidenceContext
 
@@ -784,7 +779,7 @@ async def run_rag(
                 allowed_inference="exact",
                 evidence_role="dimension_context",
             )
-            v2_result = await EvidenceApplication().retrieve(
+            result = await EvidenceApplication().retrieve(
                 requirement,
                 EvidenceContext.from_runtime_context(
                     context,
@@ -798,37 +793,6 @@ async def run_rag(
                 ),
                 candidate_limit=32,
             )
-            if shadow_mode:
-                # Legacy remains the read authority in shadow mode.  Execute
-                # the V2 query beside it and record only opaque candidate refs.
-                legacy_result = await retrieve_evidence(
-                    request,
-                    session_id=session_id,
-                    village_name=str(
-                        getattr(context, "village_name", "")
-                        or config.get("village_name", "")
-                        or ""
-                    ),
-                    **external_kwargs,
-                )
-                result = legacy_result
-                try:
-                    from app.infrastructure.cognition_runtime.shadow_compare import record_shadow_stage
-
-                    record_shadow_stage(
-                        session_id=session_id,
-                        stage=request.stage or "L1",
-                        dimension_key=dimension_key,
-                        v1_refs=getattr(getattr(legacy_result, "evidence_packet", None), "candidate_refs", ()) or (),
-                        v2_refs=getattr(getattr(v2_result, "evidence_packet", None), "candidate_refs", ()) or (),
-                        details="shadow evidence retrieval; legacy result returned",
-                        v1_available=getattr(legacy_result, "evidence_packet", None) is not None,
-                        v2_available=getattr(v2_result, "evidence_packet", None) is not None,
-                    )
-                except Exception as exc:  # shadow audit must not change authority
-                    logger.debug("[dimension_runtime] shadow stage diff failed: %s", exc)
-            else:
-                result = v2_result
         else:
             result = await retrieve_evidence(
                 request,
@@ -976,13 +940,8 @@ async def run_targeted_evidence(
         project_cognition_digest=project_cognition.cognition_digest,
         project_scope=project_cognition.spatial_scope,
     )
-    world_model_mode = str(
-        getattr(context, "world_model_mode", "off") or "off"
-    ).strip().lower()
-    v2_mode = world_model_mode in {"prefer_v2", "v2_only"}
-    shadow_mode = world_model_mode == "shadow"
     try:
-        if (v2_mode or shadow_mode) and getattr(context, "data_resource_catalog", None) is not None:
+        if getattr(context, "data_resource_catalog", None) is not None:
             from app.contracts.evidence.requirement_contracts import EvidenceRequirement
             from app.modules.evidence.application import EvidenceApplication, EvidenceContext
 
@@ -997,7 +956,7 @@ async def run_targeted_evidence(
                 allowed_inference="exact",
                 evidence_role="dimension_followup",
             )
-            v2_result = await EvidenceApplication().retrieve(
+            result = await EvidenceApplication().retrieve(
                 requirement,
                 EvidenceContext.from_runtime_context(
                     context,
@@ -1011,34 +970,6 @@ async def run_targeted_evidence(
                 ),
                 candidate_limit=32,
             )
-            if shadow_mode:
-                legacy_result = await retrieve_evidence(
-                    request,
-                    session_id=session_id,
-                    village_name=str(
-                        getattr(context, "village_name", "")
-                        or config.get("village_name", "")
-                        or ""
-                    ),
-                )
-                result = legacy_result
-                try:
-                    from app.infrastructure.cognition_runtime.shadow_compare import record_shadow_stage
-
-                    record_shadow_stage(
-                        session_id=session_id,
-                        stage=request.stage or "L1",
-                        dimension_key=dimension_key,
-                        v1_refs=getattr(getattr(legacy_result, "evidence_packet", None), "candidate_refs", ()) or (),
-                        v2_refs=getattr(getattr(v2_result, "evidence_packet", None), "candidate_refs", ()) or (),
-                        details="shadow targeted evidence; legacy result returned",
-                        v1_available=getattr(legacy_result, "evidence_packet", None) is not None,
-                        v2_available=getattr(v2_result, "evidence_packet", None) is not None,
-                    )
-                except Exception as exc:
-                    logger.debug("[dimension_runtime] shadow targeted diff failed: %s", exc)
-            else:
-                result = v2_result
         else:
             result = await retrieve_evidence(
                 request,
@@ -1072,8 +1003,7 @@ async def run_targeted_evidence(
                     "spatial_refs": list(fact.spatial_refs or [])[:8],
                     "evidence_span": fact.evidence_span[:1200],
                     "source_locator": fact.source_locator,
-                    "feature_bsm": fact.feature_bsm,
-                    "related_parcel_bsms": list(fact.related_parcel_bsms or [])[:8],
+                    "fields": dict(fact.fields or {}),
                 }
                 for fact in result.evidence_bundle.facts[:24]
             ],

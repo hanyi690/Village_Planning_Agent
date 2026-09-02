@@ -365,7 +365,7 @@ def _merge_l1_evidence_packet_maps(
             for ref in list(getattr(page, "candidate_refs", None) or []):
                 key = str(
                     getattr(ref, "candidate_id", "")
-                    or getattr(getattr(ref, "identity", None), "bundle_feature_bsm", "")
+                    or getattr(getattr(ref, "identity", None), "source_feature_id", "")
                     or ref
                 )
                 if key and key not in seen_refs:
@@ -940,143 +940,6 @@ def _spec_declares_required_source_collection(spec: Any) -> bool:
     )
 
 
-def _unique_evidence_geometry(context: Any, mention: str) -> Any:
-    """Return one source-backed point geometry for an unbound facility mention."""
-    graph = getattr(context, "evidence_graph", None)
-    if graph is None or not mention or not hasattr(graph, "resolve_mention"):
-        return None
-    normalized_mention = str(mention).strip()
-    facts = list(
-        getattr(context, "location_mentions", None)
-        or getattr(context, "location_facts", None)
-        or []
-    )
-    role_markers = {"facility", "设施", "现状设施", "公共服务设施", "landmark"}
-    has_facility_fact = any(
-        normalized_mention
-        in {
-            str(getattr(fact, "mention", "") or "").strip(),
-            str(getattr(fact, "normalized_name", "") or "").strip(),
-        }
-        and str(getattr(fact, "role", "") or "").strip() in role_markers
-        for fact in facts
-    )
-    if facts and not has_facility_fact:
-        return None
-    cache = getattr(context, "_facility_geometry_cache", None)
-    if cache is None:
-        cache = {}
-        setattr(context, "_facility_geometry_cache", cache)
-    if normalized_mention in cache:
-        return cache[normalized_mention]
-    try:
-        result = graph.resolve_mention(normalized_mention, role="facility")
-    except Exception:
-        return None
-    workspace = getattr(context, "workspace", None)
-    points = getattr(workspace, "points", None) if workspace is not None else None
-
-    def _bundle_point_for_bsm(bsm: str) -> Any | None:
-        if not bsm or points is None:
-            return None
-        for layer_name in ("facilities_current", "annotations_current"):
-            try:
-                layer = points.get(layer_name) if hasattr(points, "get") else None
-                for feature in list(layer or []):
-                    if str(getattr(feature, "bsm", "") or "").strip() != bsm:
-                        continue
-                    raw_geometry = getattr(feature, "geometry", None)
-                    geometry = shape(raw_geometry) if isinstance(raw_geometry, dict) else raw_geometry
-                    if geometry is not None and not geometry.is_empty and geometry.geom_type == "Point":
-                        return geometry
-            except Exception:
-                continue
-        return None
-
-    spatial = []
-    for candidate in list(getattr(result, "candidates", None) or []):
-        feature_bsm = str(
-            getattr(candidate, "feature_bsm", "")
-            or getattr(candidate, "source_bsm", "")
-            or ""
-        ).strip()
-        geometry = _bundle_point_for_bsm(feature_bsm)
-        geometry_ref_value = str(getattr(candidate, "geometry_ref", "") or "").strip()
-        if geometry is None and geometry_ref_value.startswith("resource:"):
-            catalog = getattr(context, "data_resource_catalog", None)
-            try:
-                payload = catalog.resolve_geometry(resource_ref=geometry_ref_value)
-                geometry = shape(payload) if isinstance(payload, dict) else None
-                if geometry is not None and (
-                    geometry.is_empty or not geometry.is_valid or geometry.geom_type != "Point"
-                ):
-                    geometry = None
-            except Exception:
-                geometry = None
-        if geometry is None:
-            continue
-        spatial.append((candidate, geometry))
-    if len(spatial) != 1:
-        if len(cache) >= 64:
-            cache.clear()
-        cache[normalized_mention] = None
-        return None
-    candidate, point_geometry = spatial[0]
-    feature_bsm = str(
-        getattr(candidate, "feature_bsm", "")
-        or getattr(candidate, "source_bsm", "")
-        or ""
-    ).strip()
-    geometry_ref = point_geometry.wkt
-    candidate_resource_ref = str(getattr(candidate, "geometry_ref", "") or "").strip()
-    candidate_entity_ref = str(getattr(candidate, "entity_ref", "") or "").strip()
-    candidate_feature_ref = str(
-        getattr(candidate, "source_feature_id", "") or ""
-    ).strip()
-    geometry = GeometryRef(
-        wkt=geometry_ref,
-        source_ref=(
-            candidate_resource_ref
-            if candidate_resource_ref.startswith("resource:")
-            else candidate_feature_ref or (f"bundle:feature:{feature_bsm}" if feature_bsm else "")
-        ),
-        source_feature_id=candidate_feature_ref,
-        entity_ref=candidate_entity_ref,
-        entity_refs=([candidate_entity_ref] if candidate_entity_ref else []),
-        resource_ref=(
-            candidate_resource_ref
-            if candidate_resource_ref.startswith("resource:")
-            else ""
-        ),
-        source_refs=list(
-            dict.fromkeys(
-                [
-                    candidate_feature_ref,
-                    candidate_resource_ref if candidate_resource_ref.startswith("resource:") else "",
-                    *list(getattr(candidate, "evidence_refs", None) or []),
-                ]
-            )
-        ),
-        source_bsms=list(
-            dict.fromkeys(
-                str(item)
-                for item in (
-                    getattr(candidate, "related_parcel_bsms", None)
-                    or getattr(candidate, "source_bsms", None)
-                    or []
-                )
-                if str(item).strip()
-            )
-        ),
-        feature_bsms=[feature_bsm] if feature_bsm else [],
-        feature_kind="facility_point",
-    )
-    if len(cache) >= 64:
-        cache.clear()
-    cache[normalized_mention] = geometry
-    return geometry
-
-
 def _parcel_geometry_records(
     context: Optional[PlanningContext],
     source_parcels: List[str],
@@ -1551,10 +1414,8 @@ def ground_aggregate(
     search_scope_bindings: list[GroundingBinding] = []
 
     for index, spec in enumerate(specs):
-        # Design 06/12: TARGET_PROJECTION retains unresolved_reason as a
-        # diagnostic, it must not skip resolution.  GROUND still attempts the
-        # EvidenceGraph / gazetteer / directional fallbacks; specs that
-        # cannot be bound stay unresolved and enter the HUMAN gate.
+        # TARGET_PROJECTION retains unresolved_reason as a diagnostic; GROUND
+        # resolves only through the typed DATA/WM candidate boundary.
         resolve_kwargs: Dict[str, Any] = {}
         if evidence_packets is not None:
             resolve_kwargs["evidence_packet"] = (evidence_packets or {}).get(
@@ -1563,50 +1424,6 @@ def ground_aggregate(
         resolved = _enforce_search_scope_invariant(
             resolver.resolve_spec(spec, **resolve_kwargs)
         )
-        mention = resolver._spec_mention(spec) or ""
-        evidence_geometry = _unique_evidence_geometry(context, mention)
-        if (
-            evidence_geometry is not None
-            and not resolved.reference_geometries
-            and not _search_scope_blocks_materialization(resolved)
-        ):
-            resolved = replace(
-                resolved,
-                final_bsms=list(resolved.final_bsms),
-                reference_geometry_wkt=evidence_geometry.wkt,
-                reference_geometries=[evidence_geometry],
-                feature_bsms=list(
-                    dict.fromkeys(
-                        [
-                            *list(getattr(resolved, "feature_bsms", None) or []),
-                            *list(getattr(evidence_geometry, "feature_bsms", None) or []),
-                        ]
-                    )
-                ),
-                source_feature_ids=list(getattr(resolved, "source_feature_ids", None) or []),
-                entity_refs=list(
-                    dict.fromkeys(
-                        [
-                            *list(getattr(resolved, "entity_refs", None) or []),
-                            *list(getattr(evidence_geometry, "entity_refs", None) or []),
-                            getattr(evidence_geometry, "entity_ref", ""),
-                        ]
-                    )
-                ),
-                part_refs=list(
-                    dict.fromkeys(
-                        [
-                            *list(getattr(resolved, "part_refs", None) or []),
-                            *list(getattr(evidence_geometry, "part_refs", None) or []),
-                            getattr(evidence_geometry, "part_ref", ""),
-                        ]
-                    )
-                ),
-                provenance={
-                    **dict(resolved.provenance or {}),
-                    "path": f"{str((resolved.provenance or {}).get('path', '') or 'resolve_spec')}+evidence_geometry",
-                },
-            )
         resolved = _enforce_search_scope_invariant(resolved)
         spec_type = getattr(spec, "type", "")
         search_scope_payload = _search_scope_payload(getattr(resolved, "search_scope", None))
@@ -1809,8 +1626,8 @@ def ground_aggregate(
                 object_identity = getattr(object_, "identity", None)
                 relation_refs = [
                     relation_id,
-                    str(getattr(subject_identity, "bundle_feature_bsm", "") or ""),
-                    str(getattr(object_identity, "bundle_feature_bsm", "") or ""),
+                    str(getattr(subject_identity, "source_feature_id", "") or ""),
+                    str(getattr(object_identity, "source_feature_id", "") or ""),
                     str(getattr(subject, "geometry_ref", "") or ""),
                     str(getattr(object_, "geometry_ref", "") or ""),
                     *(getattr(relation, "provenance_refs", None) or []),
@@ -2673,103 +2490,54 @@ class GroundApplication:
             if isinstance((state.get("artifact_refs") or {}).get("l1_snapshot"), dict)
             else getattr((state.get("artifact_refs") or {}).get("l1_snapshot"), "digest", "")
         )
-        is_v2 = str(getattr(context, "world_model_mode", "off") or "off").strip().lower() in {"shadow", "prefer_v2", "v2_only"}
-        if not is_v2:
-            from app.infrastructure.ground_runtime.compatibility import EvidenceGraph
-
-            context.evidence_graph = EvidenceGraph.build(context)
-        if is_v2:
-            from app.modules.ground.projections import (
-                build_l1_identity_work_items,
+        mode = str(getattr(context, "world_model_mode", "") or "").strip().lower()
+        if mode not in {"shadow", "prefer_v2", "v2_only"}:
+            raise RuntimeError(
+                "L1_LOCATION_GROUNDING_CONTEXT_MISSING: v2 World Model mode is required"
             )
+        is_v2 = mode in {"shadow", "prefer_v2", "v2_only"}
+        from app.modules.ground.projections import build_l1_identity_work_items
 
-            mentions, observations = build_l1_identity_work_items(mentions)
-            observation_store = None
-        else:
-            from app.infrastructure.ground_runtime.compatibility import BindingStore, ObservationStore
-
-            observation_store = ObservationStore()
-            observations = observation_store.from_location_mentions(mentions)
+        mentions, observations = build_l1_identity_work_items(mentions)
         context.location_mentions = mentions
         context.location_facts = mentions
         context.evidence_observations = observations
-        from app.core.llm_config import get_llm_settings
-
-        if is_v2:
-            evidence_packets, evidence_diagnostics = (
-                _load_l1_evidence_packets(state, mentions, observations)
-            )
-        else:
-            evidence_packets = {}
-            evidence_diagnostics = []
+        evidence_packets, evidence_diagnostics = _load_l1_evidence_packets(
+            state,
+            mentions,
+            observations,
+        )
         l1_iterations: list[dict[str, Any]] = []
         previous_signature: tuple[Any, ...] | None = None
         previous_binding_statuses: dict[str, str] = {}
         bindings: list[Any] = []
-        if is_v2:
-            deterministic_started = perf_counter()
-            bindings = resolve_l1_location_mentions(
-                context,
-                max_rounds=1,
+        deterministic_started = perf_counter()
+        bindings = resolve_l1_location_mentions(context, max_rounds=1)
+        bindings = _attach_l1_binding_source_mentions(bindings, observations)
+        context.grounded_bindings = bindings
+        retry_observation_ids = _l1_retry_observations(bindings)
+        previous_binding_statuses = {
+            str(getattr(binding, "mention_ref", "") or "").strip(): str(
+                getattr(binding, "status", "unresolved") or "unresolved"
             )
-            bindings = _attach_l1_binding_source_mentions(
-                bindings,
-                observations,
-            )
-            context.grounded_bindings = bindings
-            retry_observation_ids = _l1_retry_observations(bindings)
-            previous_binding_statuses = {
-                str(getattr(binding, "mention_ref", "") or "").strip(): str(
-                    getattr(binding, "status", "unresolved") or "unresolved"
-                )
-                for binding in bindings
-                if str(getattr(binding, "mention_ref", "") or "").strip()
-            }
-            l1_iterations.append({
-                "phase": "indexed_data_kg_resolution",
-                "active_observation_ids": sorted(previous_binding_statuses),
-                "binding_statuses": dict(sorted(previous_binding_statuses.items())),
-                "retry_observation_ids": sorted(retry_observation_ids),
-                "elapsed_ms": round(
-                    (perf_counter() - deterministic_started) * 1000,
-                    1,
-                ),
-            })
-        else:
-            retry_observation_ids = {
-                str(getattr(item, "observation_id", "") or "").strip()
-                for item in observations
-                if str(getattr(item, "observation_id", "") or "").strip()
-            }
-        max_rounds = (
-            1
-            if is_v2
-            else max(
-                1,
-                min(
-                    int(get_llm_settings().ground_max_recovery_rounds or 1),
-                    3,
-                ),
-            )
-        )
+            for binding in bindings
+            if str(getattr(binding, "mention_ref", "") or "").strip()
+        }
+        l1_iterations.append({
+            "phase": "indexed_data_kg_resolution",
+            "active_observation_ids": sorted(previous_binding_statuses),
+            "binding_statuses": dict(sorted(previous_binding_statuses.items())),
+            "retry_observation_ids": sorted(retry_observation_ids),
+            "elapsed_ms": round((perf_counter() - deterministic_started) * 1000, 1),
+        })
+        max_rounds = 1
         for round_index in range(max_rounds):
             active_pairs = [
                 (mention, observation)
                 for mention, observation in zip(mentions, observations)
-                if (
-                    str(
-                        getattr(observation, "observation_id", "") or ""
-                    ).strip()
-                    in retry_observation_ids
-                    if is_v2
-                    else (
-                        round_index == 0
-                        or str(
-                            getattr(observation, "observation_id", "") or ""
-                        ).strip()
-                        in retry_observation_ids
-                    )
-                )
+                if str(
+                    getattr(observation, "observation_id", "") or ""
+                ).strip() in retry_observation_ids
             ]
             if not active_pairs:
                 break
@@ -2842,7 +2610,7 @@ class GroundApplication:
                     tuple(
                         str(
                             getattr(ref, "candidate_id", "")
-                            or getattr(getattr(ref, "identity", None), "bundle_feature_bsm", "")
+                            or getattr(getattr(ref, "identity", None), "source_feature_id", "")
                             or ref
                         )
                         for ref in list(
@@ -2886,7 +2654,7 @@ class GroundApplication:
             if round_index > 0 and signature == previous_signature:
                 l1_iterations[-1]["stop_reason"] = "evidence_wave_unchanged"
                 break
-            if is_v2 and retry_observation_ids:
+            if retry_observation_ids:
                 l1_iterations[-1]["stop_reason"] = (
                     "immediate_evidence_exhausted_typed_gap_required"
                 )
@@ -3149,27 +2917,6 @@ class GroundApplication:
             )
             observation_ref_payload = observation_ref_data
             binding_ref_payload = binding_ref_data
-        else:
-            observation_ref = observation_store.put_snapshot(
-                dict(state),
-                observations,
-                parent_digest=context.l1_snapshot_ref,
-            )
-            binding_state = {
-                **dict(state),
-                "artifact_refs": {
-                    **dict(state.get("artifact_refs") or {}),
-                    "l1_observations": observation_ref.model_dump(mode="json"),
-                },
-            }
-            binding_ref = BindingStore().put_snapshot(
-                binding_state,
-                bindings,
-                observation_snapshot_ref=observation_ref.digest,
-                parent_digest=observation_ref.digest,
-            )
-            observation_ref_payload = observation_ref.model_dump(mode="json")
-            binding_ref_payload = binding_ref.model_dump(mode="json")
         context.grounded_bindings = bindings
         from app.contracts.evidence.stage_contracts import (
             EvidenceGapScheduleRecord,

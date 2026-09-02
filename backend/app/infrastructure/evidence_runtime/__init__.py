@@ -11,7 +11,6 @@ __all__ = [
     "retrieve_evidence_for_gate_sync",
     "gate_evidence_digest",
     "clear_session_evidence_cache",
-    "EvidenceGraph",
 ]
 
 
@@ -54,8 +53,4 @@ def __getattr__(name: str):
             "ExternalSearchDecision": ExternalSearchDecision,
             "ExternalSearchPolicy": ExternalSearchPolicy,
         }[name]
-    if name == "EvidenceGraph":
-        from .evidence_graph import EvidenceGraph
-
-        return EvidenceGraph
     raise AttributeError(name)

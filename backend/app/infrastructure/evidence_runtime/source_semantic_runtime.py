@@ -43,7 +43,7 @@ MAX_KG_SEMANTIC_CANDIDATES = 128
 _NON_SEMANTIC_PROPERTY_TOKENS = (
     "geometry", "coordinate", "longitude", "latitude", "经度", "纬度",
     "wkt", "shape", "source_feature_id", "source_uri", "source_path",
-    "feature_bsm", "source_bsm", "snapshot_digest", "source_dataset",
+    "snapshot_digest", "source_dataset",
     "source_dataset_ref", "source_feature_ref", "source_feature_digest",
     "source_content_digest", "source_label", "source_feature_index",
     "content_digest", "feature_index", "validity_status", "diagnostics",
@@ -150,12 +150,7 @@ def _semantic_properties(feature: object) -> tuple[str, dict[str, str]]:
 
 
 def collect_authoritative_source_features(context: Any) -> dict[str, list[object]]:
-    """Collect source features with bounded identity.
-
-    Compatibility layer groups are retained, then generic DATA features are
-    added by geometry kind.  No configured layer name is required; arbitrary
-    point/line/polygon resources therefore participate in semantic binding.
-    """
+    """Collect current DATA source features with bounded identity."""
     workspace = getattr(context, "workspace", None)
     point_layers = getattr(workspace, "points", None)
     line_layers = getattr(workspace, "lines", None)
@@ -168,9 +163,7 @@ def collect_authoritative_source_features(context: Any) -> dict[str, list[object
         for layer_name in layer_names:
             values = get(layer_name) if callable(get) else []
             for feature in values or []:
-                source_id = _feature_source_id(feature) or str(
-                    getattr(feature, "bsm", "") or ""
-                ).strip()
+                source_id = _feature_source_id(feature)
                 identity = source_id or f"object:{id(feature)}"
                 if identity in seen:
                     continue
@@ -232,14 +225,7 @@ def source_feature_descriptor(
     group_key: str,
 ) -> SourceFeatureDescriptor | None:
     """Project one feature to semantic metadata without copying geometry."""
-    raw = getattr(feature, "_raw", {}) or {}
-    if not isinstance(raw, dict):
-        raw = {}
     source_feature_id = _feature_source_id(feature)
-    if not source_feature_id:
-        feature_bsm = str(getattr(feature, "bsm", "") or "").strip()
-        if feature_bsm:
-            source_feature_id = f"bundle:{group_key}:{feature_bsm}"
     if not source_feature_id:
         return None
     label, semantic_properties = _semantic_properties(feature)
@@ -423,7 +409,7 @@ def install_source_semantic_snapshot(
     context: Any,
     snapshot: SourceSemanticClassificationSnapshot,
 ) -> None:
-    """Install a verified snapshot and rebuild the single spatial boundary."""
+    """Install a verified semantic snapshot for subsequent DATA retrieval."""
     current_digest = str(
         getattr(getattr(context, "data_snapshot", None), "digest", "") or ""
     )
@@ -441,13 +427,6 @@ def install_source_semantic_snapshot(
         for decision in snapshot.decisions
     }
     context.source_semantic_fingerprint = snapshot.fingerprint
-    from app.infrastructure.evidence_runtime.evidence_graph import EvidenceGraph
-
-    context.evidence_graph = EvidenceGraph.build(context)
-    context.evidence_graph_key = (
-        f"{getattr(context, 'evidence_graph_key', '')}:"
-        f"source-semantic:{snapshot.fingerprint}"
-    )
 
 
 def _as_enabled(value: Any) -> bool:
@@ -497,7 +476,7 @@ async def classify_source_semantics(
             "code": "SOURCE_SEMANTIC_LLM_DISABLED",
             "message": (
                 "MiniMax source-semantic classification is disabled; raw labels are not "
-                "promoted and no compatibility mapping is used"
+                "promoted without an accepted semantic decision"
             ),
         })
         context.source_semantic_diagnostics = list(diagnostics)
@@ -559,7 +538,7 @@ async def classify_source_semantics(
     except Exception as exc:
         diagnostics.append({
             "code": "SOURCE_SEMANTIC_GRAPH_REBUILD_FAILED",
-            "message": f"accepted overlay was not installed into EvidenceGraph: {exc}",
+            "message": f"accepted source-semantic overlay was not installed: {exc}",
         })
     accepted = accepted_semantic_decisions(snapshot)
     nonaccepted = [

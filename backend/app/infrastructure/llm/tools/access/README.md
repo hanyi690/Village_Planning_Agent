@@ -7,7 +7,7 @@
 
 ## 职责边界
 
-**负责**：先从 bundle 快照 / EvidenceGraph 取得空间事实和来源引用，再按引用展开报告/RAG 文本，向 LLM 提供紧凑语义化读取，**绝不给原始坐标转储 / 原始 SPARQL / 全量报告文本**。
+**负责**：先从 EvidencePacket 和 DATA/WM 快照取得空间事实和来源引用，再按引用展开报告/RAG 文本，向 LLM 提供紧凑语义化读取，**绝不给原始坐标转储 / 原始 SPARQL / 全量报告文本**。
 
 **不负责**：
 - 不写数据 / 不触发构建（只读路径）
@@ -26,7 +26,7 @@
 | `knowledge.py` | `knowledge_graph` | 会话 KG 语义查询（包装 `kg/queries/semantic.py` + `cognition.py`），token 预算 |
 | `rag.py` | `rag_search` / `index_bundle_texts` | 文本清单检索（`documents.document_refs` 为权威范围，正文按 ref 读取，无全库漂移）；全部结果经 `TokenBudget` 标注 |
 | `reports.py` | `layer_reports` | bundle `report_refs` progressive disclosure：先 manifest/summary，仅显式 `include_content` 才按 report_id 物化全文 |
-| `evidence.py` | `evidence_query` / geometry bridge | EvidenceGraph 候选、L1/KG topology 和 bundle feature ref；几何只按 opaque ref 回到 bundle |
+| `evidence.py` | `data_geometry_by_ref` | 仅按 EvidencePacket 返回的 DATA resource/representation/geometry ref 读取几何 |
 | `shared.py` | 共享助手 | bundle 解析（内存缓存 → 版本化快照 → 实时构建）+ `budget_check` 预算 |
 
 **读路径优先级**（shared.py）：① 内存缓存 session bundle（最快）→ ② 持久化版本化快照（`BundleStore`，确定性/不可变）→ ③ 实时构建（`DataCatalog` 兜底）。

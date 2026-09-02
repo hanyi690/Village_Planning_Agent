@@ -34,14 +34,12 @@ _SOURCE_FAMILY_ALIASES = {
     "l1_typed_fact": "l1",
     "l1_observation": "l1",
     "l1_semantic_context": "l1",
-    "bundle": "bundle",
-    "bundle_feature": "bundle",
-    "bundle_feature_identity": "bundle",
-    "bundle_parcel_identity": "bundle",
-    "bundle_layer_stat": "bundle",
-    "gis_layer": "bundle",
-    "feature_identity": "bundle",
-    "spatial": "bundle",
+    "data": "data",
+    "data_feature": "data",
+    "data_feature_identity": "data",
+    "gis_layer": "data",
+    "feature_identity": "data",
+    "spatial": "data",
     "text": "text",
     "report": "text",
     "analysis_report": "text",
@@ -84,7 +82,7 @@ _MAX_NESTED_ITEMS = 32
 _AUTHORITY_RANK = {
     "authoritative": 6,
     "authoritative_geometry": 6,
-    "bundle_source": 5,
+    "data_source": 5,
     "canonical": 5,
     "verified": 4,
     "kg": 4,
@@ -248,11 +246,11 @@ def _project_fact(
     locators = _strings(fact.source_locator)
     spatial_refs = _merge_refs(
         fact.spatial_refs,
-        fact.feature_bsm,
-        fact.related_parcel_bsms,
         _field(fields, "spatial_refs", "entity_refs"),
     )
-    subject_ref = _field(fields, "subject_ref", "subject_scope") or fact.feature_bsm.strip()
+    subject_ref = _field(fields, "subject_ref", "subject_scope") or (
+        spatial_refs[0] if spatial_refs else ""
+    )
     predicate = _field(fields, "predicate", "semantic_type", "fact_kind") or fact.fact_type
     value = _field(fields, "value") or fact.statement.strip()
     normalized_value = _field(fields, "normalized_value") or value
@@ -350,8 +348,12 @@ def _project_fact(
 
 
 def _candidate_identity(ref: FeatureEvidenceRef) -> dict[str, str]:
+    entity_ref = next(
+        (value.strip() for value in ref.entity_refs if value.strip()),
+        ref.identity.source_feature_id.strip() or ref.resource_ref.strip(),
+    )
     return {
-        "bsm": ref.identity.bundle_feature_bsm.strip(),
+        "entity_ref": entity_ref,
         "name": ref.identity.canonical_name.strip(),
         "entity_type": ref.identity.entity_type.strip(),
         "role": ref.identity.role.strip(),
@@ -362,20 +364,20 @@ def _candidate_identity(ref: FeatureEvidenceRef) -> dict[str, str]:
 
 def _project_candidate(ref: FeatureEvidenceRef, packet: EvidencePacket) -> tuple[dict[str, Any], str, str] | None:
     identity_data = _candidate_identity(ref)
-    bsm = identity_data["bsm"]
-    if not bsm:
+    entity_ref = identity_data["entity_ref"]
+    if not entity_ref:
         return None
-    name = identity_data["name"] or identity_data["role"] or identity_data["entity_type"] or bsm
-    source_refs = _merge_refs(f"bundle:feature:{bsm}", ref.provenance_refs)
+    name = identity_data["name"] or identity_data["role"] or identity_data["entity_type"] or entity_ref
+    source_refs = _merge_refs(ref.resource_ref, ref.provenance_refs)
     evidence_refs = _merge_refs(ref.relation_refs, ref.l1_fact_refs)
     snapshot_refs = _merge_refs(
-        ref.identity.bundle_snapshot_digest,
-        packet.bundle_snapshot_digest,
+        packet.data_snapshot_ref,
+        packet.data_snapshot_digest,
+        ref.source_snapshot_ref,
         ref.l1_snapshot_ref,
-        packet.l1_snapshot_ref,
     )
     identity = {
-        "subject_ref": bsm,
+        "subject_ref": entity_ref,
         "predicate": "feature_identity",
         "normalized_value": name,
         "scope": {},
@@ -385,10 +387,10 @@ def _project_candidate(ref: FeatureEvidenceRef, packet: EvidencePacket) -> tuple
     conflict_identity = dict(identity)
     conflict_identity.pop("normalized_value")
     projection = {
-        "fact_id": f"bundle:feature:{bsm}",
-        "fact_key": "bundle_feature_identity",
-        "statement": f"{name} 的 bundle feature BSM 为 {bsm}",
-        "subject_ref": bsm,
+        "fact_id": f"data:feature:{entity_ref}",
+        "fact_key": "data_feature_identity",
+        "statement": f"{name} 的 DATA source feature 为 {entity_ref}",
+        "subject_ref": entity_ref,
         "predicate": "feature_identity",
         "value": name,
         "normalized_value": name,
@@ -397,20 +399,25 @@ def _project_candidate(ref: FeatureEvidenceRef, packet: EvidencePacket) -> tuple
         "valid_time": {},
         "qualifiers": {},
         "geometry_ref": identity_data["geometry_ref"],
-        "entity_refs": _merge_refs(ref.entity_refs, ref.related_parcel_bsms, bsm),
-        "source_families": ["bundle"],
-        "source_kinds": ["bundle_feature"],
+        "entity_refs": _merge_refs(ref.entity_refs, entity_ref),
+        "source_families": ["data"],
+        "source_kinds": ["data_feature"],
         "source_refs": source_refs,
         "evidence_refs": evidence_refs,
         "authority": (
             "authoritative_geometry"
-            if ref.geometry_authority in {"bundle", "data_resource_catalog"}
+            if ref.geometry_authority == "data_resource_catalog"
             else "advisory"
         ),
-        "locators": [bsm],
+        "locators": list(_merge_refs(
+            entity_ref,
+            ref.resource_ref,
+            ref.geometry_ref,
+            ref.representation_refs,
+        )),
         "snapshot_refs": snapshot_refs,
         "conflict_group_id": "",
-        "lineage_refs": _merge_refs(source_refs, evidence_refs, [bsm], snapshot_refs),
+        "lineage_refs": _merge_refs(source_refs, evidence_refs, [entity_ref], snapshot_refs),
         "attributes": {
             "canonical_name": ref.identity.canonical_name,
             "entity_type": ref.identity.entity_type,
@@ -424,7 +431,7 @@ def _project_candidate(ref: FeatureEvidenceRef, packet: EvidencePacket) -> tuple
             if ref.selection_confidence is not None
             else ref.retrieval_score
         ),
-        "status": "verified" if ref.identity.bsm_kind == "source" else "observed",
+        "status": "verified",
     }
     return projection, _canonical_json(identity), _canonical_json(conflict_identity)
 
@@ -435,41 +442,45 @@ def _project_relation(
 ) -> tuple[dict[str, Any], str, str] | None:
     subject = _candidate_identity(relation.subject)
     object_data = _candidate_identity(relation.object)
-    if not subject["bsm"] or not object_data["bsm"]:
+    if not subject["entity_ref"] or not object_data["entity_ref"]:
         return None
     relation_id = relation.relation_id.strip()
     predicate = relation.predicate.strip()
     source_refs = _strings(relation.provenance_refs)
     evidence_refs = _strings(relation_id)
-    snapshot_refs = _merge_refs(packet.bundle_snapshot_digest, packet.l1_snapshot_ref)
+    snapshot_refs = _merge_refs(
+        packet.data_snapshot_ref,
+        packet.data_snapshot_digest,
+        packet.l1_snapshot_ref,
+    )
     identity = {
-        "subject_ref": subject["bsm"],
+        "subject_ref": subject["entity_ref"],
         "predicate": predicate,
-        "normalized_value": object_data["bsm"],
-        "scope": {"object_ref": object_data["bsm"]},
+        "normalized_value": object_data["entity_ref"],
+        "scope": {"object_ref": object_data["entity_ref"]},
         "valid_time": {},
         "qualifiers": {},
     }
     conflict_identity = dict(identity)
     conflict_identity.pop("normalized_value")
-    subject_name = subject["name"] or subject["bsm"]
-    object_name = object_data["name"] or object_data["bsm"]
+    subject_name = subject["name"] or subject["entity_ref"]
+    object_name = object_data["name"] or object_data["entity_ref"]
     projection = {
         "fact_id": relation_id or _hash_ref("kg:relation", identity),
         "fact_key": "spatial_relation",
         "statement": f"{subject_name} 与 {object_name} 存在空间关系 {predicate}",
-        "subject_ref": subject["bsm"],
+        "subject_ref": subject["entity_ref"],
         "predicate": predicate,
-        "value": object_data["bsm"],
-        "normalized_value": object_data["bsm"],
+        "value": object_data["entity_ref"],
+        "normalized_value": object_data["entity_ref"],
         "unit": str(relation.metric_unit or "").strip(),
-        "scope": {"object_ref": object_data["bsm"]},
+        "scope": {"object_ref": object_data["entity_ref"]},
         "valid_time": {},
         "qualifiers": {},
         "geometry_ref": subject["geometry_ref"],
-        "entity_refs": _merge_refs(subject["bsm"], object_data["bsm"]),
-        "source_families": ["kg"],
-        "source_kinds": ["kg_relation"],
+        "entity_refs": _merge_refs(subject["entity_ref"], object_data["entity_ref"]),
+        "source_families": ["data"],
+        "source_kinds": ["spatial_relation"],
         "source_refs": list(source_refs),
         "evidence_refs": list(evidence_refs),
         "authority": "verified",
@@ -479,8 +490,8 @@ def _project_relation(
         "lineage_refs": _merge_refs(source_refs, evidence_refs, snapshot_refs),
         "attributes": {
             "relation_id": relation.relation_id,
-            "subject_bsm": subject["bsm"],
-            "object_bsm": object_data["bsm"],
+            "subject_ref": subject["entity_ref"],
+            "object_ref": object_data["entity_ref"],
             "subject_geometry_ref": subject["geometry_ref"],
             "object_geometry_ref": object_data["geometry_ref"],
             "metric_value": relation.metric_value,
@@ -665,14 +676,14 @@ def build_project_cognition(context: Any, scope: Any = None) -> ProjectCognition
     context_data, snapshot, data_digest, data_id = _snapshot_rows(context)
     workspace = context_data.get("workspace") or _context_get(context, "workspace")
     collections = snapshot["collections"]
-    bundle_layers = [row["key"] for row in collections]
+    data_layers = [row["key"] for row in collections]
     feature_counts = {row["key"]: row["feature_count"] for row in collections}
-    if not bundle_layers:
+    if not data_layers:
         for group_name in ("points", "lines", "polygons", "rasters", "tables"):
             group = _context_get(workspace, group_name, {}) or {}
             if hasattr(group, "keys"):
-                bundle_layers.extend(f"{group_name}.{key}" for key in group.keys())
-        bundle_layers = sorted(set(bundle_layers))
+                data_layers.extend(f"{group_name}.{key}" for key in group.keys())
+        data_layers = sorted(set(data_layers))
 
     kg = context_data.get("kg") or _context_get(context, "kg")
     graph = _context_get(kg, "g")
@@ -702,7 +713,7 @@ def build_project_cognition(context: Any, scope: Any = None) -> ProjectCognition
         }
     )
     snapshots = {
-        "bundle": {"id": data_id or data_digest, "digest": data_digest, "collections": collections},
+        "data": {"id": data_id or data_digest, "digest": data_digest, "collections": collections},
         "kg": {
             "id": str(context_data.get("kg_session_ref") or _context_get(context, "kg_session_ref", "") or ""),
             "version": str(context_data.get("kg_version") or _context_get(context, "kg_version", "") or ""),
@@ -732,12 +743,12 @@ def build_project_cognition(context: Any, scope: Any = None) -> ProjectCognition
     quality = _safe_value(_context_get(context, "quality", {}) or {})
     quality = dict(quality) if isinstance(quality, Mapping) else {}
     available = {
-        "bundle_layers": tuple(sorted(set(bundle_layers))),
-        "bundle_feature_counts": feature_counts,
+        "data_layers": tuple(sorted(set(data_layers))),
+        "data_feature_counts": feature_counts,
         "fact_types": tuple(fact_types),
         "kg_entity_types": tuple(sorted(kg_entity_types)),
         "kg_relations": tuple(sorted(kg_relations)),
-        "source_families": ("bundle", "kg", "l1", "text", "external"),
+        "source_families": ("data", "kg", "l1", "text", "external"),
     }
     payload = {
         "project_ref": str(context_data.get("village_name") or _context_get(context, "village_name", "") or ""),

@@ -1053,7 +1053,6 @@ def retrieve_catalog_evidence(
     world_model = _current_world_port(context)
     packet = EvidencePacket(
         request="; ".join(_text(item.statement) for item in requirements),
-        bundle_snapshot_digest="",
         data_snapshot_ref=_text(getattr(snapshot, "snapshot_id", "")),
         data_snapshot_digest=_text(getattr(snapshot, "digest", "")),
         world_model_snapshot_ref=_text(getattr(world_model, "snapshot_ref", "")),

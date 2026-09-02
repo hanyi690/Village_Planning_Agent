@@ -1,13 +1,13 @@
 """Flash-LLM semantic place-entity extractor for GROUND place-name resolution.
 
-Design 12 (PLACE_NAME_RESOLUTION): GROUND resolves closed-set specs through a
-deterministic EvidenceGraph; mentions that still cannot bind go to the gate.
+Design 12 (PLACE_NAME_RESOLUTION): GROUND resolves closed-set specs through
+deterministic DATA/WM retrieval; mentions that still cannot bind go to the gate.
 This module is the *self-service* middle step: before deferring to a HUMAN,
 GROUND asks the flash model to rewrite/segment the raw planning prose into a
 small list of typed place entities (mention / entity_type / role / source_span /
 confidence). The LLM only produces *semantic text and closed-set labels* - it
-never invents BSMs, coordinates or geometry. Final BSMs still come exclusively
-from EvidenceGraph / gazetteer / bundle.
+never invents identities, coordinates or geometry. Final geometries still come
+exclusively from typed DATA refs.
 
 The primary path uses Instructor/Pydantic so GROUND
 receives typed entities it can match to specific named features (road/water/

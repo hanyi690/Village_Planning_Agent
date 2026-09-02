@@ -9,7 +9,7 @@ place, all reading from a ``PlanningContext``:
     bind              deterministic bundle binding (BSM-first)
 
     Every method takes its facts from ``PlanningContext`` (workspace / gazetteer /
-KG / constraint index / EvidenceGraph) instead of each caller building its own
+    KG / constraint index) instead of each caller building its own
 gazetteer/KG/center fallback. Callers that only have a village name + anchors
 can use the module-level ``resolve_intent_anchors`` helper.
 
@@ -282,10 +282,6 @@ class SpatialResolver:
     def constraint_index(self):
         return self.context.constraint_index
 
-    @property
-    def evidence_graph(self):
-        return self.context.evidence_graph
-
     @staticmethod
     def _catalog_query_predicates(spec: Any) -> tuple[list[str], dict[str, Any]]:
         """Return only explicit predicates that can bound DATA recall."""
@@ -420,8 +416,8 @@ class SpatialResolver:
     ) -> None:
         """Join DATA geometry candidates back to their World Model entities.
 
-        Catalog fallback is intentionally independent of EvidenceGraph.  It
-        still must not lose cognition identity, otherwise a direct generic
+        Catalog fallback is independent of text-only retrieval.  It still
+        must not lose cognition identity, otherwise a direct generic
         GROUND query would produce executable geometry with no WorldEntity
         lineage.  The read port returns bounded rows in V2 and may return
         typed entities in the legacy adapter, so access is normalized here.
@@ -631,7 +627,6 @@ class SpatialResolver:
             kg=self.kg,
             gazetteer=self.gazetteer,
             constraint_index=self.constraint_index,
-            evidence_graph=self.evidence_graph,
         )
 
     # ── 2. Closed-set spec (PARSE -> GROUND boundary) ──────────────
@@ -651,8 +646,7 @@ class SpatialResolver:
         ``evidence_packet`` is an optional canonical retrieval result for this
         target.  Its opaque feature refs are resolved back through the current
         bundle before they enter the normal ``CandidateSet`` boundary.  This
-        keeps packet-driven GROUND and direct EvidenceGraph resolution on one
-        fail-closed path.
+        keeps packet-driven GROUND on one fail-closed path.
         """
         from app.contracts.ground.spatial_reference_contracts import (
             CandidateSet,
@@ -832,8 +826,8 @@ class SpatialResolver:
         )
         if l1_search_scope is not None:
             # A SearchScopeRef narrows retrieval but is not an identity.  Keep
-            # it as a fallback while the current EvidenceGraph still searches
-            # the L1 mention against source-backed features and KG relations.
+            # Keep it as a bounded scope while DATA/WM retrieval resolves the
+            # L1 mention against source-backed features and relations.
             evidence_search_scope = l1_search_scope
             provenance["l1_search_scope"] = l1_search_scope.model_dump(mode="python")
         binding_candidates = self._candidate_set_from_l1_binding(spec, evidence_lineage)
@@ -868,119 +862,6 @@ class SpatialResolver:
                 candidates = kg_candidates
                 provenance["path"] += "+kg_topology"
         try:
-            if (
-                packet_candidates is None
-                and not candidates.bsms
-                and not candidates.ref_bsms
-                and self.evidence_graph is not None
-            ):
-                mention = self._spec_mention(spec)
-                if mention:
-                    # Combined cells (e.g. 'Y122+X038') are split and
-                    # each part resolved against EvidenceGraph; BSMs are
-                    # merged so partial matches still bind the spec.
-                    selected_candidate_sets: list[Any] = []
-                    lookup_role = "unknown"
-                    parts = _split_mentions(mention)
-                    for part in parts:
-                        part_mention = _normalize_spec_mention(part)
-                        try:
-                            place_result = self.evidence_graph.resolve_mention(
-                                part_mention,
-                                role=lookup_role,
-                                hints=str(
-                                    getattr(spec, "spatial_hint", "")
-                                    or getattr(spec, "unresolved_reason", "")
-                                    or ""
-                                ),
-                            )
-                            for place_candidate in place_result.candidates:
-                                if place_candidate.feature_bsm:
-                                    evidence_lineage["feature_bsms"].append(
-                                        place_candidate.feature_bsm
-                                    )
-                                if place_candidate.source_feature_id:
-                                    evidence_lineage["source_feature_ids"].append(
-                                        place_candidate.source_feature_id
-                                    )
-                                evidence_lineage["entity_refs"].append(
-                                    place_candidate.entity_ref
-                                )
-                                evidence_lineage["relation_refs"].extend(
-                                    place_candidate.relation_refs
-                                )
-                                evidence_lineage["l1_fact_refs"].extend(
-                                    place_candidate.l1_fact_refs
-                                )
-                                evidence_lineage["l1_snapshot_ref"] = (
-                                    evidence_lineage["l1_snapshot_ref"]
-                                    or place_candidate.l1_snapshot_ref
-                                )
-                                evidence_lineage["bundle_snapshot_digest"] = (
-                                    evidence_lineage["bundle_snapshot_digest"]
-                                    or place_candidate.bundle_snapshot_digest
-                                )
-                            if evidence_search_scope is None:
-                                evidence_search_scope = getattr(
-                                    place_result,
-                                    "search_scope",
-                                    None,
-                                )
-                            packet = self._evidence_packet_from_graph_result(
-                                spec,
-                                part_mention,
-                                place_result,
-                            )
-                            if packet is not None:
-                                selected_set, selection, meta = (
-                                    self._selected_candidate_set_from_evidence_packet(
-                                        spec,
-                                        packet,
-                                        evidence_lineage,
-                                    )
-                                )
-                                meta["mention"] = part_mention
-                                selection_meta.append(meta)
-                                if selection == "selection_unresolved":
-                                    selection_unresolved = True
-                                elif selected_set is not None:
-                                    selected_candidate_sets.append(selected_set)
-                        except Exception as exc:
-                            logger.debug(
-                                "[SpatialResolver] evidence lineage lookup skipped: %s",
-                                exc,
-                            )
-                    if selection_unresolved:
-                        provenance["ground_candidate_selection"] = selection_meta
-                    elif selected_candidate_sets:
-                        selected_geometries: list[Any] = []
-                        seen_geometry_keys: set[tuple[str, str, str]] = set()
-                        for selected in selected_candidate_sets:
-                            for reference in (
-                                getattr(selected, "ref_geometries", None) or []
-                            ):
-                                geometry_key = (
-                                    str(getattr(reference, "source_ref", "") or ""),
-                                    str(getattr(reference, "source_feature_id", "") or ""),
-                                    str(getattr(reference, "wkt", "") or ""),
-                                )
-                                if geometry_key in seen_geometry_keys:
-                                    continue
-                                seen_geometry_keys.add(geometry_key)
-                                selected_geometries.append(reference)
-                        candidates = CandidateSet(
-                            bsms=list(dict.fromkeys(
-                                value
-                                for selected in selected_candidate_sets
-                                for value in [
-                                    *(getattr(selected, "bsms", None) or []),
-                                    *(getattr(selected, "ref_bsms", None) or []),
-                                ]
-                                if str(value).strip()
-                            )),
-                            ref_bsms=[],
-                            ref_geometries=selected_geometries,
-                        )
             if (
                 not candidates.bsms
                 and not candidates.ref_bsms
@@ -1142,38 +1023,13 @@ class SpatialResolver:
                 logger.warning("[SpatialResolver] directional bbox failed: %s", e)
 
         if (
-            final_bsms
-            and not bbox
-            and not reference_geometries
-            and not selection_meta
-        ):
-            # 设计 §4.3：EvidenceGraph 判 ambiguous（多候选接近/弱证据）的引用即使
-            # 已有候选 BSMs，也进入有界 LLM 判别，避免直接取 top 造成误绑。
-            try:
-                ambiguous = self._llm_resolve_ambiguous(
-                    spec,
-                    self._spec_mention(spec),
-                )
-                if ambiguous is not None:
-                    return ambiguous
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[SpatialResolver] ambiguous llm resolution failed: %s", exc)
-
-        if (
             not final_bsms
             and not bbox
             and not reference_geometries
             and search_scope is None
         ):
-            # 不允许留下不可解析的引用（目标 §"不能留又不能解析"）：在 EvidenceGraph
-            # 候选内做有界 LLM best-effort 判别；几何/BSM 仍来自 bundle。失败
-            # 才保持 unresolved（绝不伪造几何）。
-            fallback = self._llm_reason_fallback(
-                spec,
-                self._spec_mention(spec),
-            )
-            if fallback is not None:
-                return fallback
+            # No typed DATA candidate or search scope means unresolved.  GROUND
+            # does not promote a model guess into an executable reference.
             return ResolvedSpatialRef(
                 final_bsms=[],
                 bbox=None,
@@ -1510,14 +1366,6 @@ class SpatialResolver:
         if len(matches) != 1:
             return None
         binding = matches[0]
-        if (
-            self.evidence_graph is not None
-            and str(getattr(binding, "status", "") or "") == "feature_set"
-        ):
-            # A persisted feature set is retrieval evidence, not a final
-            # selection.  Re-enter the current graph so GROUND can reason over
-            # the complete same-name candidate domain.
-            return None
         bsms = self._filter_to_bundle(list(getattr(binding, "source_bsms", []) or []))
         if not bsms:
             return None
@@ -1539,7 +1387,7 @@ class SpatialResolver:
     ) -> tuple[Any, str, Dict[str, Any]]:
         """Select a packet identity before any geometry enters GROUND.
 
-        EvidenceGraph is a recall boundary: a packet may intentionally retain
+        Evidence retrieval is a recall boundary: a packet may intentionally retain
         several same-name facilities or hazard points.  Those records are
         alternatives unless TARGET_PROJECTION supplied an explicit multi-ID
         source collection.  A typed LLM choice is therefore required for an
@@ -1580,17 +1428,17 @@ class SpatialResolver:
         packet_status = str(
             getattr(packet, "ambiguity_status", "unresolved") or "unresolved"
         )
-        candidate_feature_bsms = [
-            str(
-                getattr(getattr(ref, "identity", None), "bundle_feature_bsm", "")
-                or ""
-            ).strip()
+        candidate_data_refs = list(dict.fromkeys(
+            str(value).strip()
             for ref in unique_refs
-            if str(
-                getattr(getattr(ref, "identity", None), "bundle_feature_bsm", "")
-                or ""
-            ).strip()
-        ]
+            for value in (
+                getattr(ref, "geometry_ref", "") or "",
+                getattr(ref, "resource_ref", "") or "",
+                getattr(getattr(ref, "identity", None), "source_feature_id", "") or "",
+                *(getattr(ref, "entity_refs", None) or ()),
+            )
+            if str(value).strip()
+        ))
         meta: Dict[str, Any] = {
             "packet_candidate_count": len(unique_refs),
             "packet_candidate_total": int(
@@ -1600,7 +1448,7 @@ class SpatialResolver:
                 getattr(packet, "candidate_offset", 0) or 0
             ),
             "packet_ambiguity_status": packet_status,
-            "packet_candidate_feature_bsms": candidate_feature_bsms,
+            "packet_candidate_data_refs": candidate_data_refs,
             "candidate_ids": candidate_ids,
             "candidate_set_digest": set_digest,
             "input_digest": input_digest,
@@ -1640,7 +1488,7 @@ class SpatialResolver:
             meta["selection_contract_status"] = "selected"
         elif len(unique_refs) == 1:
             # Packet ambiguity also reflects non-spatial evidence gaps and
-            # can remain ``multiple`` even after EvidenceGraph has narrowed
+            # can remain ``multiple`` even after Evidence has narrowed
             # the authoritative Bundle identity to one feature.  With no
             # spatial alternative there is nothing for the LLM to choose;
             # retain the broader packet status in provenance and bind the
@@ -1715,20 +1563,20 @@ class SpatialResolver:
         )
         if candidates is None:
             return None, "unusable", meta
-        selected_feature_bsms = [
+        selected_source_feature_ids = [
             str(
-                getattr(getattr(ref, "identity", None), "bundle_feature_bsm", "")
+                getattr(getattr(ref, "identity", None), "source_feature_id", "")
                 or ""
             ).strip()
             for ref in selected_refs
             if str(
-                getattr(getattr(ref, "identity", None), "bundle_feature_bsm", "")
+                getattr(getattr(ref, "identity", None), "source_feature_id", "")
                 or ""
             ).strip()
         ]
         meta.update({
             "packet_selection_status": selection,
-            "selected_feature_bsms": selected_feature_bsms,
+            "selected_source_feature_ids": selected_source_feature_ids,
             "selected_candidate_ids": [
                 stable_spatial_candidate_id(ref, namespace="spatial_candidate")
                 for ref in selected_refs
@@ -1773,16 +1621,8 @@ class SpatialResolver:
         for relation in list(getattr(packet, "relation_evidence", None) or [])[:8]:
             subject = getattr(getattr(relation, "subject", None), "identity", None)
             object_ = getattr(getattr(relation, "object", None), "identity", None)
-            subject_name = str(
-                getattr(subject, "canonical_name", "")
-                or getattr(subject, "bundle_feature_bsm", "")
-                or ""
-            )
-            object_name = str(
-                getattr(object_, "canonical_name", "")
-                or getattr(object_, "bundle_feature_bsm", "")
-                or ""
-            )
+            subject_name = str(getattr(subject, "canonical_name", "") or "")
+            object_name = str(getattr(object_, "canonical_name", "") or "")
             predicate = str(getattr(relation, "predicate", "") or "")
             metric = getattr(relation, "metric_value", None)
             unit = str(getattr(relation, "metric_unit", "") or "")
@@ -1830,28 +1670,32 @@ class SpatialResolver:
         self,
         ref: Any,
     ) -> Optional[tuple[float, float]]:
-        """Read one anchor point from its authoritative Bundle feature."""
+        """Read one anchor point through the DATA resource catalog."""
 
-        identity = getattr(ref, "identity", None)
-        feature_bsm = str(
-            getattr(identity, "bundle_feature_bsm", "") or ""
-        ).strip()
-        workspace = getattr(self.context, "workspace", None)
-        if not feature_bsm or workspace is None:
+        catalog = getattr(self.context, "data_resource_catalog", None)
+        if catalog is None:
             return None
-        found = workspace.find_feature_by_bsm(feature_bsm)
-        if not found:
+        geometry_ref = str(getattr(ref, "geometry_ref", "") or "").strip()
+        resource_ref = str(getattr(ref, "resource_ref", "") or "").strip()
+        representation_ref = next(
+            (
+                str(value).strip()
+                for value in (getattr(ref, "representation_refs", None) or [])
+                if str(value).strip()
+            ),
+            "",
+        )
+        if not geometry_ref and not resource_ref and not representation_ref:
             return None
-        feature = found[2]
-        raw_geometry = getattr(feature, "geometry", None)
         try:
             from shapely.geometry import shape
 
-            geometry = (
-                shape(raw_geometry)
-                if isinstance(raw_geometry, dict)
-                else raw_geometry
+            raw_geometry = catalog.resolve_geometry(
+                resource_ref=resource_ref,
+                geometry_ref=geometry_ref,
+                representation_ref=representation_ref,
             )
+            geometry = shape(raw_geometry) if isinstance(raw_geometry, dict) else raw_geometry
             if geometry is None or geometry.is_empty:
                 return None
             point = geometry if geometry.geom_type == "Point" else geometry.representative_point()
@@ -1859,7 +1703,7 @@ class SpatialResolver:
         except Exception as exc:
             logger.debug(
                 "[SpatialResolver] anchor coordinate unavailable for %s: %s",
-                feature_bsm,
+                geometry_ref or resource_ref or representation_ref,
                 exc,
             )
             return None
@@ -1870,26 +1714,17 @@ class SpatialResolver:
         *,
         max_distance_m: float = 500.0,
     ) -> List[List[Any]]:
-        """Build deterministic spatial components from Bundle-backed anchors.
+        """Build deterministic spatial components from DATA-backed anchors.
 
-        Two anchors belong to the same component when their Bundle-derived
-        parcel neighborhoods overlap or their authoritative representative
-        points are within the bounded natural-village distance.  Text labels
-        never create an edge.  Missing geometry therefore remains a separate
-        candidate instead of being silently merged by name.
+        Two anchors belong to the same component when their authoritative
+        representative points are within the bounded natural-village distance.
+        Text labels never create an edge. Missing geometry therefore remains a
+        separate candidate instead of being silently merged by name.
         """
 
         if not refs:
             return []
         coordinates = [self._evidence_anchor_coordinate(ref) for ref in refs]
-        parcel_sets = [
-            {
-                str(value).strip()
-                for value in (getattr(ref, "related_parcel_bsms", None) or [])
-                if str(value).strip()
-            }
-            for ref in refs
-        ]
         parent = list(range(len(refs)))
 
         def find(index: int) -> int:
@@ -1908,14 +1743,13 @@ class SpatialResolver:
 
         for left in range(len(refs)):
             for right in range(left + 1, len(refs)):
-                parcel_overlap = bool(parcel_sets[left].intersection(parcel_sets[right]))
                 close = False
                 if coordinates[left] is not None and coordinates[right] is not None:
                     close = haversine_distance(
                         coordinates[left],
                         coordinates[right],
                     ) <= max_distance_m
-                if parcel_overlap or close:
+                if close:
                     union(left, right)
 
         grouped: Dict[int, List[Any]] = {}
@@ -1924,14 +1758,7 @@ class SpatialResolver:
 
         def cluster_key(cluster: List[Any]) -> tuple[str, ...]:
             return tuple(sorted(
-                str(
-                    getattr(
-                        getattr(ref, "identity", None),
-                        "bundle_feature_bsm",
-                        "",
-                    )
-                    or ""
-                )
+                self._packet_ref_key(ref)
                 for ref in cluster
             ))
 
@@ -1946,8 +1773,7 @@ class SpatialResolver:
         roles: list[str] = []
         aliases: list[str] = []
         source_layers: list[str] = []
-        feature_bsms: list[str] = []
-        parcel_bsms: list[str] = []
+        data_refs: list[str] = []
         l1_fact_refs: list[str] = []
         relation_refs: list[str] = []
         semantic_scores: list[float] = []
@@ -1962,10 +1788,7 @@ class SpatialResolver:
             source_layers.append(
                 str(getattr(identity, "source_layer", "") or "")
             )
-            feature_bsms.append(
-                str(getattr(identity, "bundle_feature_bsm", "") or "")
-            )
-            parcel_bsms.extend(getattr(ref, "related_parcel_bsms", None) or [])
+            data_refs.append(self._packet_ref_key(ref))
             l1_fact_refs.extend(getattr(ref, "l1_fact_refs", None) or [])
             relation_refs.extend(getattr(ref, "relation_refs", None) or [])
             semantic_scores.append(float(
@@ -1991,8 +1814,7 @@ class SpatialResolver:
             f"roles={','.join(dict.fromkeys(value for value in roles if value)) or 'unknown'}; "
             f"aliases={'、'.join(list(dict.fromkeys(str(value) for value in aliases if str(value)))[:8]) or 'none'}; "
             f"source_layers={','.join(dict.fromkeys(value for value in source_layers if value)) or 'unknown'}; "
-            f"anchor_BSMs={','.join(dict.fromkeys(value for value in feature_bsms if value))}; "
-            f"related_parcels={','.join(list(dict.fromkeys(str(value) for value in parcel_bsms if str(value)))[:12])}; "
+            f"anchor_data_refs={','.join(dict.fromkeys(value for value in data_refs if value))}; "
             f"L1_facts={','.join(list(dict.fromkeys(str(value) for value in l1_fact_refs if str(value)))[:8]) or 'none'}; "
             f"KG_topology={','.join(list(dict.fromkeys(str(value) for value in relation_refs if str(value)))[:8]) or 'none'}; "
             f"scores=semantic:{max(semantic_scores, default=0.0):.3f},"
@@ -2010,249 +1832,65 @@ class SpatialResolver:
         encoded = "|".join(member_ids).encode("utf-8")
         return f"anchor-cluster:sha256:{hashlib.sha256(encoded).hexdigest()}"
 
-    def _village_scope_from_evidence_packet(
-        self,
-        spec: Any,
-        packet: Any,
-    ) -> Optional["ResolvedSpatialRef"]:
-        """Infer a coarse natural-village scope from spatial evidence anchors.
-
-        A hazard/facility point whose typed address mentions a natural village
-        can locate that village even when no standalone village polygon exists.
-        Only the point's Bundle-related parcels become scope seeds; the point
-        is retained as provenance and is never promoted to a village geometry.
-        """
-        refs = list(getattr(packet, "candidate_refs", None) or [])
-        if not refs:
-            return None
-        reference = getattr(spec, "reference", None)
-        filters = getattr(reference, "filter", None) or {}
-        label = str(filters.get("label_contains") or "").strip()
-
-        # Prefer point/feature anchors over parcel rows when both appear in a
-        # broad packet.  Parcels remain attached through the typed topology
-        # refs; they are not independent semantic observations of the name.
-        semantic_anchor_refs: list[Any] = []
-        for ref in refs[:8]:
-            identity = getattr(ref, "identity", None)
-            role = str(getattr(identity, "role", "") or "").casefold()
-            entity_type = str(
-                getattr(identity, "entity_type", "") or ""
-            ).casefold()
-            source_layer = str(
-                getattr(identity, "source_layer", "") or ""
-            ).casefold()
-            if role in {"parcel", "zone"} or entity_type in {"parcel", "zone"}:
-                continue
-            if source_layer in {"landuse_current", "parcels", "zones"}:
-                continue
-            semantic_anchor_refs.append(ref)
-        anchor_refs = semantic_anchor_refs or refs[:8]
-        anchor_clusters = self._cluster_evidence_anchor_refs(anchor_refs)
-        cluster_ids = [self._anchor_cluster_id(cluster) for cluster in anchor_clusters]
-        cluster_lines = [
-            self._evidence_anchor_cluster_line(cluster, cluster_id)
-            for cluster, cluster_id in zip(anchor_clusters, cluster_ids)
-        ]
-        selected_cluster_id = next(iter(cluster_ids))
-        cluster_selection = "single_spatial_cluster"
-        if len(anchor_clusters) > 1:
-            cluster_mention = str(getattr(packet, "request", "") or label)
-            cluster_hints = self._evidence_packet_selection_hints(spec, packet)
-            cluster_decision_id = f"spatial-resolver:空间证据簇:{cluster_mention}"
-            cluster_query_text = f"{cluster_mention}\n{cluster_hints}"
-            cluster_descriptors = [
-                spatial_candidate_descriptor(
-                    {"candidate_id": cluster_id, "canonical_name": line},
-                    kind="spatial_anchor_cluster",
-                )
-                for cluster_id, line in zip(cluster_ids, cluster_lines)
-            ]
-            selected = self._llm_select_candidate_id(
-                cluster_mention,
-                cluster_hints,
-                cluster_descriptors,
-                cluster_lines,
-                candidate_kind="空间证据簇",
-            )
-            if selected is None:
-                from app.contracts.ground.spatial_reference_contracts import (
-                    ResolvedSpatialRef,
-                )
-
-                return ResolvedSpatialRef(
-                    final_bsms=[],
-                    bbox=None,
-                    spatial_domain_kind="unknown",
-                    confidence=0.0,
-                    uncertainty_radius_m=0.0,
-                    uncertainty_reason="evidence_anchor_clusters_unresolved",
-                    provenance={
-                        "path": "evidence_packet:anchor_cluster_selection_unresolved",
-                        "scope_label": label,
-                        "anchor_cluster_count": len(anchor_clusters),
-                        "anchor_cluster_candidates": cluster_lines,
-                        "candidate_set_digest": candidate_set_digest(cluster_descriptors),
-                        "input_digest": (
-                            spatial_candidate_input_digest(
-                                decision_id=cluster_decision_id,
-                                query_text=cluster_query_text,
-                                candidates=cluster_descriptors,
-                            )
-                            if len(anchor_clusters) > 1
-                            else ""
-                        ),
-                        "cluster_selection_reason": (
-                            "ground_llm_disabled"
-                            if self._ground_llm_disabled()
-                            else "closed_set_llm_failed_or_rejected"
-                        ),
-                        "not_exact_village_boundary": True,
-                    },
-                )
-            selected_cluster_id = selected
-            cluster_selection = "closed_set_llm_selected_cluster"
-        refs = next(
-            cluster
-            for cluster_id, cluster in zip(cluster_ids, anchor_clusters)
-            if cluster_id == selected_cluster_id
-        )
-        parcel_bsms: list[str] = []
-        feature_bsms: list[str] = []
-        source_feature_ids: list[str] = []
-        entity_refs: list[str] = []
-        relation_refs: list[str] = []
-        l1_fact_refs: list[str] = []
-        anchor_roles: list[str] = []
-        for ref in refs[:8]:
-            identity = getattr(ref, "identity", None)
-            role = str(getattr(identity, "role", "") or "").casefold()
-            entity_type = str(
-                getattr(identity, "entity_type", "") or ""
-            ).casefold()
-            source_layer = str(
-                getattr(identity, "source_layer", "") or ""
-            ).casefold()
-            feature_bsm = str(
-                getattr(identity, "bundle_feature_bsm", "") or ""
-            ).strip()
-            if role in {"parcel", "zone"} or entity_type in {"parcel", "zone"}:
-                parcel_bsms.append(feature_bsm)
-            elif source_layer in {"landuse_current", "parcels", "zones"}:
-                parcel_bsms.append(feature_bsm)
-            parcel_bsms.extend(
-                str(value).strip()
-                for value in (getattr(ref, "related_parcel_bsms", None) or [])
-                if str(value).strip()
-            )
-            if feature_bsm:
-                feature_bsms.append(feature_bsm)
-            source_feature_id = str(
-                getattr(identity, "source_feature_id", "") or ""
-            ).strip()
-            if source_feature_id:
-                source_feature_ids.append(source_feature_id)
-            entity_refs.extend(getattr(ref, "entity_refs", None) or [])
-            relation_refs.extend(getattr(ref, "relation_refs", None) or [])
-            l1_fact_refs.extend(getattr(ref, "l1_fact_refs", None) or [])
-            if role or entity_type:
-                anchor_roles.append(role or entity_type)
-        final_bsms = self._filter_to_bundle(list(dict.fromkeys(parcel_bsms)))
-        if not final_bsms:
-            return None
-
-        from app.contracts.ground.spatial_reference_contracts import (
-            ResolvedSpatialRef,
-        )
-
-        return self._coarse_scope_resolution(
-            scope_bsms=final_bsms,
-            bbox=self._parcel_bbox(final_bsms),
-            scope_type="village_scope",
-            source="evidence_packet:anchor_to_village_scope",
-            reason="evidence_derived_village_scope",
-            confidence=0.45,
-            uncertainty_radius_m=250.0,
-            provenance={
-                "path": "evidence_packet:anchor_to_village_scope",
-                "scope_label": label,
-                "scope_seed_parcel_bsms": final_bsms,
-                "anchor_feature_bsms": list(dict.fromkeys(feature_bsms)),
-                "anchor_roles": list(dict.fromkeys(anchor_roles)),
-                "anchor_cluster_count": len(anchor_clusters),
-                "selected_anchor_cluster_id": selected_cluster_id,
-                "anchor_cluster_selection": cluster_selection,
-                "scope_semantics": "inferred_from_spatial_evidence",
-                "not_exact_village_boundary": True,
-            },
-            provenance_refs=list(dict.fromkeys([
-                *[str(value) for value in entity_refs if str(value)],
-                *[str(value) for value in relation_refs if str(value)],
-                *[str(value) for value in l1_fact_refs if str(value)],
-            ])),
-            missing_requirements=self._search_scope_requirements(
-                has_feature_identity=bool(feature_bsms or source_feature_ids or entity_refs),
-                has_source_snapshot=bool(
-                    str(getattr(packet, "l1_snapshot_ref", "") or "")
-                    or str(getattr(packet, "bundle_snapshot_digest", "") or "")
-                ),
-            ),
-            source_snapshot_ref=str(getattr(packet, "l1_snapshot_ref", "") or ""),
-            bundle_snapshot_digest=str(
-                getattr(packet, "bundle_snapshot_digest", "") or ""
-            ),
-            diagnostics={
-                "scope_label": label,
-                "scope_seed_parcel_bsms": final_bsms,
-                "anchor_feature_bsms": list(dict.fromkeys(feature_bsms)),
-                "anchor_source_feature_ids": list(dict.fromkeys(source_feature_ids)),
-                "anchor_roles": list(dict.fromkeys(anchor_roles)),
-                "entity_refs": list(dict.fromkeys(str(value) for value in entity_refs if str(value))),
-                "relation_refs": list(dict.fromkeys(str(value) for value in relation_refs if str(value))),
-                "l1_fact_refs": list(dict.fromkeys(str(value) for value in l1_fact_refs if str(value))),
-                "anchor_cluster_count": len(anchor_clusters),
-                "selected_anchor_cluster_id": selected_cluster_id,
-                "anchor_cluster_selection": cluster_selection,
-                "scope_semantics": "inferred_from_spatial_evidence",
-                "not_exact_village_boundary": True,
-            },
-        )
-
     def _candidate_set_from_evidence_packet(
         self,
         packet: Any,
         evidence_lineage: Dict[str, Any],
     ) -> Any:
-        """Convert verified packet refs into a resolver CandidateSet.
-
-        The packet contains no WKT.  ``geometry_refs_from_evidence_packet``
-        performs the only bundle-authoritative geometry read; missing or
-        malformed refs simply make this adapter return ``None`` so the normal
-        EvidenceGraph path can continue.
-        """
+        """Resolve EvidencePacket DATA refs into execution-side geometry records."""
         if packet is None or not getattr(packet, "candidate_refs", None):
             return None
         from app.contracts.ground.spatial_reference_contracts import CandidateSet
-        from app.infrastructure.ground_runtime.compatibility import (
-            geometry_refs_from_evidence_packet,
+        catalog = (
+            getattr(self.context, "data_resource_catalog", None)
+            or getattr(self.context, "data_catalog", None)
         )
+        references: list[Any] = []
+        if catalog is not None:
+            from shapely.geometry import shape
 
-        references = geometry_refs_from_evidence_packet(self.context, packet)
-        bsms: list[str] = []
+            from app.contracts.ground.spatial_reference_contracts import GeometryRef
+
+            for candidate in list(getattr(packet, "candidate_refs", None) or []):
+                geometry_payload = catalog.resolve_geometry(
+                    resource_ref=str(getattr(candidate, "resource_ref", "") or ""),
+                    geometry_ref=str(getattr(candidate, "geometry_ref", "") or ""),
+                    representation_ref=(
+                        str((getattr(candidate, "representation_refs", None) or [""])[0] or "")
+                    ),
+                )
+                if not geometry_payload:
+                    continue
+                try:
+                    geometry = shape(geometry_payload)
+                    if geometry.is_empty or not geometry.is_valid:
+                        continue
+                except Exception:
+                    continue
+                identity = getattr(candidate, "identity", None)
+                references.append(GeometryRef(
+                    wkt=geometry.wkt,
+                    crs=str(getattr(candidate, "normalized_crs", "") or ""),
+                    normalized_crs=str(getattr(candidate, "normalized_crs", "") or ""),
+                    source_snapshot_ref=str(
+                        getattr(candidate, "source_snapshot_ref", "")
+                        or getattr(packet, "data_snapshot_ref", "")
+                        or ""
+                    ),
+                    content_digest=str(getattr(identity, "geometry_digest", "") or ""),
+                    source_feature_id=str(getattr(identity, "source_feature_id", "") or ""),
+                    entity_refs=list(getattr(candidate, "entity_refs", None) or []),
+                    representation_ref=str(
+                        (getattr(candidate, "representation_refs", None) or [""])[0] or ""
+                    ),
+                    resource_ref=str(getattr(candidate, "resource_ref", "") or ""),
+                    l1_fact_refs=list(getattr(candidate, "l1_fact_refs", None) or []),
+                    source_ref=str(getattr(candidate, "resource_ref", "") or ""),
+                    source_refs=list(getattr(candidate, "provenance_refs", None) or []),
+                    feature_kind=str(getattr(identity, "entity_type", "") or ""),
+                ))
         for candidate in list(getattr(packet, "candidate_refs", None) or []):
             identity = getattr(candidate, "identity", None)
-            feature_bsm = str(
-                getattr(identity, "bundle_feature_bsm", "") or ""
-            ).strip()
-            if feature_bsm:
-                evidence_lineage["feature_bsms"].append(feature_bsm)
-                entity_type = str(getattr(identity, "entity_type", "") or "").casefold()
-                role = str(getattr(identity, "role", "") or "").casefold()
-                source_layer = str(getattr(identity, "source_layer", "") or "").casefold()
-                if entity_type in {"parcel", "zone"} or role in {"parcel", "zone"}:
-                    bsms.append(feature_bsm)
-                elif source_layer in {"landuse_current", "parcels", "zones"}:
-                    bsms.append(feature_bsm)
             evidence_lineage["source_feature_ids"].extend(
                 [str(getattr(identity, "source_feature_id", "") or "")]
             )
@@ -2270,150 +1908,10 @@ class SpatialResolver:
                 or str(getattr(candidate, "l1_snapshot_ref", "") or "")
                 or str(getattr(packet, "l1_snapshot_ref", "") or "")
             )
-            evidence_lineage["bundle_snapshot_digest"] = (
-                evidence_lineage["bundle_snapshot_digest"]
-                or str(getattr(identity, "bundle_snapshot_digest", "") or "")
-                or str(getattr(packet, "bundle_snapshot_digest", "") or "")
-            )
-            bsms.extend(
-                str(value)
-                for value in (getattr(candidate, "related_parcel_bsms", None) or [])
-                if str(value).strip()
-            )
-        if not references and not bsms:
+        if not references:
             return None
         return CandidateSet(
-            bsms=list(dict.fromkeys(bsms)),
             ref_geometries=references,
-        )
-
-    def _evidence_packet_from_graph_result(
-        self,
-        spec: Any,
-        mention: str,
-        result: Any,
-    ) -> Any:
-        """Turn retrieval candidates into the GROUND selection packet.
-
-        EvidenceGraph is deliberately allowed to return fuzzy and same-name
-        alternatives.  This adapter keeps that closed set auditable while
-        leaving identity selection to ``_selected_candidate_set...``.  It does
-        not add coordinates or infer a geometry from a semantic mention.
-        """
-        from app.contracts.evidence.evidence_packet_contracts import EvidencePacket
-        from app.infrastructure.ground_runtime.compatibility import (
-            _kg_relations,
-            feature_ref_from_candidate,
-        )
-
-        candidates = []
-        seen_ids: set[str] = set()
-        for candidate in list(getattr(result, "candidates", None) or [])[:64]:
-            candidate_role = str(getattr(candidate, "role", "") or "").casefold()
-            if candidate_role in {
-                "scope",
-                "village",
-                "natural_village",
-                "administrative_village",
-                "settlement",
-                "place",
-                "area",
-                "行政村",
-                "自然村",
-                "村庄",
-                "聚落",
-                "地点",
-                "区域",
-            } and not any(
-                str(getattr(candidate, field, "") or "").strip()
-                for field in ("feature_bsm", "geometry_ref")
-            ):
-                continue
-            if not any(
-                str(getattr(candidate, field, "") or "").strip()
-                for field in (
-                    "feature_bsm",
-                    "source_bsm",
-                    "geometry_ref",
-                    "source_bsms",
-                    "related_parcel_bsms",
-                )
-            ):
-                continue
-            candidate_id = stable_spatial_candidate_id(
-                candidate,
-                namespace="spatial_candidate",
-            )
-            if candidate_id in seen_ids:
-                continue
-            seen_ids.add(candidate_id)
-            candidates.append(candidate)
-        bundle_digest = str(
-            getattr(getattr(self.context, "data_snapshot", None), "digest", "")
-            or self._bundle_snapshot_digest()
-            or ""
-        )
-        refs = [
-            feature_ref_from_candidate(candidate, bundle_digest=bundle_digest)
-            for candidate in candidates
-        ]
-        if not refs:
-            return None
-        relation_evidence = _kg_relations(self.context, refs)
-        source_spans: list[str] = []
-        mention_key = str(mention or "").casefold()
-        for fact in (
-            getattr(self.context, "location_mentions", None)
-            or getattr(self.context, "location_facts", None)
-            or getattr(self.context, "l1_fact_records", None)
-            or []
-        ):
-            labels = {
-                str(getattr(fact, field, "") or "").strip()
-                for field in ("mention", "normalized_name", "target_name")
-            }
-            if not any(label and label.casefold() in mention_key for label in labels):
-                continue
-            source_span = str(
-                getattr(fact, "source_span", "")
-                or getattr(fact, "source_quote", "")
-                or getattr(fact, "statement", "")
-                or ""
-            ).strip()
-            if source_span:
-                source_spans.append(source_span[:240])
-        status = str(getattr(result, "status", "unresolved") or "unresolved")
-        ambiguity_status = (
-            "multiple"
-            if status == "ambiguous" or len(refs) > 1
-            else "resolved"
-            if status == "resolved"
-            else "unresolved"
-        )
-        return EvidencePacket(
-            request=mention,
-            bundle_snapshot_digest=bundle_digest,
-            l1_snapshot_ref=str(
-                getattr(self.context, "l1_snapshot_ref", "") or ""
-            ),
-            l1_scope_refs=list(
-                dict.fromkeys(
-                    str(value).strip()
-                    for value in (
-                        getattr(getattr(result, "search_scope", None), "provenance_refs", None)
-                        or []
-                    )
-                    if str(value).strip()
-                )
-            ),
-            candidate_refs=refs,
-            candidate_total=len(refs),
-            candidate_limit=max(1, len(refs)),
-            ambiguity_status=ambiguity_status,
-            sufficiency="sufficient",
-            relation_evidence=relation_evidence,
-            source_spans=list(dict.fromkeys(source_spans))[:8],
-            query_trace=list(getattr(result, "query_trace", None) or []),
         )
 
     def _resolved_from_candidate_set(
@@ -2530,7 +2028,7 @@ class SpatialResolver:
 
         The adapter is the shared KG topology boundary for RDFLib and
         PostGIS-backed stores.  Returning an empty ``CandidateSet`` is still
-        meaningful: the caller may continue with EvidenceGraph fallback, but
+        meaningful: the caller may continue with DATA/WM retrieval, but
         it must never turn the anchor itself into an execution target.
         """
         from app.contracts.ground.spatial_reference_contracts import CandidateSet
@@ -2678,86 +2176,6 @@ class SpatialResolver:
             )
         )
 
-    def _llm_reason_fallback(
-        self,
-        spec: Any,
-        mention: str,
-        extra_candidates: Optional[List[Any]] = None,
-    ) -> Optional["ResolvedSpatialRef"]:
-        """有界 LLM best-effort（设计 §4.3）：在 Recall 候选内判别，不新增 BSM/几何。
-
-        LLM 只在 EvidenceGraph 召回的候选内选最优；候选行携带几何与 KG 拓扑关系，
-        让判别具备拓扑上下文（对齐 arXiv 2505.17136：LLM 拓扑推理需要几何/
-        place-type 上下文）。失败或没有可用候选返回 None，保持 unresolved——
-        绝不降级为第一个候选，也绝不伪造几何/BSM。
-        """
-        ordered = extra_candidates or self._collect_llm_candidates(
-            spec, mention
-        )
-        if not ordered:
-            return None
-        picked = self._llm_pick_candidate(mention, self._spec_hints(spec), ordered)
-        if picked is None:
-            # 设计 §4.3：失败/超时保持 ambiguous，不得降级为第一个候选。
-            return None
-        bsms = self._filter_to_bundle(list(getattr(picked, "source_bsms", None) or []))
-        if not bsms:
-            return None
-        from app.contracts.ground.spatial_reference_contracts import ResolvedSpatialRef
-
-        return ResolvedSpatialRef(
-            final_bsms=bsms,
-            bbox=None,
-            spatial_domain_kind=(
-                "exact_feature"
-                if getattr(picked, "feature_bsm", None)
-                else ("parcel_extent" if len(bsms) == 1 else "parcel_set")
-            ),
-            confidence=0.35,
-            uncertainty_radius_m=250.0,
-            uncertainty_reason="llm_best_effort",
-            provenance={
-                "path": "evidence:candidates+llm_best_effort",
-                "mention": mention,
-                "picked": str(getattr(picked, "canonical_name", "") or ""),
-                "candidate_count": len(ordered),
-            },
-        )
-
-    def _collect_llm_candidates(
-        self,
-        spec: Any,
-        mention: str,
-        mention_enhancements: Optional[Dict[str, List[str]]] = None,
-    ) -> List[Any]:
-        """Return every deduped EvidenceGraph candidate for LLM discrimination.
-
-        EvidenceGraph already owns the bounded recall/page limit.  A second
-        hidden ``[:8]`` here would discard valid address/topology candidates
-        before the semantic selector sees them.
-        """
-        candidates: List[Any] = []
-        if self.evidence_graph is None:
-            return []
-        sub_mentions = [mention]
-        hints = self._spec_hints(spec)
-        for sub in sub_mentions:
-            if not sub:
-                continue
-            try:
-                result = self.evidence_graph.resolve_mention(sub, hints=hints)
-                candidates.extend(result.candidates)
-            except Exception:  # noqa: BLE001
-                continue
-        by_ref: Dict[str, Any] = {}
-        for c in candidates:
-            key = str(c.entity_ref or c.canonical_name or "")
-            if not key:
-                continue
-            if key not in by_ref or c.score > by_ref[key].score:
-                by_ref[key] = c
-        return sorted(by_ref.values(), key=lambda c: -c.score)
-
     def _spec_hints(self, spec: Any) -> str:
         """提取 spec 的位置/关系提示文本，作为 LLM 判别的拓扑上下文。"""
         parts: List[str] = []
@@ -2903,7 +2321,7 @@ class SpatialResolver:
                 "空间查询表：\n"
                 + query_table
                 + "\n"
-                f"以下是从 EvidenceGraph 召回并由 Bundle/KG 拓扑组织的{candidate_kind}候选表，"
+                f"以下是由 EvidencePacket 和 DATA/WM 关系组织的{candidate_kind}候选表，"
                 "请只返回 selected/abstain/ambiguous；selected 时填写候选稳定 candidate_id，"
                 "不要输出序号或新 ID：\n"
                 + candidate_table
@@ -3000,37 +2418,34 @@ class SpatialResolver:
                 if str(value).strip()
             )
         )[:6]
-        feature_bsm = str(
-            getattr(c, "feature_bsm", "")
-            or getattr(identity, "bundle_feature_bsm", "")
-            or getattr(c, "source_bsm", "")
-            or getattr(identity, "source_bsm", "")
-            or (
-                getattr(c, "source_bsms", [])[0]
-                if len(getattr(c, "source_bsms", []) or []) == 1
-                else ""
-            )
-            or ""
-        ).strip()
-        geometry = f"bundle://feature/{feature_bsm}" if feature_bsm else ""
-        source_bsms = list(
+        data_refs = list(
             dict.fromkeys(
                 str(value).strip()
                 for value in (
-                    getattr(c, "source_bsms", None)
-                    or (
-                        [getattr(identity, "source_bsm", "")]
-                        if getattr(identity, "source_bsm", "")
-                        else []
-                    )
+                    getattr(c, "resource_ref", ""),
+                    getattr(c, "geometry_ref", ""),
+                    *(getattr(c, "representation_refs", None) or []),
+                    getattr(c, "source_feature_id", ""),
+                    getattr(identity, "source_feature_id", ""),
                 )
                 if str(value).strip()
             )
         )[:8]
-        related_parcels = list(
+        geometry = next(
+            (
+                str(value).strip()
+                for value in (
+                    getattr(c, "geometry_ref", ""),
+                    getattr(c, "resource_ref", ""),
+                )
+                if str(value).strip()
+            ),
+            "",
+        )
+        entity_refs = list(
             dict.fromkeys(
                 str(value).strip()
-                for value in (getattr(c, "related_parcel_bsms", None) or [])
+                for value in (getattr(c, "entity_refs", None) or [])
                 if str(value).strip()
             )
         )[:8]
@@ -3092,136 +2507,11 @@ class SpatialResolver:
         return (
             f"candidate_id={candidate_id} {canonical_name or '未命名实体'} 类型={entity_type or 'unknown'} "
             f"别名={'、'.join(aliases) or '无'} 角色={role} "
-            f"来源层={source_layer} feature_BSM={feature_bsm or '无'} "
-            f"来源BSM={','.join(source_bsms) or '无'} "
-            f"关联地块={','.join(related_parcels) or '无'} 几何={geometry or '无'} "
+            f"来源层={source_layer} data_refs={','.join(data_refs) or '无'} "
+            f"实体引用={','.join(entity_refs) or '无'} 几何={geometry or '无'} "
             f"拓扑={','.join(rels) or '无'} L1事实={','.join(l1_refs) or '无'} "
             f"来源证据={','.join(evidence_refs) or '无'} "
             f"选择证据={selection_evidence or '无'} 得分={score:.2f}"
-        )
-
-    def _llm_resolve_ambiguous(
-        self,
-        spec: Any,
-        mention: str,
-        mention_enhancements: Optional[Dict[str, List[str]]] = None,
-    ) -> Optional["ResolvedSpatialRef"]:
-        """歧义引用有界判别（设计 §4.3）：EvidenceGraph 判 ambiguous 时在候选内选。
-
-        成功返回 LLM 判别的落位；失败保持原确定性结果（已有 BSMs 不丢）。
-        """
-        if self.evidence_graph is None or not mention:
-            return None
-        try:
-            result = self.evidence_graph.resolve_mention(
-                mention, hints=self._spec_hints(spec)
-            )
-        except Exception:  # noqa: BLE001
-            return None
-        if str(getattr(result, "status", "") or "") != "ambiguous":
-            return None
-        candidates = list(getattr(result, "candidates", None) or [])
-        if not candidates:
-            return None
-        picked = self._llm_pick_candidate(
-            mention, self._spec_hints(spec), candidates
-        )
-        if picked is None:
-            return None
-        bsms = self._filter_to_bundle(list(getattr(picked, "source_bsms", None) or []))
-        from app.contracts.evidence.evidence_packet_contracts import EvidencePacket
-        from app.infrastructure.ground_runtime.compatibility import (
-            feature_ref_from_candidate,
-            geometry_refs_from_evidence_packet,
-        )
-
-        picked_ref = feature_ref_from_candidate(
-            picked,
-            bundle_digest=str(
-                getattr(getattr(self.context, "data_snapshot", None), "digest", "")
-                or ""
-            ),
-        )
-        picked_packet = EvidencePacket(
-            request=mention,
-            candidate_refs=[picked_ref],
-        )
-        reference_geometries = geometry_refs_from_evidence_packet(
-            self.context,
-            picked_packet,
-            max_refs=1,
-        )
-        if not bsms and not reference_geometries:
-            return None
-        from app.contracts.ground.spatial_reference_contracts import ResolvedSpatialRef
-
-        feature_bsm = str(getattr(picked, "feature_bsm", "") or "").strip()
-        source_feature_id = str(
-            getattr(picked, "source_feature_id", "") or ""
-        ).strip()
-        source_bsms = list(
-            dict.fromkeys(
-                str(value).strip()
-                for value in (getattr(picked, "source_bsms", None) or [])
-                if str(value).strip()
-            )
-        )
-        relation_refs = list(
-            dict.fromkeys(
-                str(value).strip()
-                for value in (getattr(picked, "relation_refs", None) or [])
-                if str(value).strip()
-            )
-        )
-        l1_fact_refs = list(
-            dict.fromkeys(
-                str(value).strip()
-                for value in (getattr(picked, "l1_fact_refs", None) or [])
-                if str(value).strip()
-            )
-        )
-
-        return ResolvedSpatialRef(
-            final_bsms=bsms,
-            reference_geometry_wkt=(
-                reference_geometries[0].wkt
-                if len(reference_geometries) == 1
-                else None
-            ),
-            reference_geometries=reference_geometries,
-            bbox=None,
-            spatial_domain_kind=(
-                "exact_feature"
-                if reference_geometries or feature_bsm
-                else ("parcel_extent" if len(bsms) == 1 else "parcel_set")
-            ),
-            confidence=0.5,
-            uncertainty_radius_m=250.0,
-            uncertainty_reason="llm_ambiguous_resolution",
-            provenance={
-                "path": "evidence:candidates+llm_ambiguous",
-                "mention": mention,
-                "picked": str(getattr(picked, "canonical_name", "") or ""),
-                "candidate_count": len(candidates),
-                "selected_feature_bsm": feature_bsm,
-                "source_feature_id": source_feature_id,
-                "source_bsms": source_bsms,
-                "relation_refs": relation_refs,
-                "l1_fact_refs": l1_fact_refs,
-                "reference_geometry_count": len(reference_geometries),
-            },
-            feature_bsms=[feature_bsm] if feature_bsm else [],
-            source_feature_ids=[source_feature_id] if source_feature_id else [],
-            entity_refs=list(getattr(picked, "entity_refs", None) or [])
-            or ([str(getattr(picked, "entity_ref", ""))] if getattr(picked, "entity_ref", "") else []),
-            relation_refs=relation_refs,
-            l1_fact_refs=l1_fact_refs,
-            l1_snapshot_ref=str(getattr(picked, "l1_snapshot_ref", "") or ""),
-            bundle_snapshot_digest=str(
-                getattr(picked, "bundle_snapshot_digest", "")
-                or getattr(getattr(self.context, "data_snapshot", None), "digest", "")
-                or ""
-            ),
         )
 
     def _filter_to_bundle(self, bsms: List[str]) -> List[str]:

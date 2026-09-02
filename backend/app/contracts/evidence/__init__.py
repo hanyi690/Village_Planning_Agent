@@ -2,7 +2,6 @@
 from .relation_evidence import DirectionalRelation, RelationEvidence
 from .evidence_packet_contracts import EvidencePacket, SpatialRelationEvidence
 from .feature_identity_contracts import (
-    BundleFeatureIdentity,
     FeatureEvidenceRef,
     SourceFeatureIdentity,
 )
@@ -77,7 +76,6 @@ from .stage_contracts import (
 __all__ = [
     "DirectionalRelation",
     "RelationEvidence",
-    "BundleFeatureIdentity",
     "SourceFeatureIdentity",
     "FeatureEvidenceRef",
     "EvidencePacket",

@@ -62,10 +62,8 @@ class PlanningContext:
             refs; the current-road snapshot is built when the layer is present.
         demands: Typed demand snapshots keyed by explicit demand refs. An empty
             mapping is intentional until a producer supplies real demand points.
-        location_mentions: Typed L1 place mentions used by EvidenceGraph;
+        location_mentions: Typed L1 place mentions used as Evidence inputs;
             these are not final candidate selections.
-        evidence_graph: Session-scoped join boundary for L1, World Model and DATA
-            identity (may be None while context hydration is incomplete).
         external_search_port: Lifecycle-owned optional text evidence provider;
             it is never a geometry, BSM, or KG authority.
         external_observation_snapshot: Read-only normalized map observations
@@ -93,8 +91,7 @@ class PlanningContext:
     world_model: Any = None
     kg_session_ref: str = ""
     kg_version: int = 0
-    # Migration mode is explicit so callers can tell whether compatibility
-    # Bundle/KG projections are authoritative for this context.
+    # Migration mode remains explicit for World Model rollout diagnostics.
     world_model_mode: str = "v2_only"
     # In shadow mode the V2 graph is built and written for comparison, while
     # the legacy KG remains the read authority until an explicit cutover.
@@ -120,8 +117,6 @@ class PlanningContext:
     # Closed-set DATA schema understanding produced by Cognition.  This is a
     # bounded candidate/decision snapshot, never a raw nested prompt payload.
     schema_mapping_snapshot: Any = None
-    evidence_graph: Any = None
-    evidence_graph_key: str = ""
     external_search_port: Any = None
     external_observation_snapshot: Any = None
     grounding_unresolved: List[Dict[str, Any]] = field(default_factory=list)
@@ -253,7 +248,6 @@ class PlanningContext:
             "has_world_model": self.world_model is not None,
             "has_gazetteer": self.gazetteer is not None,
             "has_constraint_index": self.constraint_index is not None,
-            "has_evidence_graph": self.evidence_graph is not None,
             "has_external_observations": self.external_observation_snapshot is not None,
             "external_observation_digest": str(
                 getattr(self.external_observation_snapshot, "digest", "") or ""
@@ -266,7 +260,6 @@ class PlanningContext:
                 for item in (getattr(self.external_observation_snapshot, "observations", []) or [])
                 if str(getattr(item, "provider", "") or "")
             }),
-            "evidence_graph_key": self.evidence_graph_key,
             "report_count": len(self.reports),
             "reports_loaded": self.reports_loaded,
             "location_mention_count": len(self.location_mentions),

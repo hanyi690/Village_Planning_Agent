@@ -460,7 +460,7 @@ FLASH_MODEL_TEMPERATURE = float(LLM_CONFIG.flash_model_temperature)
 # ==========================================
 # These settings are shared by source-semantic enrichment and vocabulary
 # extraction.  They are not a second retrieval path and must not be used as a
-# deterministic fallback for EvidenceGraph resolution.
+# deterministic fallback for typed DATA/WM resolution.
 
 GIS_EXPLORE_LLM_ENABLED = bool(LLM_CONFIG.gis_explore_llm_enabled)
 GIS_EXPLORE_MODEL = LLM_CONFIG.gis_explore_model

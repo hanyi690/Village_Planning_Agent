@@ -113,8 +113,7 @@ def _ground_packet_query(context: Any, spec: Any) -> tuple[str, list[str]]:
 def _packet_ref_key(ref: Any) -> str:
     identity = getattr(ref, "identity", None)
     return str(
-        getattr(identity, "bundle_feature_bsm", "")
-        or getattr(identity, "source_feature_id", "")
+        getattr(identity, "source_feature_id", "")
         or getattr(ref, "geometry_ref", "")
         or "|".join(getattr(ref, "entity_refs", None) or [])
     ).strip()
@@ -384,12 +383,12 @@ async def _retrieve_ground_evidence_packets(
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     """Fetch bounded packets and retain every retrieval error.
 
-    The packet is a bounded EvidenceGraph view. The resolver remains the
-    single grounding authority when a packet is absent; absence is recorded
-    so a provider or graph error cannot disappear as an empty candidate set.
+    The packet is a bounded Evidence view. The resolver remains the single
+    grounding authority when a packet is absent; absence is recorded so a
+    provider error cannot disappear as an empty candidate set.
     """
     session_id = str(getattr(context, "session_id", "") or "").strip()
-    if not session_id or getattr(context, "evidence_graph", None) is None:
+    if not session_id:
         return {}, []
     from app.contracts.evidence.requirement_contracts import EvidenceRequirement
     from app.modules.evidence.application import EvidenceApplication, EvidenceContext

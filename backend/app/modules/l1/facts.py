@@ -170,16 +170,6 @@ def location_mention_to_l1_fact(
     )
 
 
-def location_fact_to_l1_fact(
-    fact: LocationMention,
-    *,
-    snapshot_ref: str = "",
-) -> L1Fact | None:
-    """Compatibility wrapper for the retired function name."""
-
-    return location_mention_to_l1_fact(fact, snapshot_ref=snapshot_ref)
-
-
 def evidence_fact_to_l1_fact(
     fact: Any,
     *,
@@ -192,14 +182,14 @@ def evidence_fact_to_l1_fact(
     if source_kind in {"kg", "kg_canonical", "canonical_kg"}:
         fact_kind = "kg_canonical_fact"
     elif source_kind in {
-        "gis", "bundle", "bundle_geometry", "gis_layer", "data_resource_catalog",
+        "gis", "gis_layer", "data_resource_catalog",
     }:
         fact_kind = "gis_observation"
     else:
         fact_kind = "document_observation"
     if spatial_only and source_kind not in {
         "kg", "kg_canonical", "canonical_kg",
-        "gis", "bundle", "bundle_geometry", "gis_layer",
+        "gis", "gis_layer",
         "data_resource_catalog",
     }:
         return None
@@ -207,10 +197,7 @@ def evidence_fact_to_l1_fact(
         *_refs(getattr(fact, "source_refs", None) or []),
         _text(getattr(fact, "source_locator", "")),
     ]
-    feature_ids = [
-        _text(getattr(fact, "feature_bsm", "")),
-        *_refs(getattr(fact, "related_parcel_bsms", None) or []),
-    ]
+    feature_ids: list[str] = []
     # KG typed-count facts keep a bounded source-feature sample in fields;
     # retain those IDs when promoting the fact into L1 so the lineage gate
     # can distinguish a traceable aggregate from an unverified count.
@@ -221,8 +208,7 @@ def evidence_fact_to_l1_fact(
         elif value:
             feature_ids.extend(re.split(r"[,;]", str(value)))
     source_snapshot = _text(
-        fields.get("bundle_snapshot_digest")
-        or fields.get("source_snapshot_ref")
+        fields.get("source_snapshot_ref")
         or snapshot_ref
     )
     return make_l1_fact(
@@ -249,7 +235,7 @@ def evidence_fact_to_l1_fact(
             "inferred"
             if source_kind in {
                 "kg", "kg_canonical", "canonical_kg",
-                "bundle", "bundle_geometry",
+                "data_resource_catalog",
             }
             else "observed"
         ),
@@ -258,7 +244,7 @@ def evidence_fact_to_l1_fact(
 
 __all__ = [
     "evidence_fact_to_l1_fact",
-    "location_fact_to_l1_fact",
+    "location_mention_to_l1_fact",
     "make_l1_fact",
     "stable_l1_fact_id",
 ]

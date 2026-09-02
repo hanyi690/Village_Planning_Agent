@@ -28,9 +28,6 @@ class EvidencePacket(ContractMeta):
 
     request: str
     query_fingerprint: str = ""
-    bundle_snapshot_digest: str = ""
-    # DATA/World-Model lineage is explicit in V2; legacy packets may leave
-    # these empty while their compatibility Bundle digest remains populated.
     data_snapshot_ref: str = ""
     data_snapshot_digest: str = ""
     world_model_snapshot_ref: str = ""

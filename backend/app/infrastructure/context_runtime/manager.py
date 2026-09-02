@@ -1029,19 +1029,6 @@ async def build_planning_context(
             "cognition context is incomplete: WorldModel read/commit ports are required"
         )
 
-    # 6.5 EvidenceGraph is the compatibility spatial-evidence boundary.  A
-    # prefer_v2/v2_only context must not construct it; V2 callers use the injected
-    # world-model/catalog ports and explicit Evidence Runtime adapters.
-    if world_model_mode not in {"shadow", "prefer_v2", "v2_only"}:
-        try:
-            from app.infrastructure.evidence_runtime.evidence_graph import EvidenceGraph
-
-            context.evidence_graph = EvidenceGraph.build(context)
-        except Exception as e:
-            logger.warning(
-                "[PlanningContext] evidence graph build failed: %s",
-                type(e).__name__,
-            )
     _context_cache[session_id] = context
     logger.info(
         "[PlanningContext] built v%d for %s (%s): snapshot=%s kg=%s gaz=%s cidx=%s reports=%d elapsed_ms=%.1f",

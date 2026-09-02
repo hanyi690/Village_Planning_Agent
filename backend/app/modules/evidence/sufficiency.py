@@ -280,7 +280,6 @@ def _packet_candidates(
             item.geometry_ref
             or item.resource_ref
             or identity.source_feature_id
-            or identity.bundle_feature_bsm
             or ""
         ).strip()
         if not packet_ref:
@@ -299,12 +298,9 @@ def _packet_candidates(
         ):
             continue
         material = f"{requirement.requirement_ref}:{packet_ref}"
-        bsm = str(identity.bundle_feature_bsm or "").strip()
         packet_claim_ref = (
             "evidence-claim-feature-"
-            + hashlib.sha256(bsm.encode()).hexdigest()[:20]
-            if bsm
-            else ""
+            + hashlib.sha256(packet_ref.encode()).hexdigest()[:20]
         )
         output.append(CandidateEvidence(
             candidate_ref="evidence.candidate.packet." + hashlib.sha256(material.encode()).hexdigest()[:24],
@@ -314,21 +310,47 @@ def _packet_candidates(
                 *item.provenance_refs,
                 *item.l1_fact_refs,
             ))),
-            source_refs=tuple(dict.fromkeys((*item.provenance_refs, *item.l1_fact_refs))),
-            source_families=("bundle",),
+            source_refs=tuple(dict.fromkeys(
+                value
+                for value in (
+                    item.resource_ref,
+                    *item.provenance_refs,
+                    *item.l1_fact_refs,
+                )
+                if str(value or "").strip()
+            )),
+            source_families=("data",),
             source_authorities=(
                 "authoritative_geometry"
-                if item.geometry_authority in {"bundle", "data_resource_catalog"}
+                if item.geometry_authority == "data_resource_catalog"
                 else "advisory",
             ),
             geometry_authorities=(str(item.geometry_authority or "none"),),
-            spatial_refs=(str(item.geometry_ref),) if item.geometry_ref else (),
-            independent_source_refs=tuple(dict.fromkeys(item.provenance_refs)),
+            spatial_refs=tuple(dict.fromkeys(
+                value
+                for value in (item.geometry_ref, item.resource_ref)
+                if str(value or "").strip()
+            )),
+            independent_source_refs=tuple(dict.fromkeys(
+                value
+                for value in (
+                    item.source_snapshot_ref,
+                    *item.provenance_refs,
+                )
+                if str(value or "").strip()
+            )),
             inference_levels=("exact",),
             statement=f"{identity.canonical_name or identity.entity_type or 'candidate'} {packet_ref}",
             value_digest=hashlib.sha256(packet_ref.encode()).hexdigest()[:24],
             locator_refs=tuple(dict.fromkeys(
-                value for value in (item.geometry_ref, *item.provenance_refs) if value
+                value
+                for value in (
+                    item.geometry_ref,
+                    item.resource_ref,
+                    *item.representation_refs,
+                    *item.provenance_refs,
+                )
+                if str(value or "").strip()
             )),
             confidence=max(0.0, min(1.0, float(
                 item.selection_confidence

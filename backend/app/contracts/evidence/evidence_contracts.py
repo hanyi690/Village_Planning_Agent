@@ -75,8 +75,6 @@ class EvidenceFact(BaseModel):
     spatial_refs: list[str] = []
     fact_type: str = "statement"
     fields: dict[str, str] = {}
-    feature_bsm: str = ""
-    related_parcel_bsms: list[str] = []
     evidence_span: str = ""
     source_locator: str = ""
     support_relation: str = "quotation"
@@ -98,8 +96,6 @@ class EvidenceFact(BaseModel):
             "spatial_refs": sorted(set(self.spatial_refs)),
             "fact_type": self.fact_type,
             "fields": self.fields,
-            "feature_bsm": self.feature_bsm,
-            "related_parcel_bsms": sorted(set(self.related_parcel_bsms)),
             "evidence_span": self.evidence_span,
             "source_locator": self.source_locator,
             "support_relation": self.support_relation,

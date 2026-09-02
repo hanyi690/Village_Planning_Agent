@@ -8,7 +8,7 @@ from app.contracts.evidence.evidence_contracts import EvidenceFact, EvidenceSour
 
 
 _SOURCE_PROFILES: dict[str, dict[str, Any]] = {
-    "bundle": {
+    "data": {
         "evidence_role": "spatial_identity",
         "authority": "geometry_authoritative",
         "supports": ["location_binding", "grounding", "execution_geometry"],
@@ -76,6 +76,8 @@ def annotate_sources(
         source_type = str(source.source_type or "").strip().lower()
         if source_type == "bundle" and str(source.reference or "").startswith("local-text:"):
             source_type = "local_text"
+        elif source_type == "bundle":
+            source_type = "data"
         profile = _SOURCE_PROFILES.get(
             source_type,
             {
@@ -86,8 +88,8 @@ def annotate_sources(
         )
         snapshot_ref = str(source.snapshot_ref or "")
         if not snapshot_ref:
-            if source_type in {"bundle", "gis_layer"} and bundle_digest:
-                snapshot_ref = f"bundle:snapshot:{bundle_digest}"
+            if source_type in {"data", "gis_layer"} and bundle_digest:
+                snapshot_ref = f"data:snapshot:{bundle_digest}"
             elif source_type == "l1" and l1_snapshot_ref:
                 snapshot_ref = l1_snapshot_ref
         annotated.append(source.model_copy(update={

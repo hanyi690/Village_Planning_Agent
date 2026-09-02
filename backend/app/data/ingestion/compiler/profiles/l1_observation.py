@@ -191,7 +191,7 @@ def _explicit_spatial_mentions(obs: dict[str, Any]) -> list[dict[str, Any]]:
 
     The compiler intentionally does not mine arbitrary description prose for
     geometry.  A provider must opt into the typed ``spatial_mentions`` field;
-    the resulting records remain semantic until EvidenceGraph resolves them.
+    the resulting records remain semantic until Evidence resolves them.
     """
 
     mentions: list[dict[str, Any]] = []

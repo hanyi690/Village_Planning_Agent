@@ -21,7 +21,6 @@ ResolutionStatus = Literal[
     "ambiguous",
     "unresolved",
     "not_applicable",
-    # Read compatibility for pre-rename artifacts.
     "resolved",
 ]
 IdentityResolutionStatus = Literal[
@@ -85,7 +84,6 @@ class GroundedEntityBinding(BaseModel):
     resource_refs: list[str] = Field(default_factory=list)
     entity_part_refs: list[str] = Field(default_factory=list)
     source_feature_ids: list[str] = Field(default_factory=list)
-    source_bsms: list[str] = Field(default_factory=list)
     candidate_refs: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     relation_evidence_refs: list[str] = Field(default_factory=list)
@@ -201,26 +199,6 @@ class SourceFeatureSetBinding(BaseModel):
         )
 
 
-def infer_geometry_granularity(
-    geometry_ref: str | None,
-    *,
-    entity_ref: str = "",
-    source_bsms: list[str] | None = None,
-) -> GeometryGranularity:
-    """Infer only safe coarse classes from existing grounding metadata."""
-
-    geometry = str(geometry_ref or "").strip()
-    if geometry.startswith("village_anchor:") or geometry in {
-        "bundled:coarse", "bundled:coarse_scope",
-    }:
-        return "village_scope"
-    if entity_ref and geometry:
-        return "exact_feature"
-    if source_bsms:
-        return "parcel_set"
-    return "none"
-
-
 __all__ = [
     "GeometryGranularity", "ResolutionStatus", "IdentityResolutionStatus",
     "RelativeLocationStatus",
@@ -229,5 +207,4 @@ __all__ = [
     "GroundedEntityBindingSnapshot",
     "SourceBindingMode", "SourceMembership", "SourceOperation",
     "SourceFeatureSetBinding",
-    "infer_geometry_granularity",
 ]

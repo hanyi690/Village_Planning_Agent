@@ -115,7 +115,7 @@ class PlanningKG:
         kg.g.parse(data=turtle_str, format="turtle")
         kg._parcel_count = len(list(kg.g.subjects(RDF.type, EntityTypes.Parcel)))
         # CAS/session restore must expose the same indexed query surface as a
-        # freshly materialized KG.  Without rebuilding here, EvidenceGraph
+        # freshly materialized KG.  Without rebuilding here, resumed
         # sees an empty entity/relation index after resume even though the RDF
         # graph contains the complete snapshot.
         kg.rebuild_spatial_index()

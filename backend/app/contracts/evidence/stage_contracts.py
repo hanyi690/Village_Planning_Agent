@@ -82,8 +82,8 @@ class EvidenceStageSnapshot(ContractMeta):
     stage: Literal["evidence"] = "evidence"
     status: Literal["ready", "blocked"] = "ready"
     # These are the exact immutable DATA/KG descriptors consumed by Evidence.
-    # The legacy string fields below remain as business snapshot identifiers;
-    # they are not authority references and must never be used for replay.
+    # The string fields below are human-readable snapshot identifiers; they
+    # are not authority references and must never be used for replay.
     data_catalog_artifact_ref: ArtifactRef
     data_snapshot_artifact_ref: ArtifactRef
     world_model_artifact_ref: ArtifactRef

@@ -429,11 +429,8 @@ class EvidenceContext(BaseModel):
         data_catalog = state.get("data_catalog")
         cached_context = None
         if session_id:
-            # Workflow checkpoints intentionally carry artifact refs rather
-            # than live DATA objects.  Recover the immutable catalog from the
-            # session Context Runtime so V2-authoritative stages cannot silently fall
-            # back to the legacy retriever just because the checkpoint is
-            # reference-only.
+            # Workflow checkpoints carry artifact refs rather than live DATA
+            # objects. Recover the immutable catalog from the session context.
             try:
                 from app.infrastructure.context_runtime.manager import get_cached_context
 
@@ -595,8 +592,6 @@ class EvidenceContext(BaseModel):
         if reports:
             sources.update({"text", "report"})
             capabilities.add("source_evidence")
-        if cached_context is not None and getattr(cached_context, "bundle", None) is not None:
-            sources.add("bundle")
         # A persisted Evidence snapshot is authoritative. Reload its child ref
         # above and never replace it with a newer cache scan after a worker
         # restart.
@@ -1362,19 +1357,6 @@ class EvidenceApplication:
 
             data_catalog = DataResourceCatalog(catalog_artifact)
         world_model = getattr(context, "world_model", None) if context is not None else None
-        if world_model is None and context is not None:
-            mode = str(getattr(context, "world_model_mode", "off") or "off").casefold()
-            world_model = (
-                getattr(context, "kg", None)
-                if mode in {"shadow", "prefer_v2", "v2_only"}
-                else getattr(context, "world_model_shadow", None)
-            )
-            if world_model is None:
-                # ``world_model`` is the normal cognition handle in all new
-                # contexts.  This final compatibility read is only for an
-                # older cached context; it does not make the legacy KG the
-                # DATA/KG bootstrap authority.
-                world_model = getattr(context, "kg", None)
         expected_world_digest = str(
             getattr(world_artifact, "graph_digest", "") or ""
         )
@@ -2196,7 +2178,7 @@ class EvidenceApplication:
             candidate_offset=candidate_offset,
             candidate_limit=candidate_limit,
         )
-        if context.world_model_mode.strip().lower() in {"shadow", "prefer_v2", "v2_only"} and context.data_catalog is not None:
+        if context.data_catalog is not None:
             from app.infrastructure.evidence_runtime.v2_catalog import retrieve_catalog_evidence
 
             try:

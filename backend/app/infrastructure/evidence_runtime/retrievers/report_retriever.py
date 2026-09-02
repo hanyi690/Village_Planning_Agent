@@ -199,7 +199,7 @@ async def retrieve_from_reports(
     Report prose is analysis context, not an authoritative spatial identity.
     Even when a sentence contains a place-like word, a number, or a geometry
     term, it must not become a grounding fact.  Concrete location binding is
-    supplied by typed L1 facts and the bundle/KG EvidenceGraph instead.
+    supplied by typed L1 facts and the DATA/WM evidence boundary instead.
 
     Returns (facts, sources) - facts are bounded planning excerpts and sources
     reference the report layer+dimension.

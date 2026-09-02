@@ -5,18 +5,12 @@ and representation references and never need a legacy parcel or BSM field.
 """
 
 from .knowledge import knowledge_graph
-from .evidence import (
-    data_geometry_by_ref,
-    query_evidence_graph,
-    query_facility_bsms,
-)
+from .evidence import data_geometry_by_ref
 from .reports import layer_reports
 
 ACCESS_TOOLS = [
     layer_reports,
     knowledge_graph,
-    query_evidence_graph,
-    query_facility_bsms,
     data_geometry_by_ref,
 ]
 
@@ -32,18 +26,6 @@ _ACCESS_METADATA = {
         "description": "查询会话 KG 语义上下文（村庄/地块/实体/约束）。",
         "estimated_time": 1.5,
         "display_hints": {"primary_view": "text", "priority_fields": ["semantic"]},
-    },
-    "query_evidence_graph": {
-        "display_name": "证据图查询",
-        "description": "返回 DATA 候选引用、实体身份与拓扑的有界证据包。",
-        "estimated_time": 1.5,
-        "display_hints": {"primary_view": "text", "priority_fields": ["candidate_refs", "relation_evidence"]},
-    },
-    "query_facility_bsms": {
-        "display_name": "设施 BSM 查询",
-        "description": "按村域查询已验证设施 BSM，不接受模型生成的身份。",
-        "estimated_time": 1.0,
-        "display_hints": {"primary_view": "text", "priority_fields": ["status", "candidates"]},
     },
     "data_geometry_by_ref": {
         "display_name": "按 DATA 引用取几何",
@@ -71,7 +53,5 @@ __all__ = [
     "ACCESS_TOOLS",
     "layer_reports",
     "knowledge_graph",
-    "query_evidence_graph",
-    "query_facility_bsms",
     "data_geometry_by_ref",
 ]

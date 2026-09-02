@@ -858,7 +858,6 @@ def resolve_spatial_description(
     kg: Any = None,
     gazetteer: Any = None,
     constraint_index: Any = None,
-    evidence_graph: Any = None,
 ) -> ResolvedSpatialDescription:
     """KG 拓扑优先的空间描述分派器 — 方位/描述 → 候选 BSM。
 
@@ -866,8 +865,8 @@ def resolve_spatial_description(
       toponym "园寨"         → gazetteer.resolve → entry.bsms（P0 多源坐标+组合名）
       directional "村北"     → resolve_directional_bbox + query_parcels_in_bbox（几何兜底）
       topology_adjacent "靠近园寨" → gazetteer.resolve → entry.bsms → KG sfTouches 邻居
-      linear_road "沿122乡道" → EvidenceGraph.candidate_bsms（road 提及）
-      linear_water "沿金田河" → EvidenceGraph.candidate_bsms（water 提及）
+      linear_road "沿122乡道" → typed DATA candidate lookup
+      linear_water "沿金田河" → typed DATA candidate lookup
       constraint_edge "生态边缘" → ConstraintIndex 约束重叠地块（几何）
       compound "村北靠近园寨"  → directional BBox ∩ topology_adjacent
 
@@ -877,7 +876,6 @@ def resolve_spatial_description(
         kg: 预留（调用方若想直接传 KG 实例）。
         gazetteer: 村庄地名册（P0 增强后含多源坐标+组合名）。
         constraint_index: ConstraintIndex（约束重叠检查）；为 None 时跳过约束过滤。
-        evidence_graph: EvidenceGraph 会话图；为 None 时线性/复合解析保持未解析。
 
     Returns:
         ResolvedSpatialDescription。
@@ -897,15 +895,15 @@ def resolve_spatial_description(
     logger.info("[grounding:resolve] desc='%s' type=%s", desc, dtype)
 
     if dtype == "toponym":
-        return _resolve_toponym(desc, gazetteer, parcels, evidence_graph)
+        return _resolve_toponym(desc, gazetteer, parcels)
     if dtype == "directional":
         return _resolve_directional(desc, parcels)
     if dtype in ("linear_road", "linear_water"):
-        return _resolve_linear(desc, dtype, evidence_graph, parcels)
+        return _resolve_linear(desc, dtype, parcels)
     if dtype == "constraint":
         return _resolve_constraint(desc, constraint_index, parcels, bundle)
     if dtype == "compound":
-        return _resolve_compound(desc, gazetteer, evidence_graph, parcels, constraint_index)
+        return _resolve_compound(desc, gazetteer, parcels, constraint_index)
     return ResolvedSpatialDescription(evidence_text=desc,
                                       unresolved_reason=f"unsupported type {dtype}")
 
@@ -919,30 +917,9 @@ def _default_gazetteer(bundle: Any):
 
 
 def _resolve_toponym(
-    desc: str, gazetteer: Any, parcels: list, evidence_graph: Any = None,
+    desc: str, gazetteer: Any, parcels: list,
 ) -> ResolvedSpatialDescription:
     """地名 → gazetteer entry → entry.bsms（P0 多源坐标 + 组合名条目）。"""
-    if evidence_graph is not None:
-        try:
-            resolved = evidence_graph.resolve_mention(desc)
-            if resolved.status == "resolved" and resolved.candidates:
-                candidate = resolved.candidates[0]
-                if candidate.source_bsms:
-                    return ResolvedSpatialDescription(
-                        candidate_bsms=list(candidate.source_bsms), evidence_text=desc,
-                        query_path="evidence:typed_spatial_fact", confidence=candidate.score,
-                    )
-                # A real typed fact without parcel linkage is an unresolved
-                # breakpoint, not permission to substitute the village center.
-                if candidate.geometry_ref:
-                    return ResolvedSpatialDescription(
-                        evidence_text=desc,
-                        query_path="evidence:typed_spatial_fact",
-                        confidence=candidate.score,
-                        unresolved_reason="typed spatial fact has geometry but no parcel linkage",
-                    )
-        except Exception as exc:
-            logger.debug("[grounding:toponym] evidence query failed: %s", exc)
     if gazetteer is None:
         return ResolvedSpatialDescription(evidence_text=desc,
                                           unresolved_reason="no gazetteer")
@@ -971,29 +948,12 @@ def _resolve_directional(desc: str, parcels: list) -> ResolvedSpatialDescription
 
 
 def _resolve_linear(
-    desc: str, dtype: str, evidence_graph: Any, parcels: list,
+    desc: str, dtype: str, parcels: list,
 ) -> ResolvedSpatialDescription:
-    """线性描述 → EvidenceGraph 候选（road / water 提及）。
-
-    EvidenceGraph 不可用或无候选时返回 typed ``unresolved``，不做村庄中心 buffer 兜底。
-    """
-    if evidence_graph is not None:
-        try:
-            mention = _extract_linear_mention(desc)
-            if mention:
-                bsms = evidence_graph.candidate_bsms(mention)
-                path = "evidence:linear_touching"
-                if bsms:
-                    return ResolvedSpatialDescription(
-                        candidate_bsms=bsms, evidence_text=desc,
-                        query_path=path, confidence=0.7,
-                    )
-        except Exception as e:
-            logger.debug("[grounding:linear] evidence query failed: %s", e)
-
+    """Resolve a linear mention only when a typed DATA candidate was supplied."""
     return ResolvedSpatialDescription(
         evidence_text=desc,
-        unresolved_reason="linear mention has no evidence-graph candidate",
+        unresolved_reason="linear mention has no typed DATA candidate",
     )
 
 
@@ -1025,7 +985,7 @@ def _resolve_constraint(
 
 
 def _resolve_compound(
-    desc: str, gazetteer: Any, evidence_graph: Any, parcels: list, constraint_index: Any,
+    desc: str, gazetteer: Any, parcels: list, constraint_index: Any,
 ) -> ResolvedSpatialDescription:
     """复合描述（方向+地名）→ 方向 BBox ∩ 地名拓扑邻居。"""
     dir_result = _resolve_directional(desc, parcels)
@@ -1033,7 +993,7 @@ def _resolve_compound(
         # 方向解析失败，退回地名
         for kw in _DIRECTION_KEYWORDS:
             desc = desc.replace(kw, "靠近")
-        return _resolve_toponym(desc, gazetteer, parcels, evidence_graph)
+        return _resolve_toponym(desc, gazetteer, parcels)
     # 地名部分：取包含的村名
     village_name = _extract_toponym(desc)
     if village_name and gazetteer is not None:

@@ -117,47 +117,68 @@ def _claims(result: ExplorationResult) -> tuple[EvidenceClaim, ...]:
     if packet is not None:
         for candidate in packet.candidate_refs:
             identity = candidate.identity
-            bsm = str(identity.bundle_feature_bsm or "").strip()
-            if not bsm:
+            packet_ref = str(
+                candidate.geometry_ref
+                or candidate.resource_ref
+                or identity.source_feature_id
+                or ""
+            ).strip()
+            if not packet_ref:
                 continue
-            claim_id = f"evidence-claim-feature-{hashlib.sha256(bsm.encode('utf-8')).hexdigest()[:20]}"
+            claim_id = f"evidence-claim-feature-{hashlib.sha256(packet_ref.encode('utf-8')).hexdigest()[:20]}"
             if claim_id in seen:
                 continue
             seen.add(claim_id)
             name = str(identity.canonical_name or identity.entity_type or "空间要素").strip()
+            source_refs = tuple(dict.fromkeys(
+                value
+                for value in (
+                    candidate.resource_ref,
+                    *candidate.provenance_refs,
+                    *candidate.l1_fact_refs,
+                )
+                if str(value or "").strip()
+            ))
+            spatial_refs = tuple(dict.fromkeys(
+                value
+                for value in (candidate.geometry_ref, candidate.resource_ref)
+                if str(value or "").strip()
+            ))
+            snapshot_refs = tuple(dict.fromkeys(
+                value
+                for value in (
+                    packet.data_snapshot_ref,
+                    packet.data_snapshot_digest,
+                    candidate.source_snapshot_ref,
+                )
+                if str(value or "").strip()
+            ))
             claims.append(
                 EvidenceClaim(
                     claim_id=claim_id,
-                    statement=f"{name} 的 bundle feature BSM 为 {bsm}",
+                    statement=f"{name} 的 DATA source feature 为 {packet_ref}",
                     status="supported",
-                    source_refs=tuple(
-                        dict.fromkeys(
-                            [
-                                *candidate.provenance_refs,
-                                *candidate.l1_fact_refs,
-                            ]
-                        )
-                    ),
-                    source_families=("bundle",),
+                    source_refs=source_refs,
+                    source_families=("data",),
                     locators=tuple(
                         dict.fromkeys(
                             value
                             for value in (
-                                bsm,
+                                packet_ref,
                                 candidate.geometry_ref,
+                                candidate.resource_ref,
                                 *candidate.provenance_refs,
                             )
                             if str(value or "").strip()
                         )
                     ),
-                    spatial_refs=(bsm,),
+                    spatial_refs=spatial_refs,
                     authority=(
                         "authoritative_geometry"
-                        if candidate.geometry_authority
-                        in {"bundle", "data_resource_catalog"}
+                        if candidate.geometry_authority == "data_resource_catalog"
                         else "advisory"
                     ),
-                    snapshot_refs=(packet.bundle_snapshot_digest,) if packet.bundle_snapshot_digest else (),
+                    snapshot_refs=snapshot_refs,
                     confidence=max(
                         0.0,
                         min(

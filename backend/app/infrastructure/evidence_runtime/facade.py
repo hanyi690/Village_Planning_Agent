@@ -1,7 +1,7 @@
 """Central Evidence Runtime - single retrieve_evidence execution entry point.
 
-Returns EvidenceBundle + SpatialCognitionEvidence. Never returns candidate
-BSMs, bbox, or intent. Deterministic (no LLM).
+Returns EvidenceBundle + SpatialCognitionEvidence. Candidate geometry remains
+an opaque DATA reference; no coordinates, WKT, or intent are generated here.
 """
 from __future__ import annotations
 
@@ -260,8 +260,8 @@ async def extract_spatial_query_spec(
     """Run the optional typed spatial parser with an explicit outcome trace.
 
     HTTP and LLM-tool callers must share the same parser gate.  The parser is
-    never allowed to manufacture an identity; EvidenceGraph still owns local
-    candidate binding.  A disabled, empty, or failed provider result is
+    never allowed to manufacture an identity; DATA and WM ports own candidate
+    identity binding.  A disabled, empty, or failed provider result is
     returned as a diagnostic instead of being silently converted to a clean
     deterministic parse.
     """
@@ -306,109 +306,6 @@ async def extract_spatial_query_spec(
         }
 
 
-
-
-def _enrich_local_spatial_graph(
-    result: ExplorationResult,
-    context: Any,
-    *,
-    query: str,
-    village_name: str,
-    entity_scope: list[str],
-    spatial_spec: Any = None,
-    candidate_offset: int = 0,
-    candidate_limit: int = 12,
-) -> ExplorationResult:
-    """Join local L1/KG/bundle identity before optional external retrieval.
-
-    EvidenceGraph is a local authoritative source, but its structured packet
-    used to be attached only after the external sufficiency decision.  That
-    ordering could spend external quota on a query already resolved to a
-    bundle feature.  A graph candidate gets a typed local source marker when
-    the ordinary retrievers returned no source rows, keeping sufficiency
-    fail-closed while allowing identity questions to terminate locally.
-    """
-    if str(getattr(context, "world_model_mode", "off") or "off").strip().lower() in {"prefer_v2", "v2_only"}:
-        # V2-only contexts expose catalog/world-model ports instead of the V1
-        # EvidenceGraph.  The caller can still use ordinary retriever rows;
-        # spatial candidate enrichment is handled by GROUND's V2 adapter.
-        return result
-
-    from app.infrastructure.evidence_runtime.evidence_graph import (
-        append_feature_identity_facts,
-        enrich_evidence_packet_with_spatial_graph,
-    )
-
-    packet = enrich_evidence_packet_with_spatial_graph(
-        EvidencePacket(
-            request=query,
-            query_fingerprint=request_fingerprint(
-                ExplorationRequest(
-                    run_id="local-graph",
-                    request_type="spatial_lookup",
-                    query=query,
-                    entity_scope=list(entity_scope),
-                )
-            ),
-        ),
-        context,
-        query=query,
-        village_name=village_name,
-        entity_scope=entity_scope,
-        spatial_spec=spatial_spec,
-        candidate_offset=candidate_offset,
-        candidate_limit=candidate_limit,
-    )
-    bundle = append_feature_identity_facts(
-        result.evidence_bundle,
-        packet,
-        context=context,
-    )
-    if packet.candidate_refs and not bundle.sources:
-        digest = str(packet.bundle_snapshot_digest or "local")
-        bundle = bundle.model_copy(update={
-            "sources": [
-                EvidenceSource(
-                    source_type="bundle",
-                    reference=f"bundle:snapshot:{digest}",
-                    confidence=max(
-                        0.5,
-                        max(
-                            (
-                                float(
-                                    getattr(
-                                        item,
-                                        "source_authority_score",
-                                        0.0,
-                                    )
-                                    or 0.0
-                                )
-                                for item in packet.candidate_refs
-                            ),
-                            default=0.0,
-                        ),
-                    ),
-                )
-            ]
-        })
-    if bundle.facts:
-        bundle.confidence = round(
-            sum(float(fact.confidence or 0.0) for fact in bundle.facts)
-            / len(bundle.facts),
-            3,
-        )
-    return result.model_copy(update={
-        "evidence_bundle": bundle,
-        "evidence_packet": packet,
-    })
-
-
-def _needs_spatial_graph(request: ExplorationRequest, spatial_spec: Any = None) -> bool:
-    """Keep geometry candidate joins out of ordinary factual retrieval."""
-
-    return request.request_type == "spatial_lookup" or spatial_spec is not None
-
-
 async def retrieve_evidence(
     request: ExplorationRequest,
     session_id: str,
@@ -420,8 +317,8 @@ async def retrieve_evidence(
 ) -> ExplorationResult:
     """Retrieve evidence from all session sources for a planning stage.
 
-    Searches: session KG, VillageBundle, all AnalysisReports (content),
-    typed artifacts (placeholder until Wave D/E).
+    Searches the admitted DATA/WM sources, reports, and typed artifacts through
+    the configured acquisition plan.
 
     Returns ExplorationResult with evidence_bundle and spatial_cognition.
     """
@@ -802,33 +699,6 @@ async def retrieve_evidence(
         ),
         spatial_cognition=cognition,
     )
-    if cached_context is not None and _needs_spatial_graph(request, spatial_spec):
-        try:
-            result = _enrich_local_spatial_graph(
-                result,
-                cached_context,
-                query=request.query,
-                village_name=village_name,
-                entity_scope=list(request.entity_scope),
-                spatial_spec=spatial_spec,
-                candidate_offset=request.candidate_offset,
-                candidate_limit=request.candidate_limit,
-            )
-            unique_facts = list(result.evidence_bundle.facts)
-            unique_sources = list(result.evidence_bundle.sources)
-            all_sources = list(unique_sources)
-            unique_facts = fuse_facts(unique_facts)
-            unique_sources = fuse_sources(unique_sources)
-        except Exception as exc:
-            retrieval_status.append({
-                "step": "evidence_graph_prefetch",
-                "status": "failed",
-                "error": f"{type(exc).__name__}: {exc}",
-            })
-            logger.warning(
-                "[retrieve_evidence] early spatial graph unavailable: %s",
-                exc,
-            )
     decision = evaluate_sufficiency(request, result)
     external_trace: list[dict[str, Any]] = []
     if external_port is not None and decision.status.value != "sufficient":
@@ -998,62 +868,6 @@ async def retrieve_evidence(
             *external_trace,
         ],
     )
-    # The context cache is already populated by workflow bootstrap in normal
-    # runs.  Enrich only when it is available; broad EXPLORE retrieval must
-    # remain useful during cold start and must not rebuild a full context here.
-    try:
-        from app.infrastructure.context_runtime.manager import get_cached_context
-        from app.infrastructure.evidence_runtime.evidence_graph import (
-            append_feature_identity_facts,
-            enrich_evidence_packet_with_spatial_graph,
-        )
-
-        context = cached_context or get_cached_context(session_id)
-        if (
-            context is not None
-            and str(getattr(context, "world_model_mode", "off") or "off").strip().lower() not in {"prefer_v2", "v2_only"}
-            and _needs_spatial_graph(request, spatial_spec)
-        ):
-            result.evidence_packet = enrich_evidence_packet_with_spatial_graph(
-                result.evidence_packet,
-                context,
-                query=request.query,
-                village_name=village_name,
-                entity_scope=request.entity_scope,
-                spatial_spec=spatial_spec,
-                candidate_offset=request.candidate_offset,
-                candidate_limit=request.candidate_limit,
-            )
-            result.evidence_bundle = append_feature_identity_facts(
-                result.evidence_bundle,
-                result.evidence_packet,
-                context=context,
-            )
-    except Exception as exc:
-        diagnostic = {
-            "step": "evidence_graph_enrichment",
-            "status": "failed",
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-        result.evidence_packet = result.evidence_packet.model_copy(update={
-            "query_trace": [
-                *result.evidence_packet.query_trace,
-                diagnostic,
-            ][-24:],
-            "missing_evidence": list(dict.fromkeys([
-                *result.evidence_packet.missing_evidence,
-                "evidence_graph_unavailable",
-            ]))[:12],
-            "sufficiency": (
-                "partial"
-                if result.evidence_bundle.facts
-                else "insufficient"
-            ),
-        })
-        logger.warning(
-            "[retrieve_evidence] spatial evidence graph unavailable: %s",
-            exc,
-        )
     packet = result.evidence_packet
     if (
         packet is not None
@@ -1065,7 +879,7 @@ async def retrieve_evidence(
             reason = "candidate page offset is outside the returned evidence range"
             missing_code = "candidate_offset_out_of_range"
         else:
-            reason = "no Bundle-backed spatial candidate was resolved for this query"
+            reason = "no DATA-backed spatial candidate was resolved for this query"
             missing_code = "spatial_candidates_unresolved"
         final_status = "partial" if result.evidence_bundle.facts else "insufficient"
         packet_trace = [
@@ -1215,8 +1029,8 @@ def render_evidence_prompt_section(
         "## EXPLORE 证据",
         "**证据使用规则**:",
         "- report/L1-L2-L3 正文、专业 RAG 和外源文本只提供规划背景或待核实线索，不产生空间位置。",
-        "- typed L1 spatial fact 只提供语义到地点的可审计绑定；KG/World Model 提供实体身份与拓扑；DATA resource/representation ref 才是当前几何入口（兼容模式才使用 Bundle feature ref）。",
-        "- 只能使用下方已经返回的候选和 opaque DATA ref；禁止从名称、数量、道路宽度或报告文字自行生成 BSM、坐标、WKT、地块或关系。",
+        "- typed L1 spatial fact 只提供语义到地点的可审计绑定；WM 提供实体身份与拓扑；DATA resource/representation ref 是唯一几何入口。",
+        "- 只能使用下方已经返回的候选和 opaque DATA ref；禁止从名称、数量、道路宽度或报告文字自行生成身份、坐标、WKT、地块或关系。",
     "- ambiguity=multiple 或 unresolved 时不得写成唯一选址；必须保留候选/缺口并把定位交给 GROUND。",
     ]
 
@@ -1301,7 +1115,7 @@ def render_evidence_prompt_section(
     if parcel_facts:
         lines.append("")
         lines.append(
-            "**规划候选地块（Bundle 源地块，可在 SELECT 按目标面积生成子几何）**:"
+            "**规划候选地块（DATA 源要素，可在 SELECT 按目标面积生成子几何）**:"
         )
         for fact in parcel_facts[:12]:
             spatial_refs = list(dict.fromkeys(
@@ -1311,15 +1125,15 @@ def render_evidence_prompt_section(
             ))[:2]
             source_area = str(fact.fields.get("source_area_ha") or "").strip()
             area_label = f"; 源面积={source_area}ha" if source_area else ""
-            ref_label = f"; bundle_ref={spatial_refs[0]}" if spatial_refs else ""
+            ref_label = f"; data_ref={spatial_refs[0]}" if spatial_refs else ""
             lines.append(
-                f"- [来源=bundle; 作用=location_binding; 空间粒度=feature; "
+                f"- [来源=data; 作用=location_binding; 空间粒度=feature; "
                 f"规划用途=candidate_site{area_label}{ref_label}] {fact.statement}"
             )
         if len(parcel_facts) > 12:
             lines.append(
                 f"- 规划候选地块证据共 {len(parcel_facts)} 条，本次显示 12 条；"
-                "其余地块仍需通过候选分页或同一 Bundle ref 继续读取。"
+                "其余地块仍需通过候选分页或同一 DATA ref 继续读取。"
             )
     if spatial_facts:
         lines.append("")
@@ -1341,12 +1155,12 @@ def render_evidence_prompt_section(
         if len(spatial_facts) > 12:
             lines.append(
                 f"- 空间事实共 {len(spatial_facts)} 条，本次显示 12 条；"
-                "候选身份和几何仍只能使用下方 Bundle/EvidenceGraph ref。"
+                "候选身份和几何仍只能使用 EvidencePacket 返回的 DATA ref。"
             )
 
     if packet is not None:
         lines.append("")
-        lines.append("**EvidenceGraph 空间候选与拓扑（可用于定位/约束，不直接提供执行几何）**:")
+        lines.append("**EvidencePacket 候选与关系（仅使用 DATA/WM 引用）**:")
         candidate_start = packet.candidate_offset
         candidate_returned = len(packet.candidate_refs)
         candidate_end = candidate_start + candidate_returned
@@ -1378,9 +1192,8 @@ def render_evidence_prompt_section(
                 f"has_more=true; next_candidate_offset={packet.next_candidate_offset}。"
             )
             lines.append(
-                "- 分页动作：必须继续调用 query_evidence_graph 或 "
-                "query_facility_bsms，并传入上述 next_candidate_offset 和相同的 "
-                f"candidate_limit，直到 next_candidate_offset=null；不得把当前页写成唯一结果。"
+                "- 分页动作：由 Evidence 按同一 requirement/query plan 继续读取上述 "
+                f"next_candidate_offset（limit={packet.candidate_limit}）；不得把当前页写成唯一结果。"
             )
         elif candidate_end < packet.candidate_total:
             lines.append(
@@ -1428,7 +1241,6 @@ def render_evidence_prompt_section(
             if trace.get("step") not in {
                 "retriever",
                 "context_hydration",
-                "evidence_graph_prefetch",
                 "rag_source",
                 "source_semantic_runtime",
                 "source_semantic_overlay",
@@ -1486,16 +1298,9 @@ def render_evidence_prompt_section(
                         if str(value).strip()
                     )
                 )[:8]
-                related_parcels = list(
-                    dict.fromkeys(
-                        str(value).strip()
-                        for value in (ref.related_parcel_bsms or [])
-                        if str(value).strip()
-                    )
-                )[:12]
                 # Only canonical durable L1 fact identities belong in the
                 # L1_facts label.  Packet lineage may also contain report,
-                # source-feature, or legacy display refs; exposing those next
+                # source-feature display refs; exposing those next
                 # to a selectable-looking label lets a planning model mistake
                 # provenance for source_fact_refs.
                 l1_refs = list(
@@ -1519,15 +1324,15 @@ def render_evidence_prompt_section(
                     )
                 )[:8]
                 lines.append(
-                    f"- [来源=bundle; 作用=location_binding; 空间粒度=feature; "
+                    f"- [来源=data; 作用=location_binding; 空间粒度=feature; "
                     f"role={identity.role or identity.entity_type or 'unknown'}; "
                     f"source_layer={identity.source_layer or 'unknown'}; "
                     f"geometry_authority={ref.geometry_authority}] {descriptor}; "
                     f"aliases={'、'.join(aliases) or 'none'}; "
-                    f"feature_BSM={identity.bundle_feature_bsm}; "
-                    f"source_BSM={identity.source_bsm or 'none'}; "
-                    f"related_parcels={','.join(related_parcels) or 'none'}; "
-                    f"bundle_ref={ref.geometry_ref or 'none'}; "
+                    f"source_feature_id={identity.source_feature_id or 'none'}; "
+                    f"resource_ref={ref.resource_ref or 'none'}; "
+                    f"representation_refs={','.join(ref.representation_refs[:8]) or 'none'}; "
+                    f"geometry_ref={ref.geometry_ref or 'none'}; "
                     f"KG_relations={','.join(relation_refs) or 'none'}; "
                     f"L1_facts={','.join(l1_refs) or 'none'} "
                     "(lineage-only; not selectable source_fact_refs); "
@@ -1540,8 +1345,8 @@ def render_evidence_prompt_section(
                 )
         if packet.relation_evidence:
             for relation in packet.relation_evidence[:8]:
-                subject = relation.subject.identity.bundle_feature_bsm
-                object_ref = relation.object.identity.bundle_feature_bsm
+                subject = ",".join(relation.subject.entity_refs[:2]) or relation.subject.resource_ref
+                object_ref = ",".join(relation.object.entity_refs[:2]) or relation.object.resource_ref
                 metric = ""
                 if relation.metric_value is not None:
                     metric = f"; metric={relation.metric_value}{relation.metric_unit or ''}"
@@ -1550,9 +1355,9 @@ def render_evidence_prompt_section(
                     f"{subject} --{relation.predicate}--> {object_ref}{metric}"
                 )
         lines.append(
-            f"- [来源=graph_metadata; 作用=provenance; 空间粒度=scope] "
-            f"bundle_snapshot={packet.bundle_snapshot_digest or 'unavailable'}; "
-            f"kg_version={packet.kg_version or 'unavailable'}; "
+            f"- [来源=provenance; 作用=scope; 空间粒度=snapshot] "
+            f"data_snapshot={packet.data_snapshot_ref or 'unavailable'}; "
+            f"world_model_snapshot={packet.world_model_snapshot_ref or 'unavailable'}; "
             f"l1_snapshot={packet.l1_snapshot_ref or 'unavailable'}"
         )
 

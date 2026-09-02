@@ -75,7 +75,7 @@ def render_dimension_semantic_contract(
         "地点覆盖：只抽取本维度相关且在输入中明确出现的空间对象；每个事实使用"
         "扁平 place_names/location_role/location_relation 列保留名称、角色和关系。"
         "地点列没有坐标权威时由本地投影标记 needs_retrieval，"
-        "由 EvidenceGraph 使用 Bundle/KG 候选补足，不能在 L1 猜坐标或边界。"
+        "由 Evidence 使用 DATA/WM 候选补足，不能在 L1 猜坐标或边界。"
     )
     if upstream_source_dimensions:
         rendered += "\n上游 source_dimensions：" + ", ".join(

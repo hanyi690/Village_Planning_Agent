@@ -591,7 +591,7 @@ def _typed_l1_fact_evidence(
         "【已审计 L1 planning facts】\n"
         "这些记录是当前 L1 快照的权威结构化事实。非空间 claim 可引用对应 fact_id；"
         "空间 claim 的 source_fact_refs 只能逐字引用当前候选中的空间 fact_kind 记录；"
-        "source_feature_ids 只用于说明可由后续 EvidenceGraph 继续连接，不能在 L3 直接当作几何。\n"
+        "source_feature_ids 只用于说明可由后续 Evidence/WM 继续连接，不能在 L3 直接当作几何。\n"
         + table
     )
 
@@ -606,7 +606,7 @@ def _spatial_claim_evidence_errors(
 
     This is an exact identity check, not a name/regex matcher. A spatial claim
     without source_fact_refs is a valid semantic candidate and must continue
-    to GROUND, where EvidenceGraph resolves its location. If the model does
+    to GROUND, where DATA/WM retrieval resolves its location. If the model does
     provide source_fact_refs, every id must exist in the bounded candidate set
     rendered in the prompt. Spatial claims may only cite the spatial subset.
     This function never rewrites an emitted id.
