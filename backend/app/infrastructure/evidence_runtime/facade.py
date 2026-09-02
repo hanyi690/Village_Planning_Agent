@@ -66,7 +66,7 @@ def gate_evidence_digest(session_id: str) -> str:
 
 def _source_versions(session_id: str, supplied: Mapping[str, str] | None = None) -> tuple[tuple[str, str], ...]:
     from app.infrastructure.evidence_runtime.retrievers.artifact_retriever import RETRIEVER_VERSION as artifact_version
-    from app.infrastructure.evidence_runtime.retrievers.bundle_retriever import RETRIEVER_VERSION as bundle_version
+    from app.infrastructure.evidence_runtime.retrievers.data_catalog_retriever import RETRIEVER_VERSION as data_catalog_version
     from app.infrastructure.evidence_runtime.retrievers.integrity_retriever import RETRIEVER_VERSION as integrity_version
     from app.infrastructure.evidence_runtime.retrievers.l1_retriever import RETRIEVER_VERSION as l1_version
     from app.infrastructure.evidence_runtime.retrievers.kg_retriever import RETRIEVER_VERSION as kg_version
@@ -78,7 +78,7 @@ def _source_versions(session_id: str, supplied: Mapping[str, str] | None = None)
     versions: dict[str, str] = {
         "report": report_version,
         "kg": kg_version,
-        "bundle": bundle_version,
+        "data_catalog": data_catalog_version,
         "artifact": artifact_version,
         "integrity": integrity_version,
         "l1": l1_version,
@@ -494,7 +494,7 @@ async def retrieve_evidence(
         return cached
 
     from app.infrastructure.evidence_runtime.retrievers.artifact_retriever import retrieve_from_artifacts
-    from app.infrastructure.evidence_runtime.retrievers.bundle_retriever import retrieve_from_bundle
+    from app.infrastructure.evidence_runtime.retrievers.data_catalog_retriever import retrieve_from_data_catalog
     from app.infrastructure.evidence_runtime.retrievers.integrity_retriever import retrieve_from_integrity
     from app.infrastructure.evidence_runtime.retrievers.l1_retriever import retrieve_from_l1_context
     from app.infrastructure.evidence_runtime.retrievers.kg_retriever import retrieve_from_kg
@@ -609,9 +609,9 @@ async def retrieve_evidence(
                 sources = []
                 if facts or cognition.kg_confidence > 0:
                     sources = [EvidenceSource(source_type="kg", reference=f"session_kg:{session_id}", confidence=cognition.kg_confidence)]
-            elif query.retriever is RetrieverKind.BUNDLE:
+            elif query.retriever is RetrieverKind.DATA_CATALOG:
                 facts, sources = await _invoke(
-                    retrieve_from_bundle,
+                    retrieve_from_data_catalog,
                     session_id,
                     list(query.entity_scope),
                     query=query.query,

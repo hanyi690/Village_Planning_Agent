@@ -40,11 +40,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from scripts.collect_amap_jintian_validation import (  # noqa: E402
     collect_l1_place_names,
     load_admin_boundary_context,
-    load_bundle_probe_points,
     load_latest_l1,
     write_json,
     write_jsonl,
 )
+from app.data.boundary_scope import load_boundary_scope_artifact  # noqa: E402
+from app.data.catalog.provider_run_lease import ProviderObservationWriter, ProviderRunLeaseStore  # noqa: E402
 
 
 TD_BASE = "https://api.tianditu.gov.cn"
@@ -52,7 +53,7 @@ TD_SEARCH_URL = f"{TD_BASE}/v2/search"
 TD_GEOCODER_URL = f"{TD_BASE}/geocoder"
 TD_ADMIN_URL = f"{TD_BASE}/v2/administrative"
 TD_WFS_URL = "http://gisserver.tianditu.gov.cn/TDTService/wfs"
-OUTPUT_ROOT = PROJECT_ROOT / "output" / "map_validation" / "tianditu_full"
+OUTPUT_ROOT = PROJECT_ROOT / "data" / "cache" / "map_observations" / "tianditu"
 COORDINATE_CONTRACT = "Tianditu documented lon/lat; WGS84-compatible"
 TRANSIENT_HTTP = {408, 425, 429, 500, 502, 503, 504}
 DETERMINISTIC_HTTP = {400, 401, 403, 404, 413, 414, 422}
@@ -365,6 +366,7 @@ def scope_bucket(record: Mapping[str, Any], boundary: Any, expanded: Any) -> tup
 @dataclass(frozen=True)
 class TiandituCollectorConfig:
     output_root: Path = OUTPUT_ROOT
+    boundary_scope: Any | None = None
     scope_codes: Mapping[str, str] = field(
         default_factory=lambda: {
             "project": "金田村",
@@ -570,19 +572,6 @@ def build_admin_jobs(context: Mapping[str, Any], config: TiandituCollectorConfig
                 url=TD_GEOCODER_URL,
             )
         )
-    for kind, limit in (("road", 240), ("water", 120)):
-        for index, point in enumerate(load_bundle_probe_points(kind, limit), 1):
-            jobs.append(
-                _job(
-                    "td_reverse_geocode_bundle",
-                    {"postStr": td_poststr({"lon": point[0], "lat": point[1], "ver": 1}), "type": "geocode"},
-                    scope="project",
-                    category=kind,
-                    partition=f"bundle_{index}",
-                    query_name=f"bundle-{kind}-逆地理-{index}",
-                    url=TD_GEOCODER_URL,
-                )
-            )
     origin = "116.044146,24.818629"
     destination = "116.029180,24.749940"
     for style in range(4):
@@ -705,19 +694,15 @@ class RequestResult:
 
 
 class CacheStore:
-    def __init__(self, stage_dir: Path, legacy_stage_dir: Path | None = None) -> None:
+    def __init__(self, stage_dir: Path) -> None:
         self.stage_dir = stage_dir
         self.cache_dir = stage_dir / "cache"
         self.raw_dir = stage_dir / "raw_responses"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.raw_dir.mkdir(parents=True, exist_ok=True)
-        self.legacy_stage_dir = legacy_stage_dir
 
     def _pointer_paths(self, key: str) -> list[Path]:
-        paths = [self.cache_dir / f"{key}.json"]
-        if self.legacy_stage_dir:
-            paths.append(self.legacy_stage_dir / "cache" / f"{key}.json")
-        return paths
+        return [self.cache_dir / f"{key}.json"]
 
     def load(self, key: str) -> dict[str, Any] | None:
         for pointer_path in self._pointer_paths(key):
@@ -759,8 +744,7 @@ class TiandituTransport:
         self.session = session or requests.Session()
         self.api_key = api_key if api_key is not None else os.getenv("TIANDITU_API_KEY", "")
         self.last_request = 0.0
-        legacy = PROJECT_ROOT / "output" / "map_validation" / "tianditu" / stage_dir.name
-        self.store = CacheStore(stage_dir, legacy_stage_dir=legacy)
+        self.store = CacheStore(stage_dir)
         self.attempt_rows: list[dict[str, Any]] = []
 
     def request(self, job: TiandituRequestJob, run_dir: Path) -> RequestResult:
@@ -921,13 +905,22 @@ class TiandituFullCollector:
         self.config = config
         self.refresh = refresh
         self.dry_run = dry_run
-        self.context = load_admin_boundary_context()
+        self.context = load_admin_boundary_context(
+            boundary_scope=self.config.boundary_scope
+        )
         self.boundary = self.context["boundary_geometry_wgs84"]
         self.expanded = self.context["expanded_geometry_wgs84"]
-        self.run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        self.run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         self.records: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
         self.coverage: list[dict[str, Any]] = []
+        self.lease_store = ProviderRunLeaseStore(self.config.output_root)
+        self.lease = self.lease_store.acquire(
+            self.run_id,
+            "tianditu",
+            f"pid-{os.getpid()}",
+            ttl_seconds=3600,
+        )
 
     def _stage_paths(self, stage: str) -> tuple[Path, Path]:
         stage_dir = self.config.output_root / stage
@@ -936,6 +929,7 @@ class TiandituFullCollector:
         return stage_dir, run_dir
 
     def _add_result(self, result: RequestResult, run_dir: Path) -> None:
+        self.lease_store.assert_writer(self.lease)
         event = {
             "provider": "tianditu",
             "operation": result.job.operation,
@@ -1092,6 +1086,7 @@ class TiandituFullCollector:
         write_jsonl(run_dir / "attempts_all.jsonl", transport.attempt_rows)
 
     def _finish(self, stage: str, run_dir: Path, manifest: dict[str, Any]) -> Path:
+        self.lease_store.assert_writer(self.lease)
         deduped: dict[str, dict[str, Any]] = {}
         for row in self.records:
             point = row.get("location_wgs84") or []
@@ -1107,7 +1102,22 @@ class TiandituFullCollector:
         rejected = [row for row in normalized if row not in retained]
         for row in rejected:
             row["rejection_reasons"] = [row.get("scope_bucket", "unknown_scope")]
-        write_jsonl(run_dir / "normalized_all.jsonl", normalized)
+        ProviderObservationWriter(
+            self.config.output_root.parent,
+            "tianditu",
+            self.run_id,
+            stage=stage,
+        ).publish(
+            self.lease,
+            normalized,
+            boundary_digest=str(self.context.get("boundary_digest") or ""),
+            query_geometry_digest=str(self.context.get("query_geometry_digest") or ""),
+            crs_contract=COORDINATE_CONTRACT,
+            coverage={
+                "coverage_status": "COMPLETE" if not any(event.get("status") == "failed" for event in self.events) else "PARTIAL",
+                "request_count": len(self.events),
+            },
+        )
         write_jsonl(run_dir / "retained_candidates.jsonl", retained)
         write_jsonl(run_dir / "rejected_candidates.jsonl", rejected)
         write_jsonl(run_dir / "coverage.jsonl", self.coverage)
@@ -1134,11 +1144,22 @@ class TiandituFullCollector:
                 "rejected_record_count": len(rejected),
                 "scope_bucket_counts": buckets,
                 "coordinate_contract": COORDINATE_CONTRACT,
+                "boundary_ref": self.context.get("boundary_ref", ""),
+                "boundary_digest": self.context.get("boundary_digest", ""),
+                "query_geometry_digest": self.context.get("query_geometry_digest", ""),
+                "boundary_source_path": self.context.get("source_path", ""),
+                "provider_coordinate_contract": COORDINATE_CONTRACT,
+                "provider_acquisition_plan": self.context.get("provider_acquisition_plans", {}).get("tianditu", {}),
                 "provider_limits": {"search_count_max": MAX_SEARCH_COUNT, "search_total_overflow": MAX_PROVIDER_TOTAL, "polygon_vertices_max": self.config.max_polygon_vertices},
                 "coverage_summary": {"partial_or_overflow": sum(item["status"] == "failed" or not item["complete_within_documented_limit"] for item in self.coverage)},
             }
         )
         write_json(run_dir / "manifest.json", manifest)
+        write_json(
+            run_dir / "query_plan.json",
+            self.context.get("provider_acquisition_plans", {}).get("tianditu", {}),
+        )
+        self.lease_store.release(self.lease)
         return run_dir
 
     def collect(self, stage: str) -> Path:
@@ -1165,12 +1186,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-interval", type=float, default=0.35)
     parser.add_argument("--max-retries", type=int, default=4)
     parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT)
+    parser.add_argument("--boundary-artifact-root", type=Path, help="CAS root containing an admitted BoundaryScopeArtifact")
+    parser.add_argument("--boundary-run-id", help="DATA admission run id whose named boundary scope is used")
+    parser.add_argument("--boundary-branch-id", default="main")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    config = TiandituCollectorConfig(output_root=args.output_root, min_interval=args.min_interval, max_retries=args.max_retries)
+    if bool(args.boundary_artifact_root) != bool(args.boundary_run_id):
+        raise SystemExit("--boundary-artifact-root and --boundary-run-id must be supplied together")
+    boundary_scope = (
+        load_boundary_scope_artifact(
+            str(args.boundary_artifact_root),
+            args.boundary_run_id,
+            branch_id=args.boundary_branch_id,
+        )
+        if args.boundary_artifact_root
+        else None
+    )
+    config = TiandituCollectorConfig(output_root=args.output_root, min_interval=args.min_interval, max_retries=args.max_retries, boundary_scope=boundary_scope)
     stages = ("01_admin_scope", "02_l1_place_names") if args.stage == "all" else (("01_admin_scope",) if args.stage == "admin" else ("02_l1_place_names",))
     for stage in stages:
         collector = TiandituFullCollector(config, refresh=args.refresh, dry_run=args.dry_run)

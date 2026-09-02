@@ -543,6 +543,12 @@ async def create_uploaded_file_async(
     admission_status: str = "quarantined",
     admission_reason: str = "",
     admission_signals: Optional[List[str]] = None,
+    admission_attempt_ref: str = "",
+    admission_receipt_ref: Optional[Dict[str, Any]] = None,
+    admission_gap_ref: Optional[Dict[str, Any]] = None,
+    admission_lifecycle: Optional[List[str]] = None,
+    admission_artifact_refs: Optional[Dict[str, Any]] = None,
+    admission_artifact_root: str = "",
     parsed_text: Optional[str] = None,
     gis_data: Optional[Dict[str, Any]] = None,
     gis_data_type: Optional[str] = None,
@@ -579,6 +585,12 @@ async def create_uploaded_file_async(
                 admission_status=admission_status,
                 admission_reason=admission_reason,
                 admission_signals=list(admission_signals or []),
+                admission_attempt_ref=admission_attempt_ref,
+                admission_receipt_ref=admission_receipt_ref,
+                admission_gap_ref=admission_gap_ref,
+                admission_lifecycle=list(admission_lifecycle or []),
+                admission_artifact_refs=admission_artifact_refs,
+                admission_artifact_root=admission_artifact_root,
                 file_type=file_type,
                 filename=filename,
                 original_filename=original_filename,
@@ -638,6 +650,12 @@ async def get_uploaded_files_by_session_async(
                     "admission_status": f.admission_status,
                     "admission_reason": f.admission_reason,
                     "admission_signals": list(f.admission_signals or []),
+                    "admission_attempt_ref": f.admission_attempt_ref,
+                    "admission_receipt_ref": f.admission_receipt_ref,
+                    "admission_gap_ref": f.admission_gap_ref,
+                    "admission_lifecycle": list(f.admission_lifecycle or []),
+                    "admission_artifact_refs": f.admission_artifact_refs,
+                    "admission_artifact_root": f.admission_artifact_root,
                     "file_type": f.file_type,
                     "filename": f.filename,
                     "original_filename": f.original_filename,
@@ -686,23 +704,13 @@ async def get_uploaded_geojson_data_async(
             result = await session.execute(query)
             files = result.scalars().all()
 
-            from app.data.ingestion.source_admission import assess_source_admission
-
             admitted: list[Dict[str, Any]] = []
             for file in files:
-                assessment = assess_source_admission(
-                    input_role=str(file.input_role or ""),
-                    category=str(file.file_category or ""),
-                    source="upload",
-                    filename=str(file.original_filename or file.filename or ""),
-                    parsed_text=str(file.parsed_text or ""),
-                    gis_data=(file.gis_data if isinstance(file.gis_data, dict) else None),
-                    gis_data_type=str(file.gis_data_type or ""),
-                )
                 if (
-                    assessment.status == "admitted"
-                    and assessment.input_role == "current_evidence"
-                    and str(file.admission_status or "").casefold() == assessment.status
+                    str(file.admission_status or "").casefold() == "admitted"
+                    and str(file.input_role or "").casefold() == "current_evidence"
+                    and isinstance(file.admission_receipt_ref, dict)
+                    and bool(file.admission_receipt_ref.get("descriptor_digest"))
                     and file.gis_data
                 ):
                     admitted.append(file.gis_data)

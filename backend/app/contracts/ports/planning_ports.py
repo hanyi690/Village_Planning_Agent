@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.contracts.ports.bundle_assembly import BundleAssemblyPort
 from app.contracts.ports.context import ContextProviderPort
 from app.contracts.ports.gazetteer import GazetteerPort
 from app.contracts.ports.nomenclature_registry import NomenclatureRegistryPort
@@ -31,7 +30,6 @@ class PlanningPorts:
     spatial_query: SpatialQueryPort | None = None
     gazetteer: GazetteerPort | None = None
     nomenclature_registry: NomenclatureRegistryPort | None = None
-    bundle_assembly: BundleAssemblyPort | None = None
     zone_allocator: ZoneAllocatorPort | None = None
     road_planner: RoadPlannerPort | None = None
     world_model: WorldModelPort | None = None

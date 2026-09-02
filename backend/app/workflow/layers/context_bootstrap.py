@@ -116,6 +116,12 @@ def _context_authority(context: Any, *, session_id: str) -> tuple[str, str, dict
         "world_model_shadow_diff_ref": str(
             getattr(context, "world_model_shadow_diff_ref", "") or ""
         ),
+        "boundary_scope_ref": str(
+            getattr(getattr(context, "boundary_scope_artifact", None), "scope_ref", "") or ""
+        ),
+        "boundary_digest": str(
+            getattr(getattr(context, "boundary_scope_artifact", None), "boundary_digest", "") or ""
+        ),
     }
     return version, fingerprint, authority
 
@@ -135,7 +141,6 @@ def _context_stage_refs_complete(state: Dict[str, Any], context: Any) -> bool:
     try:
         from app.workflow.state import load_root_gate
         from app.infrastructure.artifacts.runtime import load_artifact, load_embedded_artifact
-        from app.contracts.data.source_contracts import DataResourceCatalogSnapshot
         from app.data.model.snapshot import SessionDataSnapshot
         from app.contracts.data.stage_contracts import DataStageSnapshot
         from app.contracts.cognition.snapshot import SessionWorldModelSnapshot
@@ -158,7 +163,9 @@ def _context_stage_refs_complete(state: Dict[str, Any], context: Any) -> bool:
                 # artifact.  Re-run the bootstrap so replay cannot silently
                 # promote a partial DATA/KG/EVIDENCE context.
                 return False
-        catalog = load_artifact(dict(state), "data_catalog", DataResourceCatalogSnapshot)
+        from app.modules.data.application import DataApplication
+
+        catalog = DataApplication.load_catalog(dict(state))
         snapshot = load_artifact(dict(state), "data_snapshot", SessionDataSnapshot)
         data_stage = load_artifact(dict(state), "data_stage", DataStageSnapshot)
         schema_mapping = load_artifact(
@@ -691,6 +698,25 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as exc:
             logger.debug("[bootstrap] session DATA catalog unavailable: %s", exc)
             data_catalog = None
+    boundary_scope_artifact = None
+    boundary_scope_ref = (state.get("artifact_refs") or {}).get("boundary_scope")
+    if boundary_scope_ref:
+        try:
+            from app.contracts.data.boundary_contracts import BoundaryScopeArtifact
+            from app.infrastructure.artifacts.runtime import load_artifact
+
+            boundary_scope_artifact = load_artifact(
+                dict(state), "boundary_scope", BoundaryScopeArtifact
+            )
+        except Exception as exc:
+            logger.debug("[bootstrap] persisted boundary scope unavailable: %s", exc)
+    if boundary_scope_artifact is None:
+        try:
+            from app.data.catalog.session_resource_catalog import load_session_boundary_scope
+
+            boundary_scope_artifact = await load_session_boundary_scope(session_id)
+        except Exception as exc:
+            logger.debug("[bootstrap] session boundary scope unavailable: %s", exc)
     expected_version = str(
         (state.get("context_ref") or {}).get("version")
         or state.get("context_version")
@@ -729,6 +755,7 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
             expected_snapshot_digest=expected_snapshot_digest or None,
             expected_world_model_digest=expected_world_model_digest or None,
             data_catalog=data_catalog,
+            boundary_scope_artifact=boundary_scope_artifact,
             schema_mapping_snapshot=schema_mapping_snapshot,
             schema_mapping_artifact_ref=schema_mapping_artifact_ref,
             artifact_root=str(state.get("artifact_root") or ""),
@@ -808,6 +835,12 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "world_model_shadow_snapshot_digest": world_model_shadow_snapshot_digest,
         "world_model_shadow_diff_ref": shadow_diff_ref,
         "data_resource_catalog_digest": data_catalog_digest,
+        "boundary_scope_ref": str(
+            getattr(boundary_scope_artifact, "scope_ref", "") or ""
+        ),
+        "boundary_digest": str(
+            getattr(boundary_scope_artifact, "boundary_digest", "") or ""
+        ),
     }
     try:
         stage_patch = await _persist_context_stage_artifacts(

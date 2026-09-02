@@ -625,6 +625,7 @@ class WorldModelKGStore:
                 )
             )),
             planned_refs=tuple(sorted(str(item) for item in self.planned_graph.subjects(RDF.type, PLN.PlannedFeature))),
+            data_dependency_graph_digest=str(getattr(self.catalog, "data_dependency_graph_digest", "") or ""),
         )
 
     def _project_catalog(self) -> None:

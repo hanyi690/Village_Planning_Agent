@@ -17,7 +17,7 @@ class RetrieverKind(StrEnum):
     RAG = "rag"
     REPORT = "report"
     KG = "kg"
-    BUNDLE = "bundle"
+    DATA_CATALOG = "data_catalog"
     ARTIFACT = "artifact"
     INTEGRITY = "integrity"
     EXTERNAL = "external"
@@ -79,7 +79,7 @@ def route_request(
     if any(token in text for token in ("完整", "integrity", "crs", "覆盖", "字段", "版本", "空值")):
         selected.add(RetrieverKind.INTEGRITY)
     if spatial_requirement:
-        selected.add(RetrieverKind.BUNDLE)
+        selected.add(RetrieverKind.DATA_CATALOG)
 
     # A project-level query deliberately does not require the caller to know
     # which layer contains the answer.  When no entity scope was supplied,
@@ -97,7 +97,7 @@ def route_request(
     ):
         selected.update({RetrieverKind.LOCAL_TEXT, RetrieverKind.ARTIFACT})
         if spatial_requirement:
-            selected.add(RetrieverKind.BUNDLE)
+            selected.add(RetrieverKind.DATA_CATALOG)
 
     # A gate gap about a concrete source must inspect that source even when
     # the request was emitted with a generic request_type.

@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional, Annotated
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from .shared import budget_check, resolve_bundle, tool_reply
+from .shared import budget_check, tool_reply
 
 
 def _dimension_names() -> Dict[str, str]:
@@ -38,8 +38,13 @@ async def layer_reports_impl(
 ) -> Dict[str, Any]:
     """Return the report manifest carried by the resolved session bundle."""
     names = _dimension_names()
-    bundle = await resolve_bundle(session_id)
-    report_refs = list(getattr(bundle.documents, "report_refs", []) or [])
+    from app.infrastructure.reports.report_store import ReportStore
+
+    report_refs = list(
+        await ReportStore.get_instance().get_session_report_manifest(
+            session_id, layers=(1, 2, 3)
+        )
+    )
     if layer is not None:
         report_refs = [ref for ref in report_refs if ref.get("layer") == layer]
 

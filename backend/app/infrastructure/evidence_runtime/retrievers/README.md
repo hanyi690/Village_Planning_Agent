@@ -11,7 +11,7 @@
 - `local_text_retriever.retrieve_from_local_text`：检索会话 bundle 输入文档、L1 source span；
   报告正文由 bundle manifest 驱动的 `report_retriever` 按需打开；不依赖向量服务，也不返回几何；
 - `kg_retriever.retrieve_from_kg`：session KG 认知与 L2/L3 拓扑事实（`get_village_cognition`），返回 `SpatialCognitionEvidence`；
-- `bundle_retriever.retrieve_from_bundle`：`VillageBundle` 空间分组统计；指定 `entity_scope` 时按
+- `data_catalog_retriever.retrieve_from_data_catalog`：generic DATA catalog 的 bounded facts；指定 `entity_scope` 时按
   分组读取，未指定时在 points/lines/polygons 全部集合上做有界标签命中，返回 BSM/ref 而不返回几何。
 - `rag_retriever.retrieve_from_rag`：仅检索专业外部向量语料；向量服务不可用时返回空事实和 typed unavailable 日志，绝不代替本地来源。
 
@@ -23,7 +23,7 @@
 |---|---|---|
 | `report_retriever.py` | `retrieve_from_reports` | bundle `documents.report_refs` 选引用，再从 `ReportStore` 批量打开正文 |
 | `kg_retriever.py` | `retrieve_from_kg` | session KG（`app/infrastructure/kg/queries/`） |
-| `bundle_retriever.py` | `retrieve_from_bundle` | `VillageBundle` 快照（`app/data/model/`） |
+| `data_catalog_retriever.py` | `retrieve_from_data_catalog` | DATA catalog artifact（`app/modules/data`） |
 | `local_text_retriever.py` | `retrieve_from_local_text` | 当前 session 的 bundle 输入文本、L1 source span |
 | `rag_retriever.py` | `retrieve_from_rag` | 专业外部向量库（可用性受 provider/embedding 服务影响） |
 
@@ -32,7 +32,7 @@
 | 契约 | 文件 | 关键类型 |
 |---|---|---|
 | 证据 | `app/contracts/evidence/evidence_contracts.py` | `EvidenceFact`、`EvidenceSource`、`SpatialCognitionEvidence` |
-| 访问辅助 | `app/infrastructure/llm/tools/access/shared.py` | `session_kg` / `resolve_bundle` / `group_stats` |
+| 访问辅助 | `app/infrastructure/llm/tools/access/shared.py` | `session_kg` / bounded serialization |
 | 报告 | `app/infrastructure/reports/report_store.py` | `ReportStore` |
 | KG 查询 | `app/infrastructure/kg/queries/cognition.py` / `sparql.py` | `get_village_cognition` / `query_kg` |
 

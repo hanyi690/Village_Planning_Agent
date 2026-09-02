@@ -1,6 +1,7 @@
 from pathlib import Path
+from types import SimpleNamespace
 
-from shapely.geometry import box
+from shapely.geometry import box, mapping
 
 from scripts.collect_amap_jintian_validation import (
     ScopeClassifier,
@@ -58,13 +59,20 @@ def test_scope_bucket_rejects_outside_meizhou_and_keeps_project_extensions():
 
 
 def test_polygon_request_has_explicit_coordinate_contract():
-    context = load_admin_boundary_context()
-    assert context["source_crs"] == "CRS84/WGS84"
+    context = load_admin_boundary_context(boundary_scope=SimpleNamespace(
+        geometry=mapping(box(116.03, 24.80, 116.06, 24.84)),
+        scope_ref="boundary-scope:test",
+        boundary_digest="sha256:test-boundary",
+        query_geometry_digest="sha256:test-query",
+        normalized_crs="EPSG:4326",
+    ))
+    assert context["source_crs"] == "EPSG:4326"
     assert context["request_crs"] == "GCJ-02"
     assert context["check_crs"] == "WGS84"
     assert context["polygon_strings_gcj02"]
     assert context["expanded_polygon_strings_gcj02"]
     assert context["sample_points_wgs84"]
+    assert set(context["provider_acquisition_plans"]) == {"amap", "tencent", "tianditu"}
 
 
 def test_identical_sanitized_requests_reuse_one_cache_key(tmp_path: Path):
@@ -170,7 +178,7 @@ def test_cached_failed_response_is_retried(monkeypatch, tmp_path):
     assert event["status"] == "success_nonempty"
 
 
-def test_legacy_missing_cache_is_reclassified_as_success_empty(tmp_path):
+def test_cached_empty_response_is_success_empty(tmp_path):
     collector = StageCollector("test", refresh=False, min_interval=0, root=tmp_path, max_retries=1)
     url = "https://example.test"
     params = {"keywords": "不存在的名称"}

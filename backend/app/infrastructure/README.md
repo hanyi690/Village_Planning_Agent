@@ -15,7 +15,7 @@ provider 类型上浮为业务事实；领域层不反向依赖这里的具体�
 | `artifacts/` | 内容寻址 artifact 仓库 | `repository.ContentAddressedArtifactRepository`（CAS：digest/blob/named ref）、`runtime.py`（`ARTIFACT_KEYS`、store/load/fork）、`fingerprint.py`（语义指纹） |
 | `events/` | 事件持久化与 SSE | `repository.EventRepository`（SQLite run_events）、`connection_hub.EventConnectionHub`（在线队列）、`sse_publisher`（发事件/工具状态/GIS 事件）、`sse_events.py`（GIS 事件模型）、`event_factory` |
 | `runtime/` | 规划运行时 | `planning_runtime_service.PlanningRuntimeService`：graph 单例、`trigger_planning_execution`、`resume_from_interrupt`、`fork_checkpoint`、`aget_state` |
-| `llm/` | LLM 适配 | `factory.create_llm`（openai/zhipuai/minimax）、`instructor_client`、`manager`（统一调用/上下文/输出边界）、`planning_claims.PlanningClaimGenerator`、`retry`、`stats_collector`、`tracing`；`prompts/`；`tools/`（ToolRegistry + access/bundle/knowledge/rag/reports 工具） |
+| `llm/` | LLM 适配 | `factory.create_llm`（openai/zhipuai/minimax）、`instructor_client`、`manager`（统一调用/上下文/输出边界）、`planning_claims.PlanningClaimGenerator`、`retry`、`stats_collector`、`tracing`；`prompts/`；`tools/`（ToolRegistry + DATA/evidence/knowledge/reports 工具） |
 | `kg/` | 知识图谱 | `builder/`（KGBuilder + layer1-4）、`service.build_knowledge_graph_data`、`session_kg`（进程池 + CAS）、`manager`（LRU 缓存）、`queries/`（SPARQL/模板查询）、`enrichment/`（bindings/descriptions/relations/report_entity_enrichment）、`gazetteer/`、`adapters/`、`dlq`、`memory`、`ontology` |
 | `rag/` | RAG 检索 | `service.RagService`、`vector_store`（chroma/faiss/qdrant + Aliyun embeddings）、`chunker`、`cli`（管理命令）、`context`、`utils/` |
 | `rendering/` | 交付渲染 | `html_render.render_interactive_map`、`static_render`（PNG）、`map_layers.build_map_layers`、`colors` |
@@ -26,7 +26,7 @@ provider 类型上浮为业务事实；领域层不反向依赖这里的具体�
 | `structured_runtime/` | 统一结构化执行 | `parser`、`validator`、`assembler`、阶段调用 facade |
 | `checkpoint/` | checkpoint 分类 | `checkpoint_policy`（has_pending_interrupt/classify_checkpoint） |
 | `tasks/` | 后台任务 | `task_supervisor.TaskSupervisor`（session 级任务跟踪/取消） |
-| `storage/` | bundle 存储 | `bundle_store.BundleStore` |
+| `storage/` | 通用持久化适配器 | DATA 与工作流 artifact 通过 `infrastructure/artifacts` CAS 管理 |
 | `search/` | 外部搜索 | `provider_registry`（显式 Exa 或 typed unavailable adapter） |
 | `gis/` | 空间数据 port | `spatial_data_port.SpatialDataPort`（文件校验/裁剪/bbox 过滤） |
 | 顶层 | 通用 | `logging.py`（SessionFilter/set_session_id）、`paths.py`、`registry.py`（默认单例读写） |

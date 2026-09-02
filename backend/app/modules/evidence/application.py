@@ -191,12 +191,11 @@ def _validate_evidence_checkpoint_authority(
             name=active_key,
         )
     from app.contracts.cognition.snapshot import SessionWorldModelSnapshot
-    from app.contracts.data.source_contracts import DataResourceCatalogSnapshot
     from app.data.model.snapshot import SessionDataSnapshot
 
-    catalog = load_artifact(
-        dict(state), "data_catalog", DataResourceCatalogSnapshot
-    )
+    from app.modules.data.application import DataApplication
+
+    catalog = DataApplication.load_catalog(dict(state))
     data = load_artifact(dict(state), "data_snapshot", SessionDataSnapshot)
     world = load_artifact(
         dict(state), "world_model_snapshot", SessionWorldModelSnapshot
@@ -455,16 +454,10 @@ class EvidenceContext(BaseModel):
                 cached_context = None
         if data_catalog is None:
             try:
-                from app.contracts.data.source_contracts import (
-                    DataResourceCatalogSnapshot,
-                )
                 from app.data.resource_catalog import DataResourceCatalog
+                from app.modules.data.application import DataApplication
 
-                catalog_snapshot = load_artifact(
-                    dict(state),
-                    "data_catalog",
-                    DataResourceCatalogSnapshot,
-                )
+                catalog_snapshot = DataApplication.load_catalog(dict(state))
                 if catalog_snapshot is not None:
                     data_catalog = DataResourceCatalog(catalog_snapshot)
             except Exception:
@@ -1246,14 +1239,10 @@ class EvidenceApplication:
         from app.contracts.cognition.snapshot import SessionWorldModelSnapshot
         from app.contracts.cognition.decision import SourceSemanticMappingSnapshot
         from app.contracts.cognition.stage_contracts import CognitionStageSnapshot
-        from app.contracts.data.source_contracts import DataResourceCatalogSnapshot
         from app.data.model.snapshot import SessionDataSnapshot
+        from app.modules.data.application import DataApplication
 
-        catalog_artifact = load_artifact(
-            current,
-            "data_catalog",
-            DataResourceCatalogSnapshot,
-        )
+        catalog_artifact = DataApplication.load_catalog(current)
         data_artifact = load_artifact(
             current,
             "data_snapshot",
@@ -1871,6 +1860,7 @@ class EvidenceApplication:
             immediate_supplement_count=immediate_supplement_count,
             unresolved_gap_count=len(unresolved_schedule_refs),
             gap_rows=tuple(scheduled_gap_rows),
+            data_dependency_graph_digest=str(current.get("data_dependency_graph_digest") or ""),
         )
         snapshot_ref = ArtifactRef.model_validate(
             store_artifact(

@@ -143,13 +143,6 @@ async def lifespan(app):
         logger.info("Database connections fully shutdown")
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to shutdown database: %s", exc, exc_info=True)
-    try:
-        from app.infrastructure.kg.session_kg import shutdown_session_kg_process_pool
-        await asyncio.to_thread(shutdown_session_kg_process_pool)
-        logger.info("Session KG worker pool shutdown")
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to shutdown Session KG worker pool: %s", exc, exc_info=True)
-
     logger.info("Backend service closed")
 
 

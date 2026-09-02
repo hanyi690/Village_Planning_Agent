@@ -65,7 +65,6 @@ _DYNAMIC_SCOPE_SOURCES = frozenset({
     "amap",
     "amap_map",
     "bundle_annotation",
-    "external_anchors",
     "tencent",
     "tencent_map",
     "tianditu",
@@ -2858,9 +2857,6 @@ def _bundle_feature_records(context: Any):
     workspace = getattr(context, "workspace", None)
     if workspace is None:
         return
-    from app.data.model.layer_registry import get_planned_output_bundle_keys
-
-    planned_output_layers = get_planned_output_bundle_keys()
     for group_name in ("points", "lines", "polygons"):
         group = getattr(workspace, group_name, None)
         if group is None:
@@ -2875,8 +2871,6 @@ def _bundle_feature_records(context: Any):
                 "landuse_current",
             ]
         for layer_name in layer_names:
-            if str(layer_name) in planned_output_layers:
-                continue
             for feature in list(group.get(layer_name) or []):
                 yield group_name, str(layer_name), feature
 
@@ -2914,10 +2908,6 @@ def _geometry_ref_for_bundle_feature(
         if str(getattr(record[2], "bsm", "") or "").strip() == bsm
     )
     for group_name, layer_name, feature in records:
-        from app.data.model.layer_registry import get_planned_output_bundle_keys
-
-        if str(layer_name) in get_planned_output_bundle_keys():
-            continue
         raw_geometry = getattr(feature, "geometry", None)
         try:
             from shapely.geometry import shape

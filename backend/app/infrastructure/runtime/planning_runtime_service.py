@@ -806,73 +806,20 @@ class PlanningRuntimeService:
 
             paused_stage = str(current.get("paused_stage") or "").lower()
             if paused_stage in {"l1", "l2", "l3", "ground", "select"}:
-                from app.core.settings import COGNITION_WORLD_MODEL_MODE
+                from app.infrastructure.context_runtime.manager import get_cached_context
+                from app.workflow.layers.context_bootstrap import bootstrap_context_node
 
-                world_model_mode = str(
-                    current.get("world_model_mode")
-                    or COGNITION_WORLD_MODEL_MODE
-                    or "off"
-                ).strip().lower()
-                if world_model_mode in {"prefer_v2", "v2_only"}:
-                    from app.infrastructure.context_runtime.manager import get_cached_context
-                    from app.workflow.layers.context_bootstrap import bootstrap_context_node
-
-                    if get_cached_context(session_id) is None:
-                        await bootstrap_context_node(current)
-                    if get_cached_context(session_id) is None:
-                        raise RuntimeError(
-                            f"cannot resume {paused_stage}: V2 World Model restoration failed"
-                        )
-                    logger.info(
-                        "[PlanningRuntimeService] [%s] restored %s from the V2 World Model; legacy SessionKG skipped",
-                        session_id,
-                        paused_stage,
+                if get_cached_context(session_id) is None:
+                    await bootstrap_context_node(current)
+                if get_cached_context(session_id) is None:
+                    raise RuntimeError(
+                        f"cannot resume {paused_stage}: DATA World Model restoration failed"
                     )
-                else:
-                    from app.infrastructure.kg.session_kg import ensure_session_kg
-
-                    context_ref = current.get("context_ref") or {}
-                    raw_version = context_ref.get("version") or current.get("context_version")
-                    try:
-                        bundle_version = int(raw_version) if raw_version is not None else None
-                    except (TypeError, ValueError):
-                        bundle_version = None
-                    # A checkpoint's context version identifies the persisted
-                    # GIS snapshot to restore; it is not a rebuild request.
-                    # ``ensure_session_kg`` checks the live binding, then CAS.
-                    restored = await ensure_session_kg(
-                        session_id,
-                        force=False,
-                        bundle_version=bundle_version,
-                    )
-                    if restored is None:
-                        # A text-only session legitimately has no parcels.
-                        # Restore typed context for spatial deferral semantics.
-                        if paused_stage in {"ground", "select"}:
-                            from app.workflow.layers.context_bootstrap import bootstrap_context_node
-                            from app.infrastructure.context_runtime.manager import get_cached_context
-
-                            try:
-                                await bootstrap_context_node(current)
-                            except Exception as exc:  # noqa: BLE001 - report below
-                                logger.warning(
-                                    "[PlanningRuntimeService] [%s] context-only resume bootstrap failed: %s",
-                                    session_id,
-                                    exc,
-                                )
-                            if get_cached_context(session_id) is None:
-                                raise RuntimeError(
-                                    f"cannot resume {paused_stage}: planning context restoration failed"
-                                )
-                            logger.warning(
-                                "[PlanningRuntimeService] [%s] continuing %s without a KG parcel index; unresolved spatial references remain deferred",
-                                session_id,
-                                paused_stage,
-                            )
-                        else:
-                            raise RuntimeError(
-                                f"cannot resume {paused_stage}: session data/KG restoration failed"
-                            )
+                logger.info(
+                    "[PlanningRuntimeService] [%s] restored %s from DATA World Model",
+                    session_id,
+                    paused_stage,
+                )
 
             # A provider failure opens a session-scoped circuit breaker so a
             # parallel wave stops spending requests.  An explicit HUMAN
@@ -1378,45 +1325,13 @@ class PlanningRuntimeService:
         if not subscriber_ready:
             logger.debug(f"[PlanningRuntimeService] [{session_id}] No SSE subscriber (script mode), proceeding immediately")
 
-        # 0. Legacy mode may pre-build SessionKG before L1.  V2-authoritative
-        #    modes bootstrap only the generic World Model from DATA artifacts.
-        from app.core.settings import COGNITION_WORLD_MODEL_MODE
+        # The first executable context is always bootstrapped from admitted
+        # DATA artifacts.  There is no pre-build or fallback graph path.
+        if initial_state:
+            from app.workflow.layers.context_bootstrap import bootstrap_context_node
 
-        world_model_mode = str(COGNITION_WORLD_MODEL_MODE or "off").strip().lower()
-        if initial_state and world_model_mode not in {"prefer_v2", "v2_only"}:
-            try:
-                from app.infrastructure.kg.session_kg import ensure_session_kg
-
-                initial_runtime = _materialize_workflow_state_preserving_artifacts(initial_state)
-                vname = str((initial_runtime.get("config") or {}).get("village_name", ""))
-                from app.core.settings import KG_BUILD_TIMEOUT_SECONDS
-                logger.info(
-                    "[PlanningRuntimeService] [%s] KG pre-build started (timeout=%ss)",
-                    session_id,
-                    KG_BUILD_TIMEOUT_SECONDS,
-                )
-                async with asyncio.timeout(KG_BUILD_TIMEOUT_SECONDS):
-                    await ensure_session_kg(session_id, village_name=vname)
-                logger.info("[PlanningRuntimeService] [%s] KG pre-build finished", session_id)
-            except TimeoutError:
-                # KG is enrichment, not a reason to leave the graph without a
-                # checkpoint. Continue with the uploaded bundle and preserve a
-                # diagnostic for the final manifest.
-                logger.error(
-                    "[PlanningRuntimeService] [%s] KG pre-build timed out after %ss; continuing without KG",
-                    session_id,
-                    KG_BUILD_TIMEOUT_SECONDS,
-                )
-            except Exception as e:  # noqa: BLE001 — non-fatal
-                logger.warning(
-                    "[PlanningRuntimeService] [%s] Session KG pre-build failed: %s",
-                    session_id, e,
-                )
-        elif initial_state:
-            logger.info(
-                "[PlanningRuntimeService] [%s] legacy SessionKG pre-build skipped (world_model_mode=%s)",
-                session_id,
-                world_model_mode,
+            await bootstrap_context_node(
+                _materialize_workflow_state_preserving_artifacts(initial_state)
             )
 
         # 1. For initial_state, write all state + optional synthetic message

@@ -14,7 +14,6 @@ import importlib as _importlib
 
 __all__ = [
     "AdjustmentExecutionResult",
-    "BundleAssemblyPort",
     "ContextProviderPort",
     "ExternalSearchPort",
     "GazetteerPort",
@@ -33,7 +32,6 @@ __all__ = [
 _MODULE_MAP = {
     "AdjustmentExecutionResult": "adjustment",
     "ValidationAdjustmentExecutor": "adjustment",
-    "BundleAssemblyPort": "bundle_assembly",
     "ContextProviderPort": "context",
     "PlanningContextProvider": "context",
     "ExternalSearchPort": "external_search",

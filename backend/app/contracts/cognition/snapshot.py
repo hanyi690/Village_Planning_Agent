@@ -21,6 +21,7 @@ class SessionWorldModelSnapshot(StrictContractModel):
     assertion_refs: tuple[str, ...] = ()
     identity_binding_refs: tuple[str, ...] = ()
     planned_refs: tuple[str, ...] = ()
+    data_dependency_graph_digest: str = ""
 
 
 __all__ = ["SessionWorldModelSnapshot"]

@@ -115,6 +115,7 @@ class EvidenceStageSnapshot(ContractMeta):
         default_factory=EvidenceConfidence
     )
     authority: EvidenceAuthority = Field(default_factory=EvidenceAuthority)
+    data_dependency_graph_digest: str = ""
 
 
 __all__ = [

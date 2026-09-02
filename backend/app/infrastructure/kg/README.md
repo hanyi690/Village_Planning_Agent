@@ -5,8 +5,8 @@
 
 ## 定位
 
-规划知识图谱（PlanningKG）的构建、存储、查询与富化适配：把 `VillageBundle`（parcels/
-roads/constraints/water 等）物化为 RDF 图（rdflib）+ SemanticMemoryStore，提供 SPARQL/
+规划知识图谱（PlanningKG）的构建、存储、查询与富化适配：把已准入 DATA catalog 的
+空间事实投影为 RDF 图（rdflib）+ SemanticMemoryStore，提供 SPARQL/
 模板查询给分析/接地/执行阶段使用。
 
 ## 目录职责
@@ -15,7 +15,7 @@ roads/constraints/water 等）物化为 RDF 图（rdflib）+ SemanticMemoryStore
 |---|---|
 | `builder/` | KGBuilder 组合式构建：`base.PlanningKG`、`builder.KGBuilder`、`registry`（BuildContext/BuilderSpec）、`layer1_core`/`layer1_extended`/`layer1_control_lines`、`layer2`/`layer3`/`layer4`、`entity_cluster_topology`、`enrichment` 挂载点 |
 | `service.py` | `build_knowledge_graph_data`：从 bundle 构建 KG 数据 |
-| `session_kg.py` | 会话级 KG：进程池构建、CAS layer1 复用、`ensure_session_kg` |
+| `manager.py` | 会话级 KG 生命周期、缓存与 DATA digest 绑定 |
 | `manager.py` | `KGManager` + `CacheKey.compute_layer1_cache_key` + LRU 缓存 |
 | `queries/` | 查询层：`contracts`、`semantic`、`cognition`、`execute_queries`、`spatial_ref`、`sparql`；顶层 `__init__` 导出 `query_kg`/`get_entity_context`/`get_parcel_semantic_context` 等 |
 | `enrichment/` | 富化：`bindings`、`descriptions`、`relations`、`report_entity_enrichment` |

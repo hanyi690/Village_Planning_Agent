@@ -98,22 +98,22 @@ GROUND_LLM_MAX_TOKENS = int(LLM_CONFIG.ground_max_tokens)
 GROUND_LLM_PARSE_RETRIES = int(LLM_CONFIG.ground_parse_retries)
 GROUND_LLM_ENABLED = bool(LLM_CONFIG.ground_llm_enabled)
 RAG_TIMEOUT_S = int(os.getenv("RAG_TIMEOUT_S", "60"))  # per-dimension RAG retrieval cap
-EXTERNAL_ANCHOR_TIMEOUT_S = int(os.getenv("EXTERNAL_ANCHOR_TIMEOUT_S", "30"))  # 外源锚点总预算，超时跳过（绝不阻塞 L1 派发）
 # Normalized map observations are loaded from this local cache only.  The
 # loader never owns an HTTP client; changing this path therefore cannot turn
 # evidence retrieval into an implicit provider request.
 EXTERNAL_MAP_CACHE_ROOT = os.getenv(
     "EXTERNAL_MAP_CACHE_ROOT",
-    str(PROJECT_ROOT / "output" / "map_validation"),
+    str(PROJECT_ROOT / "data" / "cache" / "map_observations"),
 )
-# World-model migration mode.  ``off`` preserves the compatibility runtime;
-# ``shadow``/``prefer_v2`` are rollout modes; ``v2_only`` requires callers to
-# provide a normalized DATA catalog and never builds a Bundle/KG fallback.
-COGNITION_WORLD_MODEL_MODE = os.getenv(
-    "COGNITION_WORLD_MODEL_MODE", "off"
-).strip().lower()
-if COGNITION_WORLD_MODEL_MODE not in {"off", "shadow", "prefer_v2", "v2_only"}:
-    COGNITION_WORLD_MODEL_MODE = "off"
+# DATA admission budgets.  They are enforced before expensive decoders and
+# again at the generic facade so direct callers cannot skip ingress limits.
+DATA_MAX_UPLOAD_BYTES = int(os.getenv("DATA_MAX_UPLOAD_BYTES", str(128 * 1024 * 1024)))
+DATA_MAX_TEXT_CHARS = int(os.getenv("DATA_MAX_TEXT_CHARS", "2000000"))
+DATA_MAX_FEATURES = int(os.getenv("DATA_MAX_FEATURES", "500000"))
+DATA_MAX_TABLE_ROWS = int(os.getenv("DATA_MAX_TABLE_ROWS", "1000000"))
+# DATA-backed World Model is the only production cognition authority. The
+# retired compatibility modes are no longer configurable at runtime.
+COGNITION_WORLD_MODEL_MODE = "v2_only"
 
 def _parse_dimension_timeouts(raw: str) -> dict[str, float]:
     """Parse the per-dimension idle-timeout map from ``DIMENSION_TIMEOUT_S``.
@@ -391,29 +391,6 @@ TECENT_MAP_RATE_LIMIT: float = float(os.getenv("TECENT_MAP_RATE_LIMIT", "5.0"))
 
 # 腾讯地图最大重试次数
 TECENT_MAP_MAX_RETRIES: int = int(os.getenv("TECENT_MAP_MAX_RETRIES", "3"))
-
-# ==========================================
-# External Anchor Enrichment Switches
-# ==========================================
-
-# 是否启用 AMap 外源 POI 注入（村委会/设施/道路名/水库）
-AMAP_EXTERNAL_ANCHOR_ENABLED: bool = os.getenv(
-    "AMAP_EXTERNAL_ANCHOR_ENABLED", "false"
-).lower() in ("1", "true", "yes")
-
-
-# 是否启用腾讯地图外源 POI 注入
-TECENT_MAP_EXTERNAL_ANCHOR_ENABLED: bool = os.getenv(
-    "TECENT_MAP_EXTERNAL_ANCHOR_ENABLED", "false"
-).lower() in ("1", "true", "yes")
-
-# 是否启用天地图 WFS 矢量数据注入
-TIANDITU_WFS_ANCHOR_ENABLED: bool = os.getenv(
-    "TIANDITU_WFS_ANCHOR_ENABLED", "false"
-).lower() in ("1", "true", "yes")
-
-# WFS 单 layer 最多 features（防大查询）
-TIANDITU_WFS_MAX_FEATURES: int = int(os.getenv("TIANDITU_WFS_MAX_FEATURES", "500"))
 
 # ==========================================
 # Knowledge Base Constants

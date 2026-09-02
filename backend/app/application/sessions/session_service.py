@@ -50,16 +50,6 @@ async def _clear_session_context(session_id: str) -> bool:
         return False
 
 
-async def _delete_session_bundle(session_id: str) -> bool:
-    try:
-        from app.application.sessions.session_bundle import invalidate_session_bundle
-        invalidate_session_bundle(session_id)
-        return True
-    except Exception as e:
-        logger.warning(f"[SessionService] [{session_id}] bundle delete failed: {e}")
-        return False
-
-
 async def _delete_session_kg(session_id: str) -> bool:
     try:
         from app.infrastructure.kg.manager import get_kg_manager
@@ -253,7 +243,6 @@ class SessionService:
         for key, coro in [
             ("tasks", _cancel_session_tasks(session_id)),
             ("context", _clear_session_context(session_id)),
-            ("bundle", _delete_session_bundle(session_id)),
             ("kg", _delete_session_kg(session_id)),
             ("artifacts", _delete_session_artifacts(session_id)),
             ("checkpoint", _delete_session_checkpoint(session_id)),

@@ -49,9 +49,9 @@ class PlanningContext:
         kg_session_ref: KG session key used by ``KGManager``.
         kg_version: KG mutation version (invalidates cached SPARQL results).
         gazetteer: Village gazetteer (may be None when not resolvable).
-        constraint_index: ``ConstraintIndex`` built from the bundle (may be None).
-        input_documents: Runtime text working set resolved from bundle document
-            refs; bodies are not persisted in the bundle snapshot.
+        constraint_index: Optional derived constraint index (may be None).
+        input_documents: Runtime text working set resolved from admitted
+        document artifacts; bodies are not copied into context metadata.
         reports: Bundle-owned report manifest, ``{dim_key: {summary,
             instruction, report_id, layers: {L1/L2/L3: {...}}}}``. Report
             bodies are opened through the evidence/report retrieval boundary.
@@ -64,7 +64,7 @@ class PlanningContext:
             mapping is intentional until a producer supplies real demand points.
         location_mentions: Typed L1 place mentions used by EvidenceGraph;
             these are not final candidate selections.
-        evidence_graph: Session-scoped join boundary for L1, KG and bundle
+        evidence_graph: Session-scoped join boundary for L1, World Model and DATA
             identity (may be None while context hydration is incomplete).
         external_search_port: Lifecycle-owned optional text evidence provider;
             it is never a geometry, BSM, or KG authority.
@@ -84,6 +84,7 @@ class PlanningContext:
     workspace: SpatialWorkspace | None = None
     data_resource_catalog: Any = None
     data_snapshot: SessionDataSnapshot | None = None
+    boundary_scope_artifact: Any = None
     # Typed relation inputs.  These are immutable-by-convention snapshots
     # built from the authoritative workspace; prose counts never enter here.
     networks: Dict[str, Any] = field(default_factory=dict)
@@ -94,7 +95,7 @@ class PlanningContext:
     kg_version: int = 0
     # Migration mode is explicit so callers can tell whether compatibility
     # Bundle/KG projections are authoritative for this context.
-    world_model_mode: str = "off"
+    world_model_mode: str = "v2_only"
     # In shadow mode the V2 graph is built and written for comparison, while
     # the legacy KG remains the read authority until an explicit cutover.
     world_model_shadow: Any = None
@@ -277,6 +278,12 @@ class PlanningContext:
             "l1_snapshot_ref": self.l1_snapshot_ref,
             "data_snapshot_id": snapshot.snapshot_id if snapshot is not None else "",
             "data_snapshot_digest": snapshot.digest if snapshot is not None else "",
+            "boundary_scope_ref": str(
+                getattr(self.boundary_scope_artifact, "scope_ref", "") or ""
+            ),
+            "boundary_digest": str(
+                getattr(self.boundary_scope_artifact, "boundary_digest", "") or ""
+            ),
             "source_feature_manifest": source_manifest,
             "content_hash": self.content_hash,
             "capabilities": dict(self.capabilities),

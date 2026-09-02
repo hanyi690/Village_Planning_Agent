@@ -3,7 +3,7 @@
 The collector is intentionally independent from production Data/KG/GROUND.
 It has two axes of isolation::
 
-    output/map_validation/<provider>/<stage>/
+    data/cache/map_observations/<provider>/<stage>/
 
 Every attempted request writes an attempt record and a full raw response.
 Successful empty responses, unsupported capabilities, skipped requests, and
@@ -42,15 +42,16 @@ from scripts.collect_amap_jintian_validation import (
     collect_l1_place_names,
     gcj02_to_wgs84,
     load_admin_boundary_context,
-    load_bundle_probe_points,
     load_latest_l1,
     wgs84_to_gcj02,
     write_json,
     write_jsonl,
 )
+from app.data.boundary_scope import load_boundary_scope_artifact
+from app.data.catalog.provider_run_lease import ProviderObservationWriter, ProviderRunLeaseStore
 
 
-OUTPUT_ROOT = PROJECT_ROOT / "output" / "map_validation"
+OUTPUT_ROOT = PROJECT_ROOT / "data" / "cache" / "map_observations"
 AMAP_V3 = "https://restapi.amap.com/v3"
 AMAP_V5 = "https://restapi.amap.com/v5"
 TD_BASE = "https://api.tianditu.gov.cn"
@@ -184,15 +185,26 @@ def classify_response(provider: str, attempted: bool, http_status: int | None, p
 
 
 class ValidationCollector:
-    def __init__(self, provider: str, stage: str, refresh: bool, min_interval: float) -> None:
+    def __init__(
+        self,
+        provider: str,
+        stage: str,
+        refresh: bool,
+        min_interval: float,
+        *,
+        root: Path | None = None,
+        boundary_context: dict[str, Any] | None = None,
+    ) -> None:
         self.provider = provider
         self.stage = stage
         self.refresh = refresh
         self.min_interval = min_interval
-        self.stage_dir = OUTPUT_ROOT / provider / stage
+        output_root = root or OUTPUT_ROOT
+        self.stage_dir = output_root / provider / stage
         self.cache_dir = self.stage_dir / "cache"
         self.raw_dir = self.stage_dir / "raw_responses"
-        self.run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        self.boundary_context = dict(boundary_context or {})
+        self.run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         self.run_dir = self.stage_dir / "runs" / self.run_id
         self.events: list[dict[str, Any]] = []
         self.records: list[dict[str, Any]] = []
@@ -200,6 +212,13 @@ class ValidationCollector:
         self.last_request = 0.0
         self.session = requests.Session()
         self.api_key = self._get_api_key()
+        self.lease_store = ProviderRunLeaseStore(output_root)
+        self.lease = self.lease_store.acquire(
+            self.run_id,
+            self.provider,
+            f"pid-{os.getpid()}",
+            ttl_seconds=3600,
+        )
 
     def _get_api_key(self) -> str:
         if self.provider == "amap":
@@ -220,6 +239,7 @@ class ValidationCollector:
         unsupported_reason: str | None = None,
         query_name: str | None = None,
     ) -> tuple[Any, dict[str, Any]]:
+        self.lease_store.assert_writer(self.lease)
         sanitized = normalized_params(params)
         key = request_key(url, sanitized)
         cache_path = self.cache_dir / f"{key}.json"
@@ -228,8 +248,9 @@ class ValidationCollector:
             event = self._event(operation, url, sanitized, key, "missing", False, None, None, None, unsupported_reason, coordinate_contract, query_name=query_name)
             self._append_event(event)
             return {}, event
-        if cache_path.exists() and not self.refresh:
-            pointer = json.loads(cache_path.read_text(encoding="utf-8"))
+        cached_path = cache_path
+        if cached_path is not None and cached_path.exists() and not self.refresh:
+            pointer = json.loads(cached_path.read_text(encoding="utf-8"))
             envelope = json.loads((PROJECT_ROOT / pointer["raw_response"]).read_text(encoding="utf-8"))
             reusable_failure = envelope.get("status") == "failed" and envelope.get("retryable") is False
             if envelope.get("status") in {"success_nonempty", "success_empty", "missing"} or reusable_failure:
@@ -331,6 +352,7 @@ class ValidationCollector:
         append_jsonl(self.run_dir / "requests.jsonl", event)
 
     def finish(self, manifest: dict[str, Any], classifier: ScopeClassifier) -> Path:
+        self.lease_store.assert_writer(self.lease)
         normalized: list[dict[str, Any]] = []
         retained: list[dict[str, Any]] = []
         rejected: list[dict[str, Any]] = []
@@ -343,7 +365,22 @@ class ValidationCollector:
                 row["rejection_reasons"] = [row.get("scope_bucket", "unknown_scope")]
                 rejected.append(row)
             normalized.append(row)
-        write_jsonl(self.run_dir / "normalized_all.jsonl", normalized)
+        ProviderObservationWriter(
+            self.stage_dir.parent.parent,
+            self.provider,
+            self.run_id,
+            stage=self.stage,
+        ).publish(
+            self.lease,
+            normalized,
+            boundary_digest=str(self.boundary_context.get("boundary_digest") or ""),
+            query_geometry_digest=str(self.boundary_context.get("query_geometry_digest") or ""),
+            crs_contract="source=provider; target=EPSG:4326; transform=declared",
+            coverage={
+                "coverage_status": "COMPLETE" if self._coverage_status() == "complete" else "PARTIAL",
+                "request_count": len(self.events),
+            },
+        )
         write_jsonl(self.run_dir / "retained_candidates.jsonl", retained)
         write_jsonl(self.run_dir / "rejected_candidates.jsonl", rejected)
         bucket_counts: dict[str, int] = {}
@@ -368,9 +405,37 @@ class ValidationCollector:
             "rejected_record_count": len(rejected),
             "scope_bucket_counts": bucket_counts,
             "coordinate_contract": {"amap": "request/response GCJ-02; local checks WGS84", "tencent": "lat,lng request order; coord_type=wgs84; normalized lon,lat", "tianditu": "documented lon,lat / CGCS2000-WGS84-compatible"},
+            "boundary_ref": self.boundary_context.get("boundary_ref", ""),
+            "boundary_digest": self.boundary_context.get("boundary_digest", ""),
+            "query_geometry_digest": self.boundary_context.get("query_geometry_digest", ""),
+            "boundary_source_path": self.boundary_context.get("source_path", ""),
+            "coverage_status": self._coverage_status(),
+            "coverage": {
+                "request_count": len(self.events),
+                "successful_nonempty": sum(event["status"] == "success_nonempty" for event in self.events),
+                "successful_empty": sum(event["status"] == "success_empty" for event in self.events),
+                "missing": sum(event["status"] in {"missing", "not_attempted", "missing_capability"} for event in self.events),
+                "failed": sum(event["status"] == "failed" for event in self.events),
+                "filtered_out_of_scope": len(rejected),
+                "complete_within_recorded_plan": self._coverage_status() == "complete",
+            },
+            "provider_acquisition_plan": self.boundary_context.get("provider_acquisition_plans", {}).get(self.provider, {}),
         })
         write_json(self.run_dir / "manifest.json", manifest)
+        write_json(
+            self.run_dir / "query_plan.json",
+            self.boundary_context.get("provider_acquisition_plans", {}).get(self.provider, {}),
+        )
+        self.lease_store.release(self.lease)
         return self.run_dir
+
+    def _coverage_status(self) -> str:
+        statuses = {str(event.get("status") or "") for event in self.events}
+        if "failed" in statuses:
+            return "partial_failed" if len(statuses - {"failed"}) else "failed"
+        if statuses & {"missing", "not_attempted", "missing_capability"}:
+            return "partial_missing"
+        return "complete"
 
 
 def append_jsonl(path: Path, payload: Any) -> None:
@@ -458,9 +523,6 @@ def run_amap_admin(collector: ValidationCollector, context: dict[str, Any]) -> N
             amap_page_search(collector, f"金田村-around-{radius}-{shard}", {"location": gcj_point(*anchor_wgs), "radius": radius, "types": types, "sortrule": "distance"}, True)
     for index, point in enumerate(context["sample_points_gcj02"], 1):
         collector.request("amap_regeo_boundary", f"{AMAP_V3}/geocode/regeo", {"location": f"{point[0]:.6f},{point[1]:.6f}", "extensions": "all", "roadlevel": "0", "radius": "300"}, "AMap request/response GCJ-02; local checks WGS84", query_name=f"边界采样-{index}")
-    for kind, radius, limit in (("road", 100, 240), ("water", 300, 100)):
-        for index, (lon, lat) in enumerate(load_bundle_probe_points(kind, limit), 1):
-            collector.request("amap_regeo_bundle", f"{AMAP_V3}/geocode/regeo", {"location": gcj_point(lon, lat), "extensions": "all", "roadlevel": "0", "radius": radius}, "AMap request/response GCJ-02; local checks WGS84", query_name=f"bundle-{kind}-采样-{index}")
     for mode in ("driving", "walking", "bicycling", "electrobike"):
         collector.request("amap_route_admin", f"{AMAP_V5}/direction/{mode}", {"origin": gcj_point(*anchor_wgs), "destination": gcj_point(116.029180, 24.749940), "alternative_route": "3", "show_fields": "cost,polyline,tmcs,navi"}, "AMap request/response GCJ-02; local checks WGS84", query_name=f"行政锚点-{mode}")
     detail_top_ids(collector, context["boundary_geometry_wgs84"])
@@ -562,12 +624,24 @@ def run_l1_provider(collector: ValidationCollector, context: dict[str, Any]) -> 
     }
 
 
-def run(provider: str, stage: str, refresh: bool, min_interval: float) -> Path:
+def run(
+    provider: str,
+    stage: str,
+    refresh: bool,
+    min_interval: float,
+    *,
+    boundary_scope: Any | None = None,
+) -> Path:
+    if boundary_scope is None:
+        raise ValueError("provider collection requires an admitted boundary_scope")
     if provider == "tianditu":
         from scripts.collect_tianditu_full import TiandituCollectorConfig, TiandituFullCollector
 
         full_stage = "01_admin_scope" if stage == "01_admin_scope" else "02_l1_place_names"
-        config = TiandituCollectorConfig(min_interval=min_interval)
+        config = TiandituCollectorConfig(
+            min_interval=min_interval,
+            boundary_scope=boundary_scope,
+        )
         return TiandituFullCollector(config, refresh=refresh).collect(full_stage)
     if provider == "amap":
         canonical = AmapJintianCollector(
@@ -575,10 +649,17 @@ def run(provider: str, stage: str, refresh: bool, min_interval: float) -> Path:
             min_interval=min_interval,
             root=OUTPUT_ROOT / "amap",
             expand_admin=True,
+            boundary_scope=boundary_scope,
         )
         return canonical.collect(stage)
-    context = load_admin_boundary_context()
-    collector = ValidationCollector(provider, stage, refresh, min_interval)
+    context = load_admin_boundary_context(boundary_scope=boundary_scope)
+    collector = ValidationCollector(
+        provider,
+        stage,
+        refresh,
+        min_interval,
+        boundary_context=context,
+    )
     if stage == "01_admin_scope":
         if provider == "amap":
             run_amap_admin(collector, context)
@@ -599,17 +680,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stage", choices=("admin", "l1", "all"), default="all")
     parser.add_argument("--refresh", action="store_true", help="显式重试成功缓存；失败响应默认下次自动重试")
     parser.add_argument("--min-interval", type=float, default=0.35)
+    parser.add_argument("--boundary-artifact-root", type=Path, help="CAS root containing an admitted BoundaryScopeArtifact")
+    parser.add_argument("--boundary-run-id", help="DATA admission run id whose named boundary scope is used")
+    parser.add_argument("--boundary-branch-id", default="main")
     return parser.parse_args()
 
 
 def main() -> int:
     load_dotenv(PROJECT_ROOT / ".env")
     args = parse_args()
+    if bool(args.boundary_artifact_root) != bool(args.boundary_run_id):
+        raise SystemExit("--boundary-artifact-root and --boundary-run-id must be supplied together")
+    boundary_scope = (
+        load_boundary_scope_artifact(
+            str(args.boundary_artifact_root),
+            args.boundary_run_id,
+            branch_id=args.boundary_branch_id,
+        )
+        if args.boundary_artifact_root
+        else None
+    )
     providers = ("amap", "tianditu", "tencent") if args.provider == "all" else (args.provider,)
     stages = ("01_admin_scope", "02_l1_place_names") if args.stage == "all" else ("01_admin_scope" if args.stage == "admin" else "02_l1_place_names",)
     for provider in providers:
         for stage in stages:
-            print(run(provider, stage, args.refresh, args.min_interval))
+            print(run(provider, stage, args.refresh, args.min_interval, boundary_scope=boundary_scope))
     return 0
 
 

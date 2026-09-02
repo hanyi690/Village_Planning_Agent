@@ -4,7 +4,7 @@ KG 子模块：地名解析是 KG 语义能力，agent 层（Binder/EXPLORE/渲�
 
 数据源（全部系统内）：
   1. KG ResidentialCluster（SPARQL：聚类名/质心/sfWithin 地块集）
-  2. bundle 村名注记（point-in-boundary 过滤村外行政村）
+  2. explicit current L1 bindings supplied by the caller
 
 匹配：精确 → difflib fuzzy(ratio>=0.6) → Flash 判定 + 双确认
   （LLM 判定 ∧ 空间校验：村名特征 vs 聚类地块 dlbm 构成）
@@ -189,77 +189,6 @@ def _facility_entries_from_kg(kg: Any) -> List[GazetteerEntry]:
     return entries
 
 
-def _external_anchors_from_bundle(bundle: Any) -> List[GazetteerEntry]:
-    """从 bundle 多源 API 注入的自然村注记构建权威坐标条目。
-
-    消费 DataCatalog Step 5 注入的 ``annotations_current`` 中
-    ``layer_type == "external_natural_village"`` 的注记（source: tencent/amap/tianditu），
-    作为自然村名的权威坐标（gazetteer 金标准），解决"多村名绑同 cluster"。
-    """
-    if bundle is None:
-        return []
-    # Uploaded annotation points are authoritative GIS evidence, but the
-    # grounding contract requires a BSM-backed entry.  Bind each point to the
-    # actual landuse parcel that contains/touches it; this is a deterministic
-    # geometric relation, never a name-based or nearest-parcel guess.
-    landuse = list((getattr(bundle, "polygons", None) or {}).get("landuse_current") or [])
-    from shapely.geometry import Point, shape
-
-    def bsms_at(coords: Any) -> List[str]:
-        try:
-            point = Point(float(coords[0]), float(coords[1]))
-        except (TypeError, ValueError, IndexError):
-            return []
-        matched: List[str] = []
-        for parcel in landuse:
-            try:
-                geom = shape(getattr(parcel, "geometry", None) or {})
-                if not geom.is_empty and (geom.contains(point) or geom.touches(point)):
-                    bsm = str(getattr(parcel, "bsm", "") or "").strip()
-                    if bsm:
-                        matched.append(bsm)
-            except Exception:
-                continue
-        return matched
-
-    entries: List[GazetteerEntry] = []
-    for f in (bundle.points.get("annotations_current") or []):
-        layer_type = str(getattr(f, "layer_type", "") or "")
-        raw = getattr(f, "_raw", {}) or {}
-        if (not isinstance(raw, dict) or not raw) and hasattr(f, "model_dump"):
-            try:
-                raw = f.model_dump(by_alias=True)
-            except Exception:
-                raw = {}
-        # Accept both the external-provider contract and ordinary uploaded
-        # annotation.geojson (分类=村名, 注记=...).  The latter is source GIS
-        # evidence, not a generated label, so it must participate in lookup.
-        is_named_annotation = str(raw.get("分类", raw.get("category", "")) or "").strip() in {"村名", "自然村"}
-        if layer_type != "external_natural_village" and not is_named_annotation:
-            continue
-        name_norm = str(
-            raw.get("name_norm") or raw.get("注记") or raw.get("text") or ""
-        ).strip()
-        anchor_source = str(raw.get("anchor_source", "uploaded_annotation") or "").strip()
-        if not name_norm:
-            continue
-        geom = f.geometry or {}
-        coords = geom.get("coordinates") or []
-        if len(coords) != 2:
-            continue
-        entries.append(GazetteerEntry(
-            name=name_norm,
-            aliases=[],
-            entity_uri=f"pln:external_{anchor_source}_{name_norm}",
-            bsms=bsms_at(coords),
-            centroid=[float(coords[0]), float(coords[1])],
-            source=anchor_source or "external_anchors",
-            confidence=0.9,
-            description=f"{name_norm}（多源 API {anchor_source} 坐标）",
-        ))
-    return entries
-
-
 def build_gazetteer(
     kg: Any,
     bundle: Any,
@@ -279,12 +208,6 @@ def build_gazetteer(
             gazetteer.upsert(e)
     except Exception as e:
         logger.warning("[Gazetteer] cluster build failed: %s", e)
-    # 多源 API 自然村权威坐标（进入 bundle 前 enrichment 注入）— 金标准村名条目
-    try:
-        for e in _external_anchors_from_bundle(bundle):
-            gazetteer.upsert(e)
-    except Exception as e:
-        logger.warning("[Gazetteer] external anchors build failed: %s", e)
     logger.info("[Gazetteer] built: %d entries", len(gazetteer.entries))
     return gazetteer
 
@@ -324,5 +247,4 @@ __all__ = [
     "GazetteerEntry",
     "build_gazetteer",
     "spatial_check",
-    "_external_anchors_from_bundle",
 ]

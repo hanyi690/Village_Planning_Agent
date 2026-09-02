@@ -16,7 +16,7 @@ from app.contracts.evidence.evidence_contracts import (
     ExplorationRequest,
     ExplorationResult,
 )
-from .shared import budget_check, resolve_bundle, tool_reply
+from .shared import budget_check, tool_reply
 
 
 def _pagination_metadata(
@@ -312,86 +312,6 @@ async def query_facility_bsms(
     )
 
 
-async def bundle_geometry_by_feature_ref_impl(
-    session_id: str,
-    feature_ref: str,
-) -> dict[str, Any]:
-    prefix = "bundle://feature/"
-    if not str(feature_ref or "").startswith(prefix):
-        return {
-            "success": False,
-            "error": "feature_ref must come from EvidencePacket as bundle://feature/<BSM>",
-        }
-    bsm = str(feature_ref)[len(prefix):].strip()
-    if not bsm or "/" in bsm or " " in bsm:
-        return {"success": False, "error": "invalid bundle feature reference"}
-
-    bundle = await resolve_bundle(session_id)
-    indexed = None
-    finder = getattr(bundle, "find_feature_by_bsm", None)
-    if callable(finder):
-        try:
-            indexed = finder(bsm)
-        except Exception:
-            indexed = None
-    if indexed is not None:
-        group_name, layer_name, feature = indexed
-        from app.data.model.layer_registry import get_planned_output_bundle_keys
-
-        if str(layer_name) in get_planned_output_bundle_keys():
-            return {
-                "success": False,
-                "error": "planned output cannot be read as current bundle evidence",
-                "feature_ref": feature_ref,
-            }
-        return budget_check(
-            {
-                "success": True,
-                "feature_ref": feature_ref,
-                "bsm": bsm,
-                "geometry_authority": "bundle",
-                "geometry_group": group_name,
-                "layer_type": str(getattr(feature, "layer_type", layer_name) or layer_name),
-                "source_feature_id": str(getattr(feature, "source_feature_id", "") or ""),
-                "geometry": getattr(feature, "geometry", None),
-            },
-            hard_limit=6000,
-        )
-    for group_name, group in (
-        ("points", bundle.points),
-        ("lines", bundle.lines),
-        ("polygons", bundle.polygons),
-    ):
-        for layer_name in group.keys():
-            from app.data.model.layer_registry import get_planned_output_bundle_keys
-
-            if str(layer_name) in get_planned_output_bundle_keys():
-                continue
-            for feature in list(group.get(layer_name) or []):
-                if str(getattr(feature, "bsm", "") or "") != bsm:
-                    continue
-                return budget_check(
-                    {
-                        "success": True,
-                        "feature_ref": feature_ref,
-                        "bsm": bsm,
-                        "geometry_authority": "bundle",
-                        "geometry_group": group_name,
-                        "layer_type": str(getattr(feature, "layer_type", layer_name) or layer_name),
-                        "source_feature_id": str(
-                            getattr(feature, "source_feature_id", "") or ""
-                        ),
-                        "geometry": getattr(feature, "geometry", None),
-                    },
-                    hard_limit=6000,
-                )
-    return {
-        "success": False,
-        "error": "feature_ref is not present in the current bundle snapshot",
-        "feature_ref": feature_ref,
-    }
-
-
 async def data_geometry_by_ref_impl(
     session_id: str,
     geometry_ref: str,
@@ -491,25 +411,11 @@ async def data_geometry_by_ref(
     return tool_reply(await data_geometry_by_ref_impl(session_id, geometry_ref))
 
 
-@tool
-async def bundle_geometry_by_feature_ref(
-    session_id: str = "",
-    feature_ref: str = "",
-    state: Annotated[Optional[dict[str, Any]], InjectedState()] = None,
-) -> str:
-    """仅按已验证 bundle feature ref 取权威几何。"""
-    if not session_id and state:
-        session_id = str(state.get("session_id", "") or "")
-    return tool_reply(await bundle_geometry_by_feature_ref_impl(session_id, feature_ref))
-
-
 __all__ = [
     "query_evidence_graph",
     "query_evidence_graph_impl",
     "query_facility_bsms",
     "query_facility_bsms_impl",
-    "bundle_geometry_by_feature_ref",
-    "bundle_geometry_by_feature_ref_impl",
     "data_geometry_by_ref",
     "data_geometry_by_ref_impl",
 ]

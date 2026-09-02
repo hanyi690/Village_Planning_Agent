@@ -58,7 +58,6 @@ _SOURCE_FAMILY_ALIASES = {
     "external_search": "external",
     "external_claim": "external",
     "external_vector_corpus": "external",
-    "external_anchor": "external",
     "web": "external",
     "api": "api",
 }

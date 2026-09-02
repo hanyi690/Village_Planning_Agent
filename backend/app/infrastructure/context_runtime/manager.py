@@ -2,17 +2,16 @@
 
 Owns the lifecycle of the authoritative ``PlanningContext`` for a session:
 
-    DATA catalog + World Model KG (or legacy Bundle/KG) + gazetteer + constraint
+    DATA catalog + World Model KG + gazetteer + constraint
     index + village anchors + reports
 
 built *once* and reused across the EXPLORE / PARSE / GROUND / LAYOUT pipeline,
-eliminating the repeated Bundle/KG/report rebuilds in ``gis_agent_node``,
-``ensure_session_kg`` and ``layout_pipeline._fetch/_build_kg``.
+eliminating repeated catalog/report rebuilds in the workflow nodes.
 
-Versioning: every rebuild bumps ``PlanningContext.version``. The bundle is
-cached in ``app.application.sessions.session_bundle``; the session KG is idempotent in
-``KGManager``. ``build_planning_context`` reuses both and only assembles the
-derived parts (gazetteer / ports / constraint index / anchors / evidence).
+Versioning: every rebuild bumps ``PlanningContext.version``. DATA products and
+the session World Model are immutable/CAS-backed; ``build_planning_context``
+only assembles derived parts (gazetteer / ports / constraint index / anchors /
+evidence).
 """
 
 from __future__ import annotations
@@ -414,6 +413,7 @@ async def build_planning_context(
     expected_snapshot_digest: str | None = None,
     expected_world_model_digest: str | None = None,
     data_catalog: Any = None,
+    boundary_scope_artifact: Any = None,
     schema_mapping_snapshot: Any = None,
     schema_mapping_artifact_ref: str = "",
     artifact_root: str = "",
@@ -424,13 +424,15 @@ async def build_planning_context(
     Args:
         session_id: Planning session identifier.
         village_name: Village name override. When empty, resolved from the
-            session record via the bundle factory.
+            session record via the DATA catalog artifact.
         refresh: Force a rebuild even when a cached context exists.
         include_reports: Load layer report content + summary index (DB I/O).
             Set False for pure spatial bootstrapping.
         data_catalog: Optional normalized catalog or raw records. Required by
             ``COGNITION_WORLD_MODEL_MODE=prefer_v2|v2_only`` and used as the generic
-            source fallback when Bundle materialization is unavailable.
+            source failure when the DATA catalog is unavailable.
+        boundary_scope_artifact: Optional immutable admitted boundary used to
+            scope provider observations; it is never reconstructed from a filename.
         schema_mapping_snapshot: Optional persisted cognition mapping. When
             supplied, Context Runtime must reuse this exact semantic version.
         schema_mapping_artifact_ref: CAS descriptor digest for that mapping.
@@ -478,6 +480,16 @@ async def build_planning_context(
                 not incoming_catalog_digest
                 or incoming_catalog_digest == cached_catalog_digest
             )
+            incoming_boundary_ref = str(
+                getattr(boundary_scope_artifact, "scope_ref", "") or ""
+            )
+            cached_boundary_ref = str(
+                getattr(getattr(cached, "boundary_scope_artifact", None), "scope_ref", "")
+                or ""
+            )
+            cached_boundary_matches = (
+                not incoming_boundary_ref or incoming_boundary_ref == cached_boundary_ref
+            )
             incoming_mapping_digest = str(
                 getattr(schema_mapping_snapshot, "mapping_fingerprint", "")
                 or getattr(schema_mapping_snapshot, "decision_fingerprint", "")
@@ -518,6 +530,7 @@ async def build_planning_context(
                 and cached_snapshot_matches
                 and cached_mode_matches
                 and cached_catalog_matches
+                and cached_boundary_matches
                 and cached_mapping_matches
                 and cached_world_model_matches
                 and cached_cognition_ready
@@ -533,47 +546,14 @@ async def build_planning_context(
                 expected_snapshot_digest,
             )
 
-    if world_model_mode in {"prefer_v2", "v2_only"} and data_catalog is None:
+    if data_catalog is None:
         raise ContextBuildError(
-            f"{world_model_mode} context requires a normalized DATA catalog; "
-            "Bundle bootstrap is disabled for the V2-authoritative mode"
+            "context requires a normalized DATA catalog"
         )
-
-    build_session_bundle = None
-    if world_model_mode not in {"prefer_v2", "v2_only"}:
-        from app.application.sessions.session_bundle import build_session_bundle as _build_session_bundle
-
-        build_session_bundle = _build_session_bundle
 
     version = version if version is not None else await _next_persisted_version(session_id)
 
-    # 1. Source bootstrap. During checkpoint replay, prefer the persisted bundle that
-    # produced the checkpoint.  Rebuilding from the live catalog can reorder
-    # synthetic legacy features or otherwise produce a different snapshot
-    # digest even when the authoritative source files are unchanged.  The
-    # expected digest is still checked below, so this remains fail-closed.
-    bundle = None
-    bundle_error: Optional[str] = None
-    try:
-        if expected_snapshot_digest and world_model_mode not in {"prefer_v2", "v2_only"}:
-            from app.application.sessions.session_bundle import (
-                invalidate_session_bundle,
-                restore_session_bundle,
-            )
-
-            invalidate_session_bundle(session_id)
-            bundle = await restore_session_bundle(session_id)
-        if bundle is None and build_session_bundle is not None:
-            bundle = await build_session_bundle(session_id, village_name or None)
-    except Exception as e:
-        bundle_error = type(e).__name__
-        logger.warning("[PlanningContext] bundle build failed: %s", type(e).__name__)
-
-    resolved_village = str(getattr(bundle, "village_name", "") or "") or village_name
-    if bundle is None and data_catalog is None:
-        raise ContextBuildError(
-            f"required capability 'bundle' missing (bundle_error={bundle_error})"
-        )
+    resolved_village = village_name
 
     # Normalize arbitrary records once at the DATA boundary.  Downstream
     # modules always receive a catalog snapshot, so generators/GeoJSON
@@ -592,58 +572,21 @@ async def build_planning_context(
     # 1.5 Data manifest and generic resource catalog. DATA is materialized
     # before KG so every later semantic projection has a stable snapshot and
     # capability inventory to reference. A caller-supplied catalog is a
-    # Bundle-independent fallback for file/service ingestion.
-    bundle_has_primary_landuse = bool(
-        bundle is not None
-        and list(
-            (getattr(bundle, "polygons", None) or {}).get("landuse_current")
-            or []
-        )
+    incoming_dependency_digest = str(
+        getattr(data_catalog, "data_dependency_graph_digest", "") or ""
     )
-    if bundle is not None and (data_catalog is None or bundle_has_primary_landuse):
-        data_snapshot = SessionDataSnapshot.from_bundle(
-            bundle,
-            session_id=session_id,
-            source="data_catalog",
-        )
-    else:
-        data_snapshot = SessionDataSnapshot.from_data_catalog(
-            data_catalog,
-            session_id=session_id,
-            village_name=resolved_village,
-            source="data_catalog",
-        )
-    workspace = (
-        SpatialWorkspace(data_snapshot, bundle)
-        if bundle is not None
-        else SpatialWorkspace(data_snapshot, catalog=data_catalog)
+    data_snapshot = SessionDataSnapshot.from_data_catalog(
+        data_catalog,
+        session_id=session_id,
+        village_name=resolved_village,
+        source="data_catalog",
     )
+    workspace = SpatialWorkspace(data_snapshot, catalog=data_catalog)
     data_resource_catalog = None
     try:
         data_resource_catalog = workspace.to_resource_catalog(
             snapshot_id=data_snapshot.snapshot_id,
         )
-        # A session may contain both the compatibility Bundle and arbitrary
-        # uploaded/service records.  Keep both in one DATA catalog so KG,
-        # GROUND and SELECT see the complete source universe rather than the
-        # first adapter that happened to succeed.
-        if bundle is not None and data_catalog is not None:
-            from app.data.resource_catalog import DataResourceCatalog
-
-            extra_catalog = (
-                data_catalog
-                if isinstance(data_catalog, DataResourceCatalog)
-                else DataResourceCatalog.from_records(
-                    data_catalog,
-                    dataset_ref=f"session:{session_id}:external",
-                    name=resolved_village,
-                    snapshot_id=data_snapshot.snapshot_id,
-                )
-            )
-            data_resource_catalog = data_resource_catalog.merge(
-                extra_catalog,
-                snapshot_id=data_snapshot.snapshot_id,
-            )
     except Exception as exc:
         logger.warning(
             "[PlanningContext] generic data resource catalog unavailable: %s",
@@ -665,14 +608,23 @@ async def build_planning_context(
                 current_world_snapshot(data_resource_catalog.snapshot)
             )
             assert_current_world_catalog(data_resource_catalog.snapshot)
+            if incoming_dependency_digest:
+                data_resource_catalog.data_dependency_graph_digest = incoming_dependency_digest
+            else:
+                from app.modules.data.invalidation import build_data_dependency_graph
+
+                data_resource_catalog.data_dependency_graph_digest = (
+                    build_data_dependency_graph(
+                        data_resource_catalog,
+                    ).graph_digest
+                )
         except (TypeError, ValueError) as exc:
             raise ContextBuildError(
                 "DATA current-world admission invariant failed"
             ) from exc
-        # The Bundle manifest is only a bootstrap view.  Build the authoritative
-        # DATA snapshot after vector, raster, table, document and uploaded
-        # catalogs have been merged, otherwise valid generic layers can exist
-        # in the catalog without appearing in the frozen session inventory.
+        # Build the authoritative DATA snapshot after all admitted resources
+        # have been normalized, otherwise valid generic layers can exist in
+        # the catalog without appearing in the frozen session inventory.
         data_snapshot = SessionDataSnapshot.from_data_catalog(
             data_resource_catalog,
             session_id=session_id,
@@ -687,9 +639,7 @@ async def build_planning_context(
         )
     if data_resource_catalog is not None:
         try:
-            # Keep the workspace and the context on one normalized DATA view.
-            # This is essential for mixed Bundle + uploaded sessions: EXECUTE
-            # capability checks must see the same resources projected into KG.
+            # Keep the workspace and context on one normalized DATA view.
             workspace.attach_resource_catalog(data_resource_catalog)
         except Exception as exc:
             logger.warning(
@@ -712,47 +662,14 @@ async def build_planning_context(
                     type(exc).__name__,
                 )
 
-    # 2. Session KG (idempotent: pre-built sessions short-circuit)
+    # 2. DATA-backed World Model (idempotent: pre-built products short-circuit)
     kg_session_ref = ""
     kg_version = 0
     kg = None
     world_model = None
     world_model_shadow = None
     kg_error: Optional[str] = None
-    if session_id and world_model_mode not in {"prefer_v2", "v2_only"}:
-        try:
-            from app.infrastructure.kg.session_kg import ensure_session_kg
-
-            snap = await ensure_session_kg(
-                session_id,
-                resolved_village,
-                data_catalog=data_resource_catalog,
-            )
-            if snap and not snap.get("cache_hit"):
-                kg_version = int(snap.get("version", 0) or 0)
-            if snap:
-                kg_session_ref = session_id
-            from app.infrastructure.kg.manager import get_kg_manager
-
-            kg = get_kg_manager().get_session_kg(session_id)
-            if kg is not None and kg_session_ref:
-                try:
-                    kg_version = get_kg_manager().get_session_version(session_id)
-                except Exception:
-                    pass
-        except Exception as e:
-            kg_error = type(e).__name__
-            logger.warning(
-                "[PlanningContext] session KG access failed: %s",
-                type(e).__name__,
-            )
-
     # Every normalized DATA catalog also gets a cognition World Model handle.
-    # In ``off`` mode the legacy KG remains the compatibility read authority,
-    # but the generic graph is still built and published so DATA/KG/EVIDENCE
-    # bootstrap has a real, inspectable product instead of an implicit Bundle
-    # prerequisite.  Shadow/prefer_v2/v2_only use this same graph as their
-    # configured authority.
     if data_resource_catalog is not None and not defer_cognition_bootstrap:
         try:
             from app.infrastructure.cognition_runtime.world_model_store import (
@@ -776,7 +693,7 @@ async def build_planning_context(
             )
 
     # Shadow/prefer_v2/v2_only all build the DATA-backed World Model graph.
-    # Prefer/v2 deliberately skip the legacy session KG path so Bundle/parcel
+    # Prefer/v2 deliberately skip the legacy session KG path so parcel
     # fields cannot become a hidden prerequisite for cognition or commits.
     if (
         not defer_cognition_bootstrap
@@ -813,24 +730,6 @@ async def build_planning_context(
 
     # 3. Gazetteer
     gazetteer = None
-    if (
-        resolved_village
-        and bundle is not None
-        and world_model_mode not in {"shadow", "prefer_v2", "v2_only"}
-    ):
-        try:
-            from app.infrastructure.kg.gazetteer import build_gazetteer
-
-            if kg is not None and bundle is not None and getattr(kg, "g", None) is not None:
-                gazetteer = build_gazetteer(
-                    kg,
-                    bundle,
-                )
-        except Exception as e:
-            logger.warning(
-                "[PlanningContext] gazetteer build failed: %s",
-                type(e).__name__,
-            )
 
     # 3.5 Injected ports (gazetteer, spatial query, semantic query, world model)
     gazetteer_port = None
@@ -869,11 +768,8 @@ async def build_planning_context(
             type(e).__name__,
         )
     try:
-        # ``world_model`` is the canonical cognition graph even when the
-        # compatibility KG is disabled (off/v2 cold-start).  Always expose a
-        # read port for that graph; otherwise generic DATA sessions reached
-        # EVIDENCE/GROUND with no World Model simply because no legacy KG had
-        # been created.
+        # ``world_model`` is the canonical cognition graph. Always expose a
+        # read port for that graph.
         world_model_for_port = world_model or (
             world_model_shadow if world_model_mode == "shadow" else None
         ) or kg
@@ -917,9 +813,8 @@ async def build_planning_context(
             "[PlanningContext] world_model commit adapter build failed: %s",
             type(e).__name__,
         )
-    # A shadow run may intentionally have no usable legacy Bundle/KG.  The
-    # DATA-backed comparison graph is still a valid write surface for intent,
-    # semantic assertions and planned outputs in that cold-start case.
+    # The DATA-backed graph is a valid write surface for intent, semantic
+    # assertions and planned lineage in a cold-start session.
     if world_model_mode == "shadow" and world_model_shadow is not None:
         world_model_commit_port = world_model_shadow
     ports = PlanningPorts(
@@ -929,59 +824,13 @@ async def build_planning_context(
         world_model=world_model_port,
         world_model_commit=world_model_commit_port,
     )
-    if world_model_mode not in {"prefer_v2", "v2_only"}:
-        try:
-            from app.data.ingestion.bundle_assembly_adapter import DataBundleAssemblyAdapter
-
-            ports.bundle_assembly = DataBundleAssemblyAdapter()
-        except Exception as e:
-            logger.warning(
-                "[PlanningContext] bundle_assembly adapter build failed: %s",
-                type(e).__name__,
-            )
-
     # 4. Constraint index
     constraint_index = None
-    if bundle is not None:
-        try:
-            from app.spatial.query.bridge import build_constraint_index
 
-            constraint_index = build_constraint_index(bundle)
-        except Exception as e:
-            logger.warning(
-                "[PlanningContext] constraint index build failed: %s",
-                type(e).__name__,
-            )
-
-    # 5. Report manifest + summary index (bundle-owned, no report bodies)
+    # 5. Report manifest + summary index (document-channel, no report bodies)
     reports: Dict[str, Dict[str, Any]] = {}
     report_summary_index: Dict[str, Dict[str, Any]] = {}
-    if include_reports and session_id and bundle is not None and world_model_mode not in {"prefer_v2", "v2_only"}:
-        for ref in list(getattr(bundle.documents, "report_refs", []) or []):
-            dk = str(ref.get("dimension_key") or "")
-            layer = int(ref.get("layer") or 0)
-            if not dk or layer not in (1, 2, 3):
-                continue
-            entry = reports.setdefault(dk, {})
-            entry.update({
-                "summary": ref.get("summary", ""),
-                "instruction": ref.get("instruction", ""),
-                "layer": layer,
-                "report_id": ref.get("report_id", ""),
-            })
-            entry.setdefault("layers", {})[f"L{layer}"] = {
-                "summary": ref.get("summary", ""),
-                "instruction": ref.get("instruction", ""),
-                "knowledge_sources": ref.get("knowledge_sources", []),
-                "report_id": ref.get("report_id", ""),
-                "version": ref.get("version", ""),
-            }
-            summary_entry = report_summary_index.setdefault(dk, {})
-            summary_entry.setdefault("layers", {})[f"L{layer}"] = {
-                "summary": ref.get("summary", ""),
-                "report_id": ref.get("report_id", ""),
-                "version": ref.get("version", ""),
-            }
+    # Reports are loaded through the explicitly admitted document channel.
 
     runtime_documents: list[Dict[str, Any]] = []
     if session_id:
@@ -994,43 +843,14 @@ async def build_planning_context(
             source_documents = evidence_documents(
                 await load_session_documents(session_id, resolved_village)
             )
-            document_manifest = (
-                list(getattr(bundle.documents, "document_refs", []) or [])
-                if bundle is not None
-                and world_model_mode not in {"prefer_v2", "v2_only"}
-                else []
-            )
-            if document_manifest:
-                allowed_refs = {
-                    (
-                        str(ref.get("source") or ""),
-                        str(ref.get("name") or ""),
-                        str(ref.get("content_digest") or ""),
-                    )
-                    for ref in document_manifest
-                }
-                runtime_documents = [
-                    document for document in source_documents
-                    if (
-                        str(document.get("source") or ""),
-                        str(document.get("name") or ""),
-                        str(document.get("content_digest") or ""),
-                    ) in allowed_refs
-                ]
-            else:
-                # Generic DATA/KG sessions do not own a legacy Bundle
-                # document manifest.  The explicit current-evidence admission
-                # role remains the authority boundary in V2/off cold starts.
-                runtime_documents = source_documents
+            runtime_documents = source_documents
         except Exception as exc:
             logger.warning(
                 "[PlanningContext] input document resolution failed: %s",
                 type(exc).__name__,
             )
 
-    # Generic DATA is projected once into the cognition World Model. The
-    # compatibility SessionKG keeps only its legacy bundle projection; copying
-    # the same catalog into both graphs doubled memory and startup latency.
+    # Generic DATA is projected once into the cognition World Model.
     networks = _build_context_networks(workspace)
     demands = _build_context_demands(workspace)
     external_search_port = None
@@ -1109,6 +929,7 @@ async def build_planning_context(
         workspace=workspace,
         data_resource_catalog=data_resource_catalog,
         data_snapshot=data_snapshot,
+        boundary_scope_artifact=boundary_scope_artifact,
         networks=networks,
         demands=demands,
         kg=kg,
@@ -1124,7 +945,7 @@ async def build_planning_context(
         constraint_index=constraint_index,
         input_documents=runtime_documents,
         reports=reports,
-        reports_loaded=bool(include_reports and session_id and bundle is not None),
+        reports_loaded=bool(include_reports and session_id and runtime_documents),
         report_summary_index=report_summary_index,
         external_search_port=external_search_port,
         external_observation_snapshot=external_observation_snapshot,
@@ -1142,6 +963,12 @@ async def build_planning_context(
         "data_snapshot_digest": data_snapshot.digest,
         "data_resource_catalog_digest": str(
             getattr(getattr(data_resource_catalog, "snapshot", None), "digest", "") or ""
+        ),
+        "boundary_scope_ref": str(
+            getattr(boundary_scope_artifact, "scope_ref", "") or ""
+        ),
+        "boundary_digest": str(
+            getattr(boundary_scope_artifact, "boundary_digest", "") or ""
         ),
         "network_refs": sorted(networks),
         "network_fingerprints": {
@@ -1193,7 +1020,7 @@ async def build_planning_context(
     context._record_capabilities()
     context.required_capabilities_missing = [
         cap for cap, present in context.capabilities.items()
-        if not present and cap not in {"bundle", "external_observations"}
+        if not present and cap != "external_observations"
     ]
     context._recompute_hash()
 

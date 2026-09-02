@@ -30,7 +30,7 @@ class StageCompletion(BaseModel):
 
 
 _KEY_BY_TYPE = {
-    "DataResourceCatalogSnapshot": "data_catalog",
+    "DataResourceCatalogIndexSnapshot": "data_catalog",
     "SessionDataSnapshot": "data_snapshot",
     "DataStageSnapshot": "data_stage",
     "SourceSemanticMappingSnapshot": "schema_mapping_snapshot",

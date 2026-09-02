@@ -1129,6 +1129,12 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         len(candidate_domains or []),
         len(getattr(result, "candidates", None) or []),
     )
+    if hasattr(result, "model_copy"):
+        result = result.model_copy(update={
+            "data_dependency_graph_digest": str(
+                state.get("data_dependency_graph_digest") or ""
+            ),
+        })
     logger.info(
         "[workflow:ground] llm_budget scope=%s reserved=%d completed=%d failed=%d remaining=%d",
         ground_llm_budget.get("scope_key", ""),

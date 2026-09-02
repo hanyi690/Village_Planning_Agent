@@ -929,6 +929,7 @@ class CognitionApplication:
             diagnostics=tuple(quality["diagnostics"]),
             gap_refs=tuple(item.gap_ref for item in quality["gaps"]),
             gaps=tuple(quality["gaps"]),
+            data_dependency_graph_digest=str(state.get("data_dependency_graph_digest") or ""),
         )
         stage_ref = ArtifactRef.model_validate(
             store_artifact(
@@ -1089,15 +1090,11 @@ class CognitionApplication:
                 commit_port = None
         if not callable(getattr(commit_port, "commit_proposal_batch", None)):
             from app.contracts.cognition.decision import SourceSemanticMappingSnapshot
-            from app.contracts.data.source_contracts import DataResourceCatalogSnapshot
             from app.data.resource_catalog import DataResourceCatalog
+            from app.modules.data.application import DataApplication
             from app.infrastructure.cognition_runtime.world_model_store import get_world_model_store
 
-            catalog_snapshot = load_artifact(
-                current,
-                "data_catalog",
-                DataResourceCatalogSnapshot,
-            )
+            catalog_snapshot = DataApplication.load_catalog(current)
             if catalog_snapshot is None:
                 raise ArtifactReplayError(
                     "World Model proposal commit requires a DATA catalog"

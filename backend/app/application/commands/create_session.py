@@ -186,7 +186,6 @@ class CreateSessionService:
         constraints = command.constraints
         from app.data.ingestion.source_admission import (
             assess_source_admission,
-            has_strong_planned_output_signals,
         )
 
         direct_data_assessment = assess_source_admission(
@@ -236,42 +235,14 @@ class CreateSessionService:
                     admission_status = str(
                         result.get("admission_status") or ""
                     )
-                    admission_signals = [
-                        str(value)
-                        for value in result.get("admission_signals") or []
-                    ]
                     filename = str(result.get("filename") or "上传文件")
-                    verified_assessment = assess_source_admission(
-                        input_role=input_role,
-                        source="upload",
-                        category=category,
-                        filename=filename,
-                        parsed_text=parsed_text,
-                        gis_data=(
-                            result.get("gis_data")
-                            if isinstance(result.get("gis_data"), Mapping)
-                            else None
-                        ),
-                        gis_data_type=str(result.get("gis_data_type") or ""),
-                    )
-                    verified_signals = list(verified_assessment.signals)
-                    strong_output_signal = has_strong_planned_output_signals(
-                        admission_signals + verified_signals
-                    )
-                    if (
-                        input_role == "planned_output"
-                        or verified_assessment.input_role == "planned_output"
-                        or strong_output_signal
-                    ):
+                    if input_role == "planned_output" or admission_status == "excluded":
                         raise CreateSessionValidationError(
                             f"{filename} 被识别为规划成果，不能作为规划输入。"
                         )
-                    if (
-                        verified_assessment.input_role != input_role
-                        or verified_assessment.status != admission_status
-                    ):
+                    if not result.get("admission_receipt_ref"):
                         raise CreateSessionValidationError(
-                            f"{filename} 的准入角色或状态无法复核，已拒绝输入。"
+                            f"{filename} 缺少 DATA admission receipt，已拒绝输入。"
                         )
                     if category == "village_data":
                         evidence_supplied = evidence_supplied or (

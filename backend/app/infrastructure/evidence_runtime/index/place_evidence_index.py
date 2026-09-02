@@ -48,7 +48,6 @@ _DYNAMIC_SCOPE_SOURCES = frozenset({
     "amap",
     "amap_map",
     "bundle_annotation",
-    "external_anchors",
     "tencent",
     "tencent_map",
     "tianditu",
@@ -858,9 +857,6 @@ class PlaceEvidenceIndex:
         workspace = getattr(self.context, "workspace", None)
         matches: list[tuple[str, str, str, list[str]]] = []
         if workspace is not None:
-            from app.data.model.layer_registry import get_planned_output_bundle_keys
-
-            planned_output_layers = get_planned_output_bundle_keys()
             for group_name in ("points", "lines", "polygons"):
                 group = getattr(workspace, group_name, None)
                 if group is None or not callable(getattr(group, "get", None)):
@@ -890,8 +886,6 @@ class PlaceEvidenceIndex:
                     }[group_name]
                 )
                 for layer_name in layer_names:
-                    if str(layer_name) in planned_output_layers:
-                        continue
                     for feature in list(group.get(layer_name) or []):
                         raw = getattr(feature, "_raw", {}) or {}
                         raw_id = str(

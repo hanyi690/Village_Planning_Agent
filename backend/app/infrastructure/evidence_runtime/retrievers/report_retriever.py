@@ -7,7 +7,6 @@ from app.contracts.evidence.evidence_contracts import (
     EvidenceFact,
     EvidenceSource,
 )
-from app.infrastructure.llm.tools.access.shared import resolve_bundle
 from app.infrastructure.reports.report_store import ReportStore
 from app.infrastructure.logging import get_logger
 
@@ -118,13 +117,11 @@ async def load_report_corpus(
     if not session_id or limit == 0:
         return ""
 
-    bundle = None
-    try:
-        bundle = await resolve_bundle(str(session_id))
-    except Exception as exc:  # pragma: no cover - defensive boundary
-        logger.warning("[report_retriever] report bundle resolution failed: %s", exc)
-
-    refs = list(getattr(getattr(bundle, "documents", None), "report_refs", []) or [])
+    refs = list(
+        await ReportStore.get_instance().get_session_report_manifest(
+            str(session_id), layers=(1, 2, 3)
+        )
+    )
     refs = [
         ref for ref in refs
         if isinstance(ref, dict) and int(ref.get("layer") or 0) in (1, 2, 3)
@@ -207,12 +204,11 @@ async def retrieve_from_reports(
     Returns (facts, sources) - facts are bounded planning excerpts and sources
     reference the report layer+dimension.
     """
-    bundle = await resolve_bundle(session_id)
-    refs = list(getattr(bundle.documents, "report_refs", []) or [])
-    refs = [
-        ref for ref in refs
-        if int(ref.get("layer") or 0) in (1, 2, 3)
-    ]
+    refs = list(
+        await ReportStore.get_instance().get_session_report_manifest(
+            session_id, layers=(1, 2, 3)
+        )
+    )
     report_ids = [str(ref.get("report_id") or "") for ref in refs]
     store = ReportStore.get_instance()
     report_bodies = await store.get_reports_by_ids(report_ids)

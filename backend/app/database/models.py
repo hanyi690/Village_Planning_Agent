@@ -218,6 +218,24 @@ class UploadedFile(SQLModel, table=True):
         default_factory=list,
         sa_column=Column(JSON),
     )
+    admission_attempt_ref: str = Field(default="", index=True)
+    admission_receipt_ref: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSON),
+    )
+    admission_gap_ref: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSON),
+    )
+    admission_lifecycle: List[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSON),
+    )
+    admission_artifact_refs: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSON),
+    )
+    admission_artifact_root: str = Field(default="")
     file_type: str = Field(index=True)       # "document", "geojson", "shapefile", etc.
 
     # File metadata

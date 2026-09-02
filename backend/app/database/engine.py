@@ -274,6 +274,30 @@ async def _run_migrations(engine) -> None:
                 "source_digest",
                 "ALTER TABLE uploaded_files ADD COLUMN source_digest TEXT DEFAULT ''",
             ),
+            (
+                "admission_attempt_ref",
+                "ALTER TABLE uploaded_files ADD COLUMN admission_attempt_ref TEXT DEFAULT ''",
+            ),
+            (
+                "admission_receipt_ref",
+                "ALTER TABLE uploaded_files ADD COLUMN admission_receipt_ref JSON",
+            ),
+            (
+                "admission_gap_ref",
+                "ALTER TABLE uploaded_files ADD COLUMN admission_gap_ref JSON",
+            ),
+            (
+                "admission_lifecycle",
+                "ALTER TABLE uploaded_files ADD COLUMN admission_lifecycle JSON DEFAULT '[]'",
+            ),
+            (
+                "admission_artifact_refs",
+                "ALTER TABLE uploaded_files ADD COLUMN admission_artifact_refs JSON",
+            ),
+            (
+                "admission_artifact_root",
+                "ALTER TABLE uploaded_files ADD COLUMN admission_artifact_root TEXT DEFAULT ''",
+            ),
         ],
         "planning_bundles": [
             # P0-c: CAS blob descriptor reference for the bundle blob

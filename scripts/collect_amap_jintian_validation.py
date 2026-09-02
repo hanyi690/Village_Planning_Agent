@@ -41,12 +41,12 @@ from typing import Any, Iterable, Iterator
 import requests
 from dotenv import load_dotenv
 from pyproj import Transformer
-from shapely.geometry import Point, box, shape
+from shapely.geometry import Point, box, mapping, shape
 from shapely.ops import transform as shapely_transform
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-OUTPUT_ROOT = PROJECT_ROOT / "output" / "amap_validation"
+OUTPUT_ROOT = PROJECT_ROOT / "data" / "cache" / "map_observations" / "amap"
 AMAP_V3 = "https://restapi.amap.com/v3"
 AMAP_V5 = "https://restapi.amap.com/v5"
 CITY_ADCODE = "441400"
@@ -61,7 +61,9 @@ TRANSIENT_INFO_CODES = {"10001", "10002", "10003", "10004"}
 
 sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 from app.spatial.model.coord_transform import gcj02_to_wgs84, wgs84_to_gcj02
+from app.data.boundary_scope import load_boundary_scope_artifact
 from app.data.ingestion.providers.amap.constants import POI_TYPES_PUBLIC_SERVICE
+from app.data.catalog.provider_run_lease import ProviderObservationWriter, ProviderRunLeaseStore
 
 ADMIN_SCOPE = {
     "province": "广东省",
@@ -279,12 +281,31 @@ def spatial_probe_centers(geometry: Any, cell_size_m: float = 2500.0) -> list[tu
     return list(dict.fromkeys(centers))
 
 
-def load_admin_boundary_context(expansion_m: float = 500.0) -> dict[str, Any]:
-    """Load WGS84 boundary and derive GCJ-02 request geometry/samples."""
+def load_admin_boundary_context(
+    expansion_m: float = 500.0,
+    *,
+    boundary_scope: Any | None = None,
+) -> dict[str, Any]:
+    """Load a normalized boundary scope and derive provider request views.
 
-    path = PROJECT_ROOT / "data" / "gis" / "jintian" / "current" / "boundary.geojson"
-    payload = load_json(path)
-    geometry = shape(payload["features"][0]["geometry"])
+    Production collection must pass a ``BoundaryScopeArtifact`` compiled from
+    an admitted DATA boundary. Provider code never reads a fixed local file.
+    """
+
+    if boundary_scope is not None:
+        geometry_payload = getattr(boundary_scope, "geometry", None)
+        if not isinstance(geometry_payload, dict):
+            geometry_payload = dict(boundary_scope.get("geometry") or {})
+        geometry = shape(geometry_payload)
+        source_path = f"artifact://{getattr(boundary_scope, 'scope_ref', '')}"
+        boundary_ref = str(getattr(boundary_scope, "scope_ref", "") or "")
+        boundary_digest = str(getattr(boundary_scope, "boundary_digest", "") or "")
+        query_geometry_digest = str(
+            getattr(boundary_scope, "query_geometry_digest", "") or ""
+        )
+        source_crs = str(getattr(boundary_scope, "normalized_crs", "EPSG:4326"))
+    else:
+        raise ValueError("a BoundaryScopeArtifact is required for provider collection")
     simplified = geometry.simplify(0.0002, preserve_topology=True)
     metric_geometry = shapely_transform(_WGS84_TO_METERS.transform, simplified)
     expanded_metric = metric_geometry.buffer(expansion_m)
@@ -295,10 +316,13 @@ def load_admin_boundary_context(expansion_m: float = 500.0) -> dict[str, Any]:
         boundary_vertices_wgs84.extend((float(lon), float(lat)) for lon, lat in list(part.exterior.coords)[:-1])
     sample_wgs84 = boundary_vertices_wgs84 + _boundary_samples(simplified)
     sample_wgs84 = list(dict.fromkeys(sample_wgs84))
-    return {
-        "source_path": str(path.relative_to(PROJECT_ROOT)).replace("\\", "/"),
+    context = {
+        "source_path": source_path,
+        "boundary_ref": boundary_ref,
+        "boundary_digest": boundary_digest,
+        "query_geometry_digest": query_geometry_digest,
         "geometry_type": geometry.geom_type,
-        "source_crs": "CRS84/WGS84",
+        "source_crs": source_crs,
         "request_crs": "GCJ-02",
         "check_crs": "WGS84",
         "bbox_wgs84": [min_lon, min_lat, max_lon, max_lat],
@@ -311,6 +335,20 @@ def load_admin_boundary_context(expansion_m: float = 500.0) -> dict[str, Any]:
         "boundary_geometry_wgs84": simplified,
         "expanded_geometry_wgs84": expanded_wgs84,
     }
+    if boundary_scope is not None:
+        from app.contracts.data.provider_acquisition_contracts import build_provider_acquisition_plan
+
+        context["provider_acquisition_plans"] = {
+            provider: build_provider_acquisition_plan(
+                boundary_scope,
+                provider=provider,
+                stage="01_admin_scope",
+            ).model_dump(mode="json")
+            for provider in ("amap", "tencent", "tianditu")
+        }
+    else:
+        context["provider_acquisition_plans"] = {}
+    return context
 
 
 def response_ok(data: Any) -> bool:
@@ -543,37 +581,6 @@ def jsonable_boundary_context(context: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in context.items() if not key.endswith("_geometry_wgs84")}
 
 
-def load_bundle_probe_points(kind: str, max_points: int = 240) -> list[tuple[float, float]]:
-    """Sample existing WGS84 bundle geometries for regeo evidence probes."""
-
-    if kind == "road":
-        path = PROJECT_ROOT / "data" / "gis" / "jintian" / "current" / "road.geojson"
-    else:
-        path = PROJECT_ROOT / "data" / "gis" / "jintian" / "current" / "landuse.geojson"
-    payload = load_json(path)
-    points: list[tuple[float, float]] = []
-    for feature in payload.get("features") or []:
-        properties = feature.get("properties") or {}
-        if kind == "water" and str(properties.get("DLBM", "")) != "3100":
-            continue
-        geometry = shape(feature.get("geometry"))
-        metric = shapely_transform(_WGS84_TO_METERS.transform, geometry)
-        if kind == "road" and metric.geom_type in {"LineString", "MultiLineString"}:
-            parts = list(metric.geoms) if metric.geom_type == "MultiLineString" else [metric]
-            for part in parts:
-                length = max(float(part.length), 1.0)
-                distances = [0.0, length / 2.0, length]
-                for distance in distances:
-                    point = shapely_transform(_METERS_TO_WGS84.transform, part.interpolate(distance))
-                    points.append((float(point.x), float(point.y)))
-        else:
-            point = shapely_transform(_METERS_TO_WGS84.transform, metric.representative_point())
-            points.append((float(point.x), float(point.y)))
-        if len(points) >= max_points:
-            break
-    return list(dict.fromkeys(points))[:max_points]
-
-
 def load_latest_l1() -> tuple[Path, Path, dict[str, Any], dict[str, Any]]:
     """Resolve the latest L1 ref -> descriptor -> blob chain."""
 
@@ -665,14 +672,16 @@ class StageCollector:
         min_interval: float,
         root: Path | None = None,
         max_retries: int = MAX_RETRIES,
+        boundary_context: dict[str, Any] | None = None,
     ) -> None:
         self.stage_name = stage_name
         output_root = root if root is not None else OUTPUT_ROOT
         self.stage_dir = output_root / stage_name
-        self.run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        self.run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         self.run_dir = self.stage_dir / "runs" / self.run_id
         self.cache_dir = self.stage_dir / "cache"
         self.response_dir = self.stage_dir / "responses"
+        self.boundary_context = dict(boundary_context or {})
         self.refresh = refresh
         self.min_interval = min_interval
         self.max_retries = max(1, max_retries)
@@ -684,6 +693,13 @@ class StageCollector:
         self.skipped: list[dict[str, Any]] = []
         self.response_payloads: dict[str, dict[str, Any]] = {}
         self.query_meta: dict[str, dict[str, Any]] = {}
+        self.lease_store = ProviderRunLeaseStore(output_root.parent)
+        self.lease = self.lease_store.acquire(
+            self.run_id,
+            "amap",
+            f"pid-{os.getpid()}",
+            ttl_seconds=3600,
+        )
 
     def request_key(self, url: str, params: dict[str, Any]) -> str:
         sanitized = {key: value for key, value in params.items() if key not in {"key", "sig"}}
@@ -693,6 +709,7 @@ class StageCollector:
     _request_key = request_key
 
     def request(self, operation: str, url: str, params: dict[str, Any], kind: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        self.lease_store.assert_writer(self.lease)
         sanitized = {key: value for key, value in params.items() if key not in {"key", "sig"}}
         key = self._request_key(url, sanitized)
         cache_path = self.cache_dir / f"{key}.json"
@@ -700,8 +717,9 @@ class StageCollector:
         envelope: dict[str, Any] | None = None
         cache_hit = False
 
-        if cache_path.exists() and not self.refresh:
-            pointer = load_json(cache_path)
+        cached_path = cache_path if cache_path.exists() else None
+        if cached_path is not None and not self.refresh:
+            pointer = load_json(cached_path)
             raw_path = resolve_path_ref(pointer["raw_response"])
             cached = load_json(raw_path)
             cached_payload = cached.get("response_json") or {}
@@ -875,6 +893,7 @@ class StageCollector:
         append_jsonl(self.run_dir / "normalized.jsonl", item)
 
     def finish(self, manifest: dict[str, Any]) -> Path:
+        self.lease_store.assert_writer(self.lease)
         status_counts: dict[str, int] = {}
         for event in self.events:
             status = str(event.get("status", "unknown"))
@@ -904,14 +923,43 @@ class StageCollector:
                 ],
                 "raw_response_directory": path_ref(self.response_dir),
                 "cache_directory": path_ref(self.cache_dir),
+                "boundary_ref": self.boundary_context.get("boundary_ref", ""),
+                "boundary_digest": self.boundary_context.get("boundary_digest", ""),
+                "query_geometry_digest": self.boundary_context.get("query_geometry_digest", ""),
+                "boundary_source_path": self.boundary_context.get("source_path", ""),
+                "provider_coordinate_contract": "AMap request GCJ-02; local checks WGS84",
+                "provider_acquisition_plan": self.boundary_context.get("provider_acquisition_plans", {}).get("amap", {}),
             }
         )
-        write_json(self.run_dir / "manifest.json", manifest)
+        ProviderObservationWriter(
+            self.lease_store.root,
+            "amap",
+            self.run_id,
+            stage=self.stage_name,
+        ).publish(
+            self.lease,
+            self.normalized,
+            boundary_digest=str(self.boundary_context.get("boundary_digest") or ""),
+            query_geometry_digest=str(self.boundary_context.get("query_geometry_digest") or ""),
+            crs_contract="source=AMap GCJ-02; target=EPSG:4326; transform=declared",
+            coverage={
+                "coverage_status": "COMPLETE"
+                if not manifest["failed_requests"] and not manifest["partial_queries"]
+                else "PARTIAL",
+                "request_count": len(self.events),
+            },
+            manifest_extra=manifest,
+        )
+        write_json(
+            self.run_dir / "query_plan.json",
+            self.boundary_context.get("provider_acquisition_plans", {}).get("amap", {}),
+        )
         write_json(self.run_dir / "skipped_or_excluded.json", self.skipped)
+        self.lease_store.release(self.lease)
         return self.run_dir
 
-    def paged_place_search(self, query_name: str, region_params: dict[str, Any], around: bool = False, include_legacy: bool = False) -> list[dict[str, Any]]:
-        """Try POI 2.0 first and v3 as a compatibility fallback."""
+    def paged_place_search(self, query_name: str, region_params: dict[str, Any], around: bool = False) -> list[dict[str, Any]]:
+        """Query the declared AMap place API with bounded pagination."""
 
         results: list[dict[str, Any]] = []
         if around:
@@ -923,34 +971,15 @@ class StageCollector:
                 "page_size": PAGE_SIZE,
                 "show_fields": "children,business,indoor,navi,photos",
             }
-            v3_url = f"{AMAP_V3}/place/around"
-            v3_base = {
-                **{key: value for key, value in region_params.items() if key not in {"region", "city_limit"}},
-                "city": region_params.get("region", CITY_ADCODE),
-                "citylimit": region_params.get("city_limit", "true"),
-                "offset": PAGE_SIZE,
-                "extensions": "all",
-            }
         else:
             v5_url = f"{AMAP_V5}/place/text"
             v5_base = {**region_params, "page_size": PAGE_SIZE, "show_fields": "children,business,indoor,navi,photos"}
-            v3_url = f"{AMAP_V3}/place/text"
-            v3_base = {
-                **{key: value for key, value in region_params.items() if key not in {"region", "city_limit"}},
-                "city": region_params.get("region", CITY_ADCODE),
-                "citylimit": region_params.get("city_limit", "true"),
-                "offset": PAGE_SIZE,
-                "extensions": "all",
-            }
-
-        v5_success = False
         for page in range(1, MAX_PAGES + 1):
             params = {**v5_base, "page_num": page}
             data, event = self.request("poi_v5_around" if around else "poi_v5_text", v5_url, params, "poi")
             self.add_normalized(event, "poi_v5", data, query_name)
             if not event["success"]:
                 break
-            v5_success = True
             batch = data.get("pois") or []
             results.extend(batch)
             if len(batch) < PAGE_SIZE:
@@ -961,31 +990,10 @@ class StageCollector:
             "truncated": bool(results) and len(results) >= MAX_RECORDS_PER_QUERY,
             "provider_limit": MAX_RECORDS_PER_QUERY,
         }
-        if v5_success and not include_legacy:
-            return results
+        return results
 
-        legacy_results: list[dict[str, Any]] = []
-        for page in range(1, MAX_PAGES + 1):
-            params = {**v3_base, "page": page}
-            data, event = self.request("poi_v3_around" if around else "poi_v3_text", v3_url, params, "poi")
-            self.add_normalized(event, "poi_v3", data, query_name)
-            if not event["success"]:
-                break
-            batch = data.get("pois") or []
-            legacy_results.extend(batch)
-            if len(batch) < PAGE_SIZE:
-                break
-        self.query_meta[query_name].update(
-            {
-                "legacy_record_count": len(legacy_results),
-                "record_count": len(results) + len(legacy_results),
-                "legacy_truncated": len(legacy_results) >= MAX_RECORDS_PER_QUERY,
-            }
-        )
-        return results + legacy_results
-
-    def paged_place_polygon(self, query_name: str, polygon: str, types: str, include_legacy: bool = True) -> list[dict[str, Any]]:
-        """Search one administrative polygon with v5 and optional v3 comparison."""
+    def paged_place_polygon(self, query_name: str, polygon: str, types: str) -> list[dict[str, Any]]:
+        """Search one administrative polygon with bounded v5 pagination."""
 
         results: list[dict[str, Any]] = []
         v5_params = {
@@ -997,7 +1005,6 @@ class StageCollector:
             "show_fields": "children,business,indoor,navi,photos",
             "langCode": "zh",
         }
-        v5_success = False
         for page in range(1, MAX_PAGES + 1):
             data, event = self.request(
                 "poi_v5_polygon",
@@ -1008,7 +1015,6 @@ class StageCollector:
             self.add_normalized(event, "poi_v5_polygon", data, query_name)
             if not event["success"]:
                 break
-            v5_success = True
             batch = data.get("pois") or []
             results.extend(batch)
             if len(batch) < PAGE_SIZE:
@@ -1021,38 +1027,6 @@ class StageCollector:
             "provider_limit": MAX_RECORDS_PER_QUERY,
         }
 
-        if not include_legacy and v5_success:
-            return results
-
-        v3_params = {
-            "polygon": polygon,
-            "types": types,
-            "city": CITY_ADCODE,
-            "citylimit": "true",
-            "offset": PAGE_SIZE,
-            "extensions": "all",
-            "children": "1",
-        }
-        for page in range(1, MAX_PAGES + 1):
-            data, event = self.request(
-                "poi_v3_polygon",
-                f"{AMAP_V3}/place/polygon",
-                {**v3_params, "page": page},
-                "poi",
-            )
-            self.add_normalized(event, "poi_v3_polygon", data, query_name)
-            if not event["success"]:
-                break
-            batch = data.get("pois") or []
-            results.extend(batch)
-            if len(batch) < PAGE_SIZE:
-                break
-        self.query_meta[query_name].update(
-            {
-                "record_count": len(results),
-                "truncated": len(results) >= MAX_RECORDS_PER_QUERY,
-            }
-        )
         return results
 
     def place_details(self, poi_ids: Iterable[str], query_name: str = "") -> int:
@@ -1216,11 +1190,18 @@ def run_admin(
     min_interval: float,
     expand: bool = True,
     root: Path | None = None,
+    boundary_scope: Any | None = None,
 ) -> Path:
-    collector = StageCollector("01_admin_scope", refresh, min_interval, root=root)
+    boundary_context = load_admin_boundary_context(boundary_scope=boundary_scope)
+    collector = StageCollector(
+        "01_admin_scope",
+        refresh,
+        min_interval,
+        root=root,
+        boundary_context=boundary_context,
+    )
     admin_address = "广东省梅州市平远县泗水镇金田村"
     town_address = "广东省梅州市平远县泗水镇"
-    boundary_context = load_admin_boundary_context()
     village_geo = collector.geocode(admin_address)
     town_geo = collector.geocode(town_address)
     anchor_points = locations_from(village_geo) + locations_from(town_geo)
@@ -1232,7 +1213,6 @@ def run_admin(
         collector.paged_place_search(
             query,
             {"keywords": query, "region": CITY_ADCODE, "city_limit": "true"},
-            include_legacy=expand,
         )
 
     if anchor:
@@ -1246,7 +1226,6 @@ def run_admin(
                     "sortrule": "distance",
                 },
                 around=True,
-                include_legacy=expand,
             )
         collector.regeo(anchor, "行政村地理编码中心")
         traffic_params = {"location": anchor, "radius": "3000", "extensions": "all"}
@@ -1266,7 +1245,6 @@ def run_admin(
                         query_name,
                         _polygon_string_gcj02(geometry),
                         types,
-                        include_legacy=scope_label == "project",
                     )
                     if collector.query_meta.get(query_name, {}).get("truncated"):
                         collector.query_meta[query_name]["coverage_status"] = "partial_requires_spatial_sharding"
@@ -1276,7 +1254,6 @@ def run_admin(
                                 cell_query,
                                 _polygon_string_gcj02(simplify_wgs84_meters(cell, 5.0)),
                                 types,
-                                include_legacy=False,
                             )
                             collector.query_meta[cell_query]["parent_query"] = query_name
         for radius in ("3000", "10000"):
@@ -1286,7 +1263,6 @@ def run_admin(
                     query_name,
                     around_params(anchor, int(radius), types),
                     around=True,
-                    include_legacy=False,
                 )
                 if collector.query_meta.get(query_name, {}).get("truncated"):
                     collector.query_meta[query_name]["coverage_status"] = "partial_requires_spatial_sharding"
@@ -1298,20 +1274,10 @@ def run_admin(
                             cell_query,
                             around_params(f"{wgs84_to_gcj02(lon, lat)[0]:.6f},{wgs84_to_gcj02(lon, lat)[1]:.6f}", min(int(radius), 3000), types),
                             around=True,
-                            include_legacy=False,
                         )
                         collector.query_meta[cell_query]["parent_query"] = query_name
         for index, point in enumerate(boundary_context["sample_points_gcj02"], start=1):
             collector.regeo(f"{point[0]:.6f},{point[1]:.6f}", f"行政边界采样-{index}", radius=300)
-        for kind, radius, limit in (("road", 100, 240), ("water", 300, 100)):
-            for index, (lon, lat) in enumerate(load_bundle_probe_points(kind, limit), start=1):
-                gcj_lon, gcj_lat = wgs84_to_gcj02(lon, lat)
-                collector.regeo(
-                    f"{gcj_lon:.6f},{gcj_lat:.6f}",
-                    f"bundle-{kind}-采样-{index}",
-                    radius=radius,
-                )
-
     geocoded_points = nearest_distinct_points(locations_from(village_geo) + locations_from(town_geo), 2)
     if len(geocoded_points) >= 2:
         origin = f"{geocoded_points[0][0]},{geocoded_points[0][1]}"
@@ -1363,11 +1329,8 @@ def run_admin(
     for record in preliminary:
         if record.get("operation") not in {
             "poi_v5_text",
-            "poi_v3_text",
             "poi_v5_around",
-            "poi_v3_around",
             "poi_v5_polygon",
-            "poi_v3_polygon",
         }:
             continue
         if record.get("scope_bucket") in {"project_local", "township_local", "county_local"}:
@@ -1400,11 +1363,22 @@ def run_admin(
     )
 
 
-def run_l1(refresh: bool, min_interval: float, root: Path | None = None) -> Path:
+def run_l1(
+    refresh: bool,
+    min_interval: float,
+    root: Path | None = None,
+    boundary_scope: Any | None = None,
+) -> Path:
     ref_path, blob_path, descriptor, payload = load_latest_l1()
     names, excluded = collect_l1_place_names(payload)
-    collector = StageCollector("02_l1_place_names", refresh, min_interval, root=root)
-    boundary_context = load_admin_boundary_context()
+    boundary_context = load_admin_boundary_context(boundary_scope=boundary_scope)
+    collector = StageCollector(
+        "02_l1_place_names",
+        refresh,
+        min_interval,
+        root=root,
+        boundary_context=boundary_context,
+    )
     classifier = ScopeClassifier(boundary_context["boundary_geometry_wgs84"])
     admin_address = "广东省梅州市平远县泗水镇金田村"
     admin_geo = collector.geocode(admin_address)
@@ -1443,7 +1417,7 @@ def run_l1(refresh: bool, min_interval: float, root: Path | None = None) -> Path
     preliminary = build_external_records(collector, classifier)
     detail_ids: list[str] = []
     for record in preliminary:
-        if record.get("operation") not in {"poi_v5_text", "poi_v3_text"}:
+        if record.get("operation") != "poi_v5_text":
             continue
         if record.get("scope_bucket") not in {"project_local", "township_local", "county_local"}:
             continue
@@ -1523,11 +1497,13 @@ class AmapJintianCollector:
         min_interval: float = DEFAULT_MIN_INTERVAL,
         root: Path | None = None,
         expand_admin: bool = True,
+        boundary_scope: Any | None = None,
     ) -> None:
         self.refresh = refresh
         self.min_interval = min_interval
         self.root = root
         self.expand_admin = expand_admin
+        self.boundary_scope = boundary_scope
 
     def collect(self, stage: str) -> Path:
         if stage == "01_admin_scope":
@@ -1536,9 +1512,15 @@ class AmapJintianCollector:
                 self.min_interval,
                 expand=self.expand_admin,
                 root=self.root,
+                boundary_scope=self.boundary_scope,
             )
         if stage == "02_l1_place_names":
-            return run_l1(self.refresh, self.min_interval, root=self.root)
+            return run_l1(
+                self.refresh,
+                self.min_interval,
+                root=self.root,
+                boundary_scope=self.boundary_scope,
+            )
         raise ValueError(f"unsupported AMap stage: {stage}")
 
 
@@ -1550,9 +1532,12 @@ def parse_args() -> argparse.Namespace:
         "--expand-admin",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="行政阶段执行 Polygon、空间采样、v3 对照和多种路线探测（默认开启）",
+        help="行政阶段执行 Polygon、空间采样和多种路线探测（默认开启）",
     )
     parser.add_argument("--min-interval", type=float, default=DEFAULT_MIN_INTERVAL, help="请求之间的最小秒数")
+    parser.add_argument("--boundary-artifact-root", type=Path, help="CAS root containing an admitted BoundaryScopeArtifact")
+    parser.add_argument("--boundary-run-id", help="DATA admission run id whose named boundary scope is used")
+    parser.add_argument("--boundary-branch-id", default="main")
     return parser.parse_args()
 
 
@@ -1561,11 +1546,22 @@ def main() -> int:
     args = parse_args()
     if not os.getenv("AMAP_API_KEY"):
         print("AMAP_API_KEY 未配置；将只生成失败记录，不会发出高德请求。", file=sys.stderr)
+    if bool(args.boundary_artifact_root) != bool(args.boundary_run_id):
+        raise SystemExit("--boundary-artifact-root and --boundary-run-id must be supplied together")
+    boundary_scope = (
+        load_boundary_scope_artifact(
+            str(args.boundary_artifact_root),
+            args.boundary_run_id,
+            branch_id=args.boundary_branch_id,
+        )
+        if args.boundary_artifact_root
+        else None
+    )
     paths: list[Path] = []
     if args.stage in {"admin", "all"}:
-        paths.append(run_admin(args.refresh, args.min_interval, args.expand_admin))
+        paths.append(run_admin(args.refresh, args.min_interval, args.expand_admin, boundary_scope=boundary_scope))
     if args.stage in {"l1", "all"}:
-        paths.append(run_l1(args.refresh, args.min_interval))
+        paths.append(run_l1(args.refresh, args.min_interval, boundary_scope=boundary_scope))
     for path in paths:
         print(path)
     return 0

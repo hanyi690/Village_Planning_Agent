@@ -58,6 +58,7 @@ class CognitionStageSnapshot(ContractMeta):
     diagnostics: tuple[str, ...] = ()
     gap_refs: tuple[str, ...] = ()
     gaps: tuple[CognitionGapRecord, ...] = ()
+    data_dependency_graph_digest: str = ""
 
 
 class L1WorldProjectionSnapshot(ContractMeta):

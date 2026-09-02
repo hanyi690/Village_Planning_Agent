@@ -160,6 +160,7 @@ class GroundingResult(ContractMeta):
     evidence_requirements: list[EvidenceRequirement] = Field(default_factory=list)
     grounding_requests: list[GroundingRequest] = Field(default_factory=list)
     pending_grounding_requests: list[GroundingRequest] = Field(default_factory=list)
+    data_dependency_graph_digest: str = ""
 
 __all__ = [
     "HardConstraintResult",
