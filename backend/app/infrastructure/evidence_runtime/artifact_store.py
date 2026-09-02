@@ -190,6 +190,7 @@ def _result_semantics(artifact: EvidenceRetrievalArtifact) -> str:
         "confidence_components": artifact.confidence_components,
         "evidence_authority": artifact.evidence_authority,
         "spatial_cognition": artifact.spatial_cognition,
+        "proposal_batch": artifact.proposal_batch,
     })
 
 

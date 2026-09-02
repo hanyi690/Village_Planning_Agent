@@ -18,6 +18,7 @@ from app.contracts.evidence.acquisition_contracts import (
     ProviderPageRecord,
 )
 from app.contracts.evidence.provider_attempt import ProviderAttempt
+from app.contracts.evidence.proposal_contracts import EvidenceProposalBatch
 from app.contracts.evidence.requirement_contracts import EvidenceCoverage, EvidenceRequirement
 from app.contracts.evidence.retrieval_contracts import (
     EvidenceRetrievalOutcome,
@@ -191,6 +192,7 @@ class ExplorationResult(BaseModel):
     observation_snapshot: EvidenceObservationSnapshot | None = None
     provider_attempts: tuple[ProviderAttempt, ...] = ()
     page_records: tuple[ProviderPageRecord, ...] = ()
+    proposal_batch: EvidenceProposalBatch | None = None
 
 
 __all__ = [

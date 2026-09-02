@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.contracts.cognition.proposals import AssertionProposal
 from app.contracts.evidence.provider_attempt import EvidenceAuthority, EvidenceConfidence
+
+if TYPE_CHECKING:
+    from app.contracts.cognition.proposals import AssertionProposal
 
 
 EvidenceProposalKind = Literal[
@@ -53,9 +55,13 @@ class EvidenceProposalBase(BaseModel):
 
     @model_validator(mode="after")
     def _validate_lineage(self) -> "EvidenceProposalBase":
-        if not self.candidate_refs:
+        if not self.candidate_refs and self.conclusion_kind != "absence":
             raise ValueError("Evidence proposal requires candidate_refs")
-        if not self.observation_refs and not self.claim_refs:
+        if (
+            not self.observation_refs
+            and not self.claim_refs
+            and self.conclusion_kind != "absence"
+        ):
             raise ValueError("Evidence proposal requires observation_refs or claim_refs")
         if not self.source_refs:
             raise ValueError("Evidence proposal requires source_refs")
@@ -69,8 +75,10 @@ class EvidenceProposalBase(BaseModel):
             raise ValueError("absence authorization requires an absence conclusion")
         return self
 
-    def to_assertion_proposal(self) -> AssertionProposal:
+    def to_assertion_proposal(self) -> "AssertionProposal":
         """Convert to Cognition's generic input contract without committing it."""
+
+        from app.contracts.cognition.proposals import AssertionProposal
 
         return AssertionProposal(
             proposal_ref=self.proposal_ref,

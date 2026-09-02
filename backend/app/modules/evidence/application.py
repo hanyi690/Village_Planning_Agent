@@ -1110,6 +1110,7 @@ def _result_from_retrieval_artifact(
         observation_snapshot=artifact.observation_snapshot,
         provider_attempts=artifact.provider_attempts,
         page_records=artifact.page_records,
+        proposal_batch=artifact.proposal_batch,
     )
 
 
@@ -1221,6 +1222,18 @@ def _commit_retrieval_artifact(
         ),
         legal_authority="none",
     )
+    from app.modules.evidence.proposals import build_evidence_proposals
+
+    proposal_batch = build_evidence_proposals(
+        normalized,
+        round_id=f"evidence:{authority.workflow_run_id}:{fingerprint[:16]}",
+        wm_epoch=(
+            authority.world_model_snapshot_ref
+            or authority.world_model_snapshot_digest
+        ),
+        parent_world_model_digest=authority.world_model_snapshot_digest,
+        evidence_artifact_ref=f"evidence-retrieval:{fingerprint}",
+    )
     artifact = EvidenceRetrievalArtifact(
         context_version=authority.context_version,
         context_fingerprint=authority.context_fingerprint,
@@ -1245,6 +1258,7 @@ def _commit_retrieval_artifact(
         provider_attempts=provider_attempts,
         confidence_components=evidence_confidence,
         evidence_authority=evidence_authority,
+        proposal_batch=proposal_batch,
     )
     persisted, receipt = store.write_once(artifact)
     return _result_from_retrieval_artifact(persisted, receipt=receipt)

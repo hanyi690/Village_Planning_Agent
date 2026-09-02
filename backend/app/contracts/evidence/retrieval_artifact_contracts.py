@@ -19,6 +19,7 @@ from app.contracts.evidence.acquisition_contracts import (
     ProviderPageRecord,
 )
 from app.contracts.evidence.requirement_contracts import EvidenceCoverage
+from app.contracts.evidence.proposal_contracts import EvidenceProposalBatch
 from app.contracts.evidence.retrieval_contracts import (
     EvidenceRetrievalAuthority,
     EvidenceRetrievalBootstrapRefs,
@@ -57,6 +58,7 @@ class EvidenceRetrievalArtifact(ContractMeta):
     evidence_authority: EvidenceAuthority = Field(
         default_factory=EvidenceAuthority
     )
+    proposal_batch: EvidenceProposalBatch | None = None
 
     @field_validator("fingerprint")
     @classmethod
