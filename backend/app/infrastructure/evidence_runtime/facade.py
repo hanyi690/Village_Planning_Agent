@@ -206,9 +206,7 @@ def _context_evidence_digest(session_id: str) -> str:
             getattr(context, "source_semantic_decisions", {}) or {}
         ),
         "location_mentions": _typed_dump(
-            getattr(context, "location_mentions", None)
-            or getattr(context, "location_facts", [])
-            or []
+            getattr(context, "location_mentions", None) or []
         ),
         "l1_fact_records": _typed_dump(getattr(context, "l1_fact_records", []) or []),
         "external_observation_digest": str(

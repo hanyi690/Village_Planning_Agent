@@ -111,8 +111,8 @@ def _human_artifact_detail(key: str, payload: Any) -> Dict[str, Any]:
 
     detail: Dict[str, Any] = {}
     if key == "l1_snapshot":
-        for name in ("facts", "facts_by_dimension", "location_facts", "gis_evidence", "kg_evidence", "evidence_gaps"):
-            take(name, 16 if name in {"facts", "location_facts"} else 12)
+        for name in ("facts", "facts_by_dimension", "location_mentions", "gis_evidence", "kg_evidence", "evidence_gaps"):
+            take(name, 16 if name in {"facts", "location_mentions"} else 12)
     elif key == "l2_strategy":
         for name in ("development_goals", "implementation_priorities", "strategy_issues", "strategy_conflicts", "evidence_gaps"):
             take(name, 12)
@@ -210,7 +210,7 @@ def render_stage_report_markdown(
         if r.get("stage") in {"KG_PREBUILD", "L1", "L2"}
         and ((r.get("outputs") or {}).get("facts_produced")
              or (r.get("outputs") or {}).get("kg_evidence_consumed")
-             or (r.get("outputs") or {}).get("location_facts")
+             or (r.get("outputs") or {}).get("location_mentions")
              or (r.get("outputs") or {}).get("artifact_refs", {}).get("l1_snapshot")
              or (r.get("diagnostics") or {}).get("fact_producer")
              or (r.get("diagnostics") or {}).get("fact_consumer"))
@@ -218,7 +218,7 @@ def render_stage_report_markdown(
     if fact_records:
         lines.append("## Fact lineage（KG → L1 → L2）")
         lines.append("")
-        lines.append("以下内容来自实际 session 的 KG、L1Snapshot 和 L2 输入审计；不是测试占位数据。")
+        lines.append("以下内容来自实际 session 的 KG、L1ObservationSnapshot 和 L2 输入审计；不是测试占位数据。")
         lines.append("")
         for r in fact_records:
             outputs = r.get("outputs") or {}
@@ -232,8 +232,8 @@ def render_stage_report_markdown(
                 lines.append(f"  - facts_produced: {_fmt(outputs['facts_produced'])}")
             if outputs.get("kg_evidence_consumed"):
                 lines.append(f"  - kg_evidence_consumed: {_fmt(outputs['kg_evidence_consumed'])}")
-            if outputs.get("location_facts"):
-                lines.append(f"  - location_facts: {_fmt(outputs['location_facts'])}")
+            if outputs.get("location_mentions"):
+                lines.append(f"  - location_mentions: {_fmt(outputs['location_mentions'])}")
             if diagnostics.get("l1_fact_count") is not None:
                 lines.append(f"  - l1_snapshot_facts_consumed: {diagnostics['l1_fact_count']}")
         lines.append("")

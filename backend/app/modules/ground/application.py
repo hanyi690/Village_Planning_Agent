@@ -2337,7 +2337,7 @@ class GroundApplication:
         typed gap and may never be converted into a fallback location.
         """
 
-        from app.contracts.l1.l1_contracts import L1Snapshot
+        from app.contracts.l1.l1_contracts import L1ObservationSnapshot
         from app.core.settings import COGNITION_WORLD_MODEL_MODE
         from app.infrastructure.artifacts.runtime import load_artifact
         from app.infrastructure.context_runtime.manager import (
@@ -2362,7 +2362,7 @@ class GroundApplication:
 
         provisional_l1_gate = load_root_gate(dict(state), "l1")
         context = get_cached_context(session_id)
-        snapshot = load_artifact(dict(state), "l1_snapshot", L1Snapshot)
+        snapshot = load_artifact(dict(state), "l1_snapshot", L1ObservationSnapshot)
         if snapshot is None:
             raise RuntimeError(
                 "L1_LOCATION_GROUNDING_INPUT_MISSING: l1_snapshot is required"
@@ -2511,7 +2511,6 @@ class GroundApplication:
 
         mentions, observations = build_l1_identity_work_items(mentions)
         context.location_mentions = mentions
-        context.location_facts = mentions
         context.evidence_observations = observations
         evidence_packets, evidence_diagnostics = _load_l1_evidence_packets(
             state,

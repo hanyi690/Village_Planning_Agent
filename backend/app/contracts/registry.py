@@ -44,14 +44,6 @@ CONTRACT_REGISTRY: dict[str, ContractRegistration] = {
         version="1",
         description="Validated L1 observation projection for one dimension.",
     ),
-    "l1.report": ContractRegistration(
-        key="l1.report",
-        role="llm_output",
-        owner="assessment",
-        model_path="app.modules.l1.observation_draft:L1ReportOutput",
-        version="1",
-        description="L1 human-facing report synthesis from validated observations.",
-    ),
     "l2.decision": ContractRegistration(
         key="l2.decision",
         role="llm_output",

@@ -1117,7 +1117,7 @@ class WorldModelKGStore:
                     (PLN.sourceWorldModelSnapshotRef, parent_ref),
                     (PLN.sourceWorldModelSnapshotDigest, parent_digest),
                     (
-                        PLN.sourceL1SnapshotArtifactDigest,
+                        PLN.sourceL1ObservationSnapshotArtifactDigest,
                         typed.l1_snapshot_artifact_ref.digest,
                     ),
                     (

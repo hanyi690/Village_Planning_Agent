@@ -22,7 +22,7 @@ from app.modules.l3.assembler import assemble_planning_program
 from app.infrastructure.artifacts import ContentAddressedArtifactRepository
 from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
 from app.contracts.evidence.evidence_contracts import EvidenceSource
-from app.contracts.l1.l1_contracts import EvidenceGap, L1Snapshot
+from app.contracts.l1.l1_contracts import EvidenceGap, L1ObservationSnapshot
 from app.contracts.l2.l2_contracts import L2Strategy
 from app.contracts.l3.l3_contracts import (
     ClaimDisposition,
@@ -506,14 +506,14 @@ def enrich_program_from_upstream(
     )
 
     refs = artifact_refs or {}
-    snapshot: L1Snapshot | None = None
+    snapshot: L1ObservationSnapshot | None = None
     try:
         l1_ref_data = refs.get("l1_snapshot")
         if not isinstance(l1_ref_data, dict):
             raise ValueError("missing canonical l1_snapshot ref")
         l1_descriptor = ArtifactDescriptor.model_validate(l1_ref_data)
         l1_payload = repository.get_json(l1_descriptor)
-        snapshot = L1Snapshot(**l1_payload)
+        snapshot = L1ObservationSnapshot(**l1_payload)
     except Exception as e:
         logger.info("[l3_aggregate] L1 snapshot not found, skipping enrichment: %s", e)
 
@@ -824,7 +824,7 @@ async def l3_aggregate(
                 "gate_route": gate_decision.feedback_route or ("PASS" if gate_decision.passed else "FAIL"),
             },
             artifacts=[{"key": "planning_program", **ref.model_dump(mode="json")}],
-            diagnostics={"fact_consumer": "L1Snapshot + L2Strategy + L3 intent artifacts"},
+            diagnostics={"fact_consumer": "L1ObservationSnapshot + L2Strategy + L3 intent artifacts"},
         )
     except Exception as exc:
         logger.debug("[l3_aggregate] step report failed: %s", exc)

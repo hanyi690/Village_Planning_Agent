@@ -18,11 +18,11 @@ class L1AggregatePort(Protocol):
         """Return a state patch containing typed L1 artifact references."""
 
 
-class L1SnapshotLoaderPort(Protocol):
+class L1ObservationSnapshotLoaderPort(Protocol):
     """Reload an L1 artifact by its workflow reference."""
 
     def load(self, state: Mapping[str, Any]) -> Any:
-        """Return a validated ``L1Snapshot`` or ``None``."""
+        """Return a validated ``L1ObservationSnapshot`` or ``None``."""
 
 
-__all__ = ["L1AggregatePort", "L1SnapshotLoaderPort"]
+__all__ = ["L1AggregatePort", "L1ObservationSnapshotLoaderPort"]

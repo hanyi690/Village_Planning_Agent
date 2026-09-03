@@ -61,6 +61,7 @@ def open_cognition_round(
     request id or a snapshot label.
     """
 
+    requirements = tuple(requirements)
     parent_ref, parent_digest, wm_epoch = _parent_identity(source)
     run_id = workflow_run_id or _value(source, "run_id") or _value(source, "session_id")
     branch = branch_id or _value(source, "branch_id") or "main"
@@ -69,6 +70,12 @@ def open_cognition_round(
     if round_number < 0 or round_number >= max_rounds:
         raise ValueError("round_number must be below max_rounds")
     requirement_digest = requirement_set_digest(requirements)
+    requirement_refs = tuple(
+        str(getattr(item, "requirement_id", "") or "").strip()
+        for item in requirements
+    )
+    if not requirement_refs or any(not value for value in requirement_refs):
+        raise ValueError("CognitionRound requires stable requirement IDs")
     round_key = "|".join(
         (
             run_id,
@@ -88,6 +95,7 @@ def open_cognition_round(
         parent_world_model_snapshot_ref=parent_ref,
         parent_world_model_snapshot_digest=parent_digest,
         requirement_set_digest=requirement_digest,
+        requirement_refs=requirement_refs,
         max_rounds=max_rounds,
         previous_proposal_fingerprint=previous_proposal_fingerprint,
     )

@@ -15,7 +15,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.contracts.artifacts.ref import ArtifactRef
-from app.contracts.cognition_round import CognitionRound, requirement_set_digest
+from app.contracts.cognition_round import CognitionRound
 from app.contracts.evidence.stage_contracts import (
     EvidenceExternalObservationSnapshot,
     EvidenceGapLedger,
@@ -2134,9 +2134,13 @@ class EvidenceApplication:
             raise ArtifactReplayError(
                 "Evidence retrieval requires an explicit CognitionRound"
             )
-        if requirement_set_digest(requirements) != context.cognition_round.requirement_set_digest:
+        round_requirement_refs = set(context.cognition_round.requirement_refs)
+        requested_requirement_refs = {
+            item.requirement_id for item in requirements
+        }
+        if not requested_requirement_refs.issubset(round_requirement_refs):
             raise ArtifactReplayError(
-                "Evidence requirements do not match CognitionRound requirement_set_digest"
+                "Evidence requirements are outside CognitionRound affected requirement set"
             )
         from app.infrastructure.evidence_runtime.gap_scheduler import schedule_requirements
 

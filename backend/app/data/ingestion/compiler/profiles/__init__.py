@@ -1,12 +1,3 @@
-"""L1 report projection profile.
+"""No report-to-semantic profiles remain in the current DATA/Evidence/L1 path."""
 
-L2 and L3 workers persist typed objects directly; neither stage has a prose
-semantic compiler.
-"""
-from __future__ import annotations
-
-from .l1_observation import compile_l1_observation
-
-__all__ = [
-    "compile_l1_observation",
-]
+__all__: list[str] = []

@@ -32,6 +32,10 @@ from app.contracts.l1.l1_contracts import (
     L1InputContext,
     LocationMentionDraft,
 )
+from app.contracts.l1.validation_contracts import (
+    L1QuarantineRecord,
+    SourceSpanValidationReport,
+)
 from app.modules.l1.spatial_admission import (
     evaluate_location_name,
     evaluate_spatial_entity,
@@ -1189,80 +1193,6 @@ def l1_observation_output_model_for_dimension(
     )
 
 
-def observation_to_compiler_payload(raw: Any) -> dict[str, Any]:
-    """Project one typed fact into the compiler's stable semantic view."""
-
-    from pydantic import TypeAdapter
-
-    adapter = TypeAdapter(L1PlanningFactDraft)
-    observation = adapter.validate_python(
-        raw.model_dump(mode="json") if hasattr(raw, "model_dump") else raw
-    )
-    payload = observation.model_dump(mode="json")
-    if isinstance(observation, L1SpatialEntityFact):
-        payload.update({
-            "entity_type": observation.entity_type,
-            "name": observation.name,
-            "target_name": observation.target_name or observation.name,
-            "location": "、".join(observation.locator.place_names),
-            "relation": observation.locator.relation,
-            "scale": observation.scale,
-            "source_feature_ids": observation.locator.source_feature_ids,
-        })
-    elif isinstance(observation, L1SpatialRelationFact):
-        payload.update({
-            "entity_type": "",
-            "name": observation.subject_ref,
-            "target_name": observation.target_name or observation.subject_ref,
-            "location": observation.object_ref,
-            "relation": observation.predicate,
-        })
-    elif isinstance(observation, L1ScopedMetricFact):
-        payload.update({
-            "name": observation.metric,
-            "target_name": observation.target_name or observation.metric,
-            "location": "",
-            "relation": "",
-            "scope": observation.scope,
-        })
-    elif isinstance(observation, L1DemandFact):
-        payload.update({
-            "name": observation.demand_type,
-            "target_name": observation.target_name,
-            "location": "、".join(observation.locator.place_names),
-            "relation": observation.locator.relation,
-            "scope": observation.scope,
-            "source_feature_ids": observation.locator.source_feature_ids,
-        })
-    elif isinstance(observation, L1ConstraintFact):
-        payload.update({
-            "name": observation.constraint_type,
-            "target_name": observation.target_name or observation.constraint_type,
-            "location": "、".join(observation.locator.place_names),
-            "relation": observation.locator.relation,
-            "scope": observation.applies_to_scope,
-            "source_feature_ids": observation.locator.source_feature_ids,
-        })
-    elif isinstance(observation, L1RiskOpportunityFact):
-        payload.update({
-            "name": observation.subject,
-            "target_name": observation.target_name or observation.subject,
-            "location": "、".join(observation.locator.place_names),
-            "relation": observation.locator.relation,
-            "scope": observation.scope,
-            "source_feature_ids": observation.locator.source_feature_ids,
-        })
-    elif isinstance(observation, L1DocumentObservationFact):
-        payload.update({
-            "name": observation.subject,
-            "target_name": observation.target_name or observation.subject,
-            "location": "",
-            "relation": "",
-            "scope": observation.scope,
-        })
-    return payload
-
-
 class L1ObservationPassOutput(BaseModel):
     """L1 semantic extraction pass without a human report projection."""
 
@@ -1375,12 +1305,6 @@ class QuarantinedObservation(BaseModel):
     raw_payload: dict[str, Any] | list[Any] | str | int | float | bool | None = None
 
 
-class L1ReportOutput(BaseModel):
-    """L1 human report synthesized from validated observations and evidence."""
-
-    report_body: str = Field(min_length=1)
-
-
 class L1SemanticOutput(BaseModel):
     """Canonical semantic result of one L1 dimension run.
 
@@ -1396,6 +1320,10 @@ class L1SemanticOutput(BaseModel):
     diagnostics: list[str] = Field(default_factory=list)
     accepted_count: int = Field(default=0, ge=0)
     rejected_count: int = Field(default=0, ge=0)
+    source_span_validation_reports: list[SourceSpanValidationReport] = Field(
+        default_factory=list
+    )
+    quarantine_records: list[L1QuarantineRecord] = Field(default_factory=list)
     status: Literal["running", "complete", "diagnostic"] = "complete"
     output_digest: str = ""
 
@@ -1530,11 +1458,9 @@ __all__ = [
     "l1_observation_output_model_for_dimension",
     "l1_observation_provider_model_for_dimension",
     "normalize_l1_observation_provider_output",
-    "observation_to_compiler_payload",
     "L1ObservationPassOutput",
     "L1ObservationProviderOutput",
     "QuarantinedObservation",
-    "L1ReportOutput",
     "L1SemanticOutput",
     "L1DisplayProjection",
     "L1DimensionOutput",

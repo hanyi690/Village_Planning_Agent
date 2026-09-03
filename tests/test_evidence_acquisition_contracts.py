@@ -363,6 +363,7 @@ def test_retrieval_cas_uses_business_digests_not_physical_snapshot_handles():
             parent_world_model_snapshot_ref="S0",
             parent_world_model_snapshot_digest="C0",
             requirement_set_digest="requirements-1",
+            requirement_refs=("requirement-1",),
         ),
     )
     request = _request()

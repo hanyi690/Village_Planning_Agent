@@ -177,7 +177,7 @@ def test_identity_binding_commit_is_atomic_bounded_and_idempotent(tmp_path):
         list(store.g.subjects(RDF.type, GEO.Geometry))
     )
 
-    l1_ref = _artifact_ref({}, schema_id="L1Snapshot", label="l1")
+    l1_ref = _artifact_ref({}, schema_id="L1ObservationSnapshot", label="l1")
     base_ref = _artifact_ref(
         base_snapshot,
         schema_id="SessionWorldModelSnapshot",

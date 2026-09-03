@@ -13,7 +13,7 @@ Protocol。`contracts/` 是底层的“共享语言”，不依赖 API、UI 或 
 | 目录 | 内容 |
 |---|---|
 | `artifacts/` | `ArtifactDescriptor`、`ArtifactRef`、`ContractMeta`、`ClassificationRef`/`ClassificationDecision`、`DeliveryManifest`、`DeferralLedger`、`FinalManifest`、`ValidationReport`、`ValidationCertificate`、`ExecutionStaging`、`Provenance` 等 artifact 载荷契约 |
-| `l1/`、`l2/`、`l3/` | L1Snapshot、L2 strategy/planning semantics、L3 claim 与 PlanningProgram 等阶段契约 |
+| `l1/`、`l2/`、`l3/` | L1ObservationSnapshot、L2 strategy/planning semantics、L3 claim 与 PlanningProgram 等阶段契约 |
 | `target_projection/` | PlanningProgram 到 GroundingRequest 的目标、意图、关系、解析和任务图契约 |
 | `ground/` | 空间引用、候选、约束、关系参数、GroundingResult 与 GroundedPlanningProblem 契约 |
 | `select/` | ScenarioSet、solver、readiness、approval 及全局分配契约 |

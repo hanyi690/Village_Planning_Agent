@@ -76,6 +76,7 @@ def _round(requirements: tuple[EvidenceRequirement, ...], *, round_id: str = "ro
         parent_world_model_snapshot_ref="world-model://session-1/7/wm-7",
         parent_world_model_snapshot_digest="wm-7",
         requirement_set_digest=requirement_set_digest(requirements),
+        requirement_refs=tuple(item.requirement_id for item in requirements),
     )
 
 

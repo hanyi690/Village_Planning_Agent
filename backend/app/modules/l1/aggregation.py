@@ -1,15 +1,13 @@
-"""L1 aggregate node - merge normalized per-dimension snapshots.
+"""L1 aggregate node - merge normalized per-dimension observations.
 
-The L1 worker boundary is report body + structured observations. The L1
-profile normalizes one dimension directly into a partial ``L1Snapshot``; this
-node only merges, deduplicates, checks conflicts, persists provenance, and
-runs the gate/review path.
+Each dimension is projected directly from typed observations into a partial
+``L1ObservationSnapshot``. This node merges, deduplicates, checks conflicts,
+persists provenance, and runs the gate/review path.
 """
 from __future__ import annotations
 
 import asyncio
 from decimal import Decimal, InvalidOperation
-import json
 from typing import Any
 
 from app.core.common.context_guard import require_frozen_context
@@ -24,14 +22,19 @@ from app.contracts.evidence.evidence_contracts import (
 from app.contracts.l1.l1_contracts import (
     EvidenceGap,
     L1Fact,
-    L1Snapshot,
+    L1ConflictGroup,
+    L1ObservationSnapshot,
 )
-from app.contracts.target_projection.parsing_contracts import CompilationProfile
+from app.contracts.target_projection.parse_result_contracts import ParseDiagnostic
 from app.contracts.artifacts.provenance import Provenance
 from app.infrastructure.artifacts.fingerprint import semantic_checksum
 from app.infrastructure.reports.review_package import write_review_package
 from app.infrastructure.logging import get_logger
 from app.modules.evidence.requirements import requirements_from_l1
+from app.modules.l1.facts import (
+    planning_observation_to_l1_fact,
+    planning_observation_to_location_mentions,
+)
 
 from .gate import evaluate_l1_gate
 from .review import build_l1_review_package
@@ -74,12 +77,6 @@ def _dedup_location_mentions(mentions: list[Any]) -> list[Any]:
         seen.add(key)
         result.append(fact)
     return result
-
-
-def _dedup_location_facts(facts: list[Any]) -> list[Any]:
-    """Compatibility wrapper for the retired location-fact helper name."""
-
-    return _dedup_location_mentions(facts)
 
 
 def _dedup_fact_records(records: list[L1Fact]) -> list[L1Fact]:
@@ -191,9 +188,9 @@ def _typed_numeric_value(value: object) -> Decimal | None:
 
 
 def merge_l1_snapshots(
-    snapshots: list[L1Snapshot],
+    snapshots: list[L1ObservationSnapshot],
     run_id: str,
-) -> L1Snapshot:
+) -> L1ObservationSnapshot:
     facts: list[str] = []
     fact_records: list[L1Fact] = []
     constraints: list[str] = []
@@ -209,7 +206,9 @@ def merge_l1_snapshots(
     facts_by_dimension: dict[str, list[str]] = {}
     spatial_facts_by_dimension: dict[str, list[str]] = {}
     diagnostics_by_dimension: dict[str, list[Any]] = {}
-    traces_by_dimension: dict[str, Any] = {}
+    source_span_validation_reports = []
+    quarantine_records = []
+    conflict_groups = []
 
     for partial in snapshots:
         facts.extend(partial.facts)
@@ -228,13 +227,15 @@ def merge_l1_snapshots(
             spatial_facts_by_dimension.setdefault(dimension, []).extend(values)
         for dimension, values in partial.diagnostics_by_dimension.items():
             diagnostics_by_dimension.setdefault(dimension, []).extend(values)
-        traces_by_dimension.update(partial.traces_by_dimension)
         dimension_provenance.extend(partial.dimension_provenance)
+        source_span_validation_reports.extend(partial.source_span_validation_reports)
+        quarantine_records.extend(partial.quarantine_records)
+        conflict_groups.extend(partial.conflict_groups)
         if not partial.dimension_provenance and partial.provenance is not None:
             dimension_provenance.append(partial.provenance)
         source_refs.extend(source.reference for source in partial.sources)
 
-    snapshot = L1Snapshot(
+    snapshot = L1ObservationSnapshot(
         context_version="",
         artifact_id="",
         fact_records=_dedup_fact_records(fact_records),
@@ -267,7 +268,15 @@ def merge_l1_snapshots(
             for dimension, values in spatial_facts_by_dimension.items()
         },
         diagnostics_by_dimension=diagnostics_by_dimension,
-        traces_by_dimension=traces_by_dimension,
+        source_span_validation_reports=list({
+            item.validation_ref: item for item in source_span_validation_reports
+        }.values()),
+        quarantine_records=list({
+            item.quarantine_ref: item for item in quarantine_records
+        }.values()),
+        conflict_groups=list({
+            item.conflict_ref: item for item in conflict_groups
+        }.values()),
     )
     comparable: dict[tuple[str, str, str, str, str], list[L1Fact]] = {}
     for fact in snapshot.fact_records:
@@ -290,6 +299,25 @@ def merge_l1_snapshots(
         typed_values.discard(None)
         if len(typed_values) > 1:
             dimension, scope, semantic_type, unit, basis = key
+            conflict_ref = semantic_checksum({
+                "dimension": dimension,
+                "scope": scope,
+                "identity": semantic_type,
+                "unit": unit,
+                "counting_basis": basis,
+                "fact_refs": sorted(fact.fact_id for fact in variants),
+            })
+            snapshot.conflict_groups.append(L1ConflictGroup(
+                conflict_ref=f"l1-conflict:{conflict_ref[:24]}",
+                fact_refs=tuple(sorted(fact.fact_id for fact in variants)),
+                dimension=dimension,
+                subject_scope=scope,
+                comparable_identity=semantic_type,
+                unit=unit,
+                counting_basis=basis,
+                conflict_kind="value_mismatch",
+                reason="comparable typed observations contain different numeric values",
+            ))
             snapshot.issues.append(
                 StageIssue(
                     stage="l1",
@@ -326,7 +354,7 @@ async def l1_aggregate(
         int(state.get("l1_evidence_recovery_generation") or 0),
         int(retry_counts.get("l1_explore") or 0),
     )
-    previous_snapshot: L1Snapshot | None = None
+    previous_snapshot: L1ObservationSnapshot | None = None
     if recovery_generation > 0 and dict(
         state.get("artifact_refs") or {}
     ).get("l1_snapshot"):
@@ -336,7 +364,7 @@ async def l1_aggregate(
             candidate = load_artifact(
                 state,
                 "l1_snapshot",
-                L1Snapshot,
+                L1ObservationSnapshot,
                 base_dir=base_dir,
             )
             if (
@@ -352,45 +380,151 @@ async def l1_aggregate(
                 exc,
             )
 
-    from app.data.ingestion.compiler.core import compile_dimension_report
     from app.infrastructure.artifacts.dimension_runtime import (
         load_layer_dimension_products,
     )
     from app.modules.l1.observation_draft import L1DimensionOutput
 
-    partial_snapshots: list[L1Snapshot] = []
+    partial_snapshots: list[L1ObservationSnapshot] = []
     dimension_products, dimension_errors = load_layer_dimension_products(
         state,
         layer=1,
         model_type=L1DimensionOutput,
     )
-    raw_reports = dimension_products
     for dim_key, output in dimension_products.items():
         artifact_key = f"l1_dimension__{dim_key}"
         raw_ref = dict(state.get("artifact_refs") or {}).get(artifact_key)
-        report_id = (
+        dimension_ref = (
             ArtifactDescriptor.model_validate(raw_ref).digest
             if raw_ref
             else artifact_key
         )
-        try:
-            partial = compile_dimension_report(
-                CompilationProfile.L1_OBSERVATION,
+        observations = list(output.semantic.observations)
+        source_snapshot_ref = (
+            output.semantic.context.source_digest
+            or output.semantic.context.source_index_ref
+            or dimension_ref
+        )
+        fact_records = [
+            fact
+            for observation in observations
+            if (fact := planning_observation_to_l1_fact(
+                observation,
                 dimension_key=dim_key,
-                content=output.display.report_body,
-                instruction=json.dumps(
-                    output.semantic.model_dump(mode="json"),
-                    ensure_ascii=False,
-                ),
-                summary="",
-                report_id=report_id,
-                run_id=run_id,
+                source_snapshot_ref=source_snapshot_ref,
+            )) is not None
+        ]
+        location_mentions = [
+            mention
+            for observation in observations
+            for mention in planning_observation_to_location_mentions(
+                observation,
+                dimension_key=dim_key,
+                source_report_ref=dimension_ref,
             )
-        except Exception as exc:
-            dimension_errors[dim_key] = f"{type(exc).__name__}: {exc}"
-            continue
-        if isinstance(partial, L1Snapshot):
-            partial_snapshots.append(partial)
+        ]
+        statements = [fact.statement for fact in fact_records]
+        typed_constraints = [
+            fact.statement
+            for observation in observations
+            if str(getattr(observation, "fact_type", "")) == "constraint"
+            and (fact := planning_observation_to_l1_fact(
+                observation,
+                dimension_key=dim_key,
+                source_snapshot_ref=source_snapshot_ref,
+            )) is not None
+        ]
+        typed_opportunities = [
+            fact.statement
+            for observation in observations
+            if str(getattr(observation, "fact_type", "")) == "opportunity"
+            and (fact := planning_observation_to_l1_fact(
+                observation,
+                dimension_key=dim_key,
+                source_snapshot_ref=source_snapshot_ref,
+            )) is not None
+        ]
+        source_refs = [
+            ref
+            for observation in observations
+            for ref in (getattr(observation, "source_refs", ()) or ())
+            if str(ref).strip()
+        ]
+        if not source_refs and source_snapshot_ref:
+            source_refs.append(source_snapshot_ref)
+        diagnostics = list(output.semantic.diagnostics)
+        issues = [
+            StageIssue(
+                stage="l1",
+                severity="error",
+                code=(
+                    "spatial_semantic_admission_failed"
+                    if "spatial" in diagnostic
+                    else (
+                        "required_fact_type_missing"
+                        if diagnostic.startswith("l1_required_fact_type_missing")
+                        else (
+                            "dimension_product_incomplete"
+                            if diagnostic.startswith("l1_observe_page_failed")
+                            else "l1_observation_diagnostic"
+                        )
+                    )
+                ),
+                message=diagnostic,
+                detail=f"dimension={dim_key}",
+            )
+            for diagnostic in diagnostics
+            if any(
+                token in diagnostic
+                for token in (
+                    "spatial_semantic_admission_failed",
+                    "l1_spatial_",
+                    "l1_required_fact_type_missing",
+                    "l1_observe_page_failed",
+                )
+            )
+        ]
+        partial_snapshots.append(L1ObservationSnapshot(
+            artifact_id=dimension_ref,
+            fact_records=fact_records,
+            facts=statements,
+            facts_by_dimension={dim_key: statements},
+            location_mentions=location_mentions,
+            constraints=typed_constraints,
+            opportunities=typed_opportunities,
+            issues=issues,
+            sources=[
+                EvidenceSource(
+                    source_type="report",
+                    reference=str(ref),
+                    snapshot_ref=source_snapshot_ref,
+                    evidence_role="l1_observation",
+                    authority="advisory",
+                )
+                for ref in _dedup(source_refs)
+            ],
+            diagnostics_by_dimension={
+                dim_key: [
+                    ParseDiagnostic(
+                        diagnostic_id=f"l1:{dim_key}:{index}",
+                        severity="error" if issue.severity == "error" else "warning",
+                        code=issue.code,
+                        message=issue.message,
+                    )
+                    for index, issue in enumerate(issues)
+                ]
+            },
+            dimension_provenance=[Provenance(
+                source="l1_observe",
+                run_id=run_id,
+                module="l1_observe",
+                trace=[f"dimension:{dim_key}", f"artifact:{dimension_ref}"],
+            )],
+            source_span_validation_reports=list(
+                output.semantic.source_span_validation_reports
+            ),
+            quarantine_records=list(output.semantic.quarantine_records),
+        ))
 
     snapshot = merge_l1_snapshots(partial_snapshots, run_id=run_id)
     for dim_key, detail in sorted(dimension_errors.items()):
@@ -570,10 +704,10 @@ async def l1_aggregate(
     # Step reports are audit/display records, not semantic inputs. Dimension
     # scope is preserved by the typed partial snapshots above; current KG/GIS
     # evidence is promoted through the unified Evidence Runtime below.
-    # Promote the canonical session-KG evidence into the L1Snapshot.  The
-    # dimension compiler may legitimately produce no markdown facts when a
-    # remote model returns prose without headings; that must not erase the
-    # real GIS/KG facts that L1 observed and that L2 is required to consume.
+    # Promote canonical session-KG evidence into the observation snapshot. The
+    # A dimension may legitimately produce no typed observations; that must
+    # remain an explicit gap and must not erase independently acquired
+    # DATA/KG evidence promoted below.
     cached_context = None
     kg_fact_count = 0
     kg_facts: list[str] = []
@@ -614,16 +748,20 @@ async def l1_aggregate(
         })
         semaphore = asyncio.Semaphore(4)
         from app.workflow.cognition_context import open_cognition_round
+        round_contract = (
+            open_cognition_round(
+                state,
+                tuple(requirements),
+                workflow_run_id=f"{session_id}:l1_snapshot",
+                branch_id=str(state.get("branch_id") or "main"),
+                round_number=0,
+            )
+            if requirements
+            else None
+        )
 
         async def retrieve_one(requirement: Any) -> Any:
             async with semaphore:
-                round_contract = open_cognition_round(
-                    state,
-                    (requirement,),
-                    workflow_run_id=f"{session_id}:l1:{requirement.requirement_id}",
-                    branch_id=str(state.get("branch_id") or "main"),
-                    round_number=0,
-                )
                 return await EvidenceApplication().retrieve(
                     (requirement,),
                     evidence_context.model_copy(update={
@@ -1059,7 +1197,7 @@ async def l1_aggregate(
         kg_facts = _dedup(kg_facts)
         kg_source_refs = _dedup(kg_source_refs)
         kg_fact_count = len(kg_facts)
-    except Exception as exc:  # preserve compiler output, but never swallow the gap
+    except Exception as exc:  # preserve the observation snapshot, never swallow the gap
         logger.warning("[l1_aggregate] session KG fact promotion failed: %s", exc)
         snapshot.evidence_gaps.append(EvidenceGap(
             gap_id=f"{session_id}:l1:world-model-evidence",
@@ -1217,7 +1355,7 @@ async def l1_aggregate(
             persisted_state,
             "l1_snapshot",
             "l1_observe",
-            "L1Snapshot",
+            "L1ObservationSnapshot",
             snapshot,
             base_dir=base_dir,
             parent_keys=[
@@ -1227,7 +1365,7 @@ async def l1_aggregate(
             ],
         )
     )
-    logger.info("[l1_aggregate] L1Snapshot stored: %s", ref)
+    logger.info("[l1_aggregate] L1ObservationSnapshot stored: %s", ref)
 
     gate_decision = evaluate_l1_gate(snapshot, run_id=run_id, context_version=context_version)
 
@@ -1261,7 +1399,7 @@ async def l1_aggregate(
             inputs=build_input_audit(
                 state,
                 stage="L1",
-                source_refs=[f"L1:{key}" for key in sorted(raw_reports)],
+                 source_refs=[f"L1:{key}" for key in sorted(dimension_products)],
             ),
             outputs={
                 "fact_count": len(snapshot.facts),
@@ -1280,7 +1418,7 @@ async def l1_aggregate(
             },
             artifacts=[{"key": "l1_snapshot", **ref.model_dump(mode="json")}],
             diagnostics={
-                "fact_producer": "L1 report compiler + session KG evidence promotion",
+                 "fact_producer": "typed L1 observations + session KG evidence promotion",
                 "kg_fact_count": kg_fact_count,
             },
         )

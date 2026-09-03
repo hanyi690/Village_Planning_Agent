@@ -711,7 +711,7 @@ def _load_l1_fact_section(
         if not isinstance(payload, dict):
             return "", audit
         fact_records = payload.get("fact_records") or []
-        location_facts = payload.get("location_facts") or []
+        location_mentions = payload.get("location_mentions") or []
         selected_dimensions = list(source_dimensions or [])
         if dimension_key:
             selected_dimensions.insert(0, dimension_key)
@@ -747,7 +747,7 @@ def _load_l1_fact_section(
         audit["fact_count"] = len(facts)
         audit["fact_record_count"] = len(catalog_records)
         scoped_locations = [
-            item for item in location_facts
+            item for item in location_mentions
             if not selected_dimensions or item.get("dimension_key") in selected_dimensions
         ]
         audit["location_fact_count"] = len(scoped_locations)
@@ -803,7 +803,7 @@ def _load_l1_fact_section(
                 max_chars=6200,
             )
             lines.append(
-                f"【L1 对 {dimension_key} 的上游地点事实（来自 L1Snapshot artifact；"
+                f"【L1 对 {dimension_key} 的上游地点事实（来自 L1ObservationSnapshot artifact；"
                 "可用于理解，不是选址决定）】"
             )
             lines.append(location_table)
@@ -835,7 +835,7 @@ def _l2_fact_reference_rules(audit: Dict[str, Any]) -> str:
     ]
     lines = [
         "【source_fact_refs 运行时闭集】",
-        "source_fact_refs 只能逐字复制下面动态生成的 canonical L1Snapshot fact_id。",
+        "source_fact_refs 只能逐字复制下面动态生成的 canonical L1ObservationSnapshot fact_id。",
         "每个 fact_id 与 statement/kind/dimension 在同一表格行中对应；不要从其他文本、"
         "EXPLORE 的 L1_facts、source_refs、provenance、bundle ref、报告引用或地点名中复制身份。",
         "source_fact_refs 的每个数组必须去重；不得拼接、改写、猜测或使用不在该表中的 l1:fact ID。",

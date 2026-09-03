@@ -13,7 +13,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.contracts.artifacts.ref import ArtifactRef
-from app.contracts.l1.l1_contracts import L1Snapshot
+from app.contracts.l1.l1_contracts import L1ObservationSnapshot
 
 from .aggregation import l1_aggregate
 
@@ -46,7 +46,7 @@ class L1RunResult(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     request: L1RunRequest
-    snapshot: L1Snapshot
+    snapshot: L1ObservationSnapshot
     snapshot_ref: ArtifactRef
     gate_ref: ArtifactRef
     review_id: str = ""
@@ -73,15 +73,15 @@ class L1Application:
 
     @staticmethod
     def _validate_snapshot(
-        snapshot: L1Snapshot,
+        snapshot: L1ObservationSnapshot,
         request: L1RunRequest,
-    ) -> L1Snapshot:
+    ) -> L1ObservationSnapshot:
         if snapshot.context_version != request.context_version:
-            raise RuntimeError("L1Snapshot context version does not match the run")
+            raise RuntimeError("L1ObservationSnapshot context version does not match the run")
         if not snapshot.context_fingerprint:
-            raise RuntimeError("L1Snapshot has no frozen context fingerprint")
+            raise RuntimeError("L1ObservationSnapshot has no frozen context fingerprint")
         if not snapshot.sources and snapshot.fact_records:
-            raise RuntimeError("L1Snapshot facts have no source catalog")
+            raise RuntimeError("L1ObservationSnapshot facts have no source catalog")
         source_refs = {
             source.reference
             for source in snapshot.sources
@@ -123,7 +123,7 @@ class L1Application:
 
     @staticmethod
     def _validate_evidence_artifacts(
-        snapshot: L1Snapshot,
+        snapshot: L1ObservationSnapshot,
         state: Mapping[str, Any],
         request: L1RunRequest,
     ) -> None:
@@ -143,7 +143,7 @@ class L1Application:
             for ref in snapshot.evidence_artifact_refs
         }
         if len(refs_by_descriptor) != len(snapshot.evidence_artifact_refs):
-            raise RuntimeError("L1Snapshot has duplicate Evidence artifact refs")
+            raise RuntimeError("L1ObservationSnapshot has duplicate Evidence artifact refs")
 
         root_ref = ArtifactRef.model_validate(
             dict(state.get("artifact_refs") or {}).get("l1_snapshot")
@@ -185,20 +185,20 @@ class L1Application:
             *dynamic_parent_refs,
         }
         if set(root_ref.parent_digests) != expected_parent_keys:
-            raise RuntimeError(
-                "L1Snapshot parent closure does not exactly match its inputs"
-            )
+                raise RuntimeError(
+                    "L1ObservationSnapshot parent closure does not exactly match its inputs"
+                )
         active_refs = dict(state.get("artifact_refs") or {})
         for key in sorted(authority_parent_keys | dimension_parent_keys):
             active_ref = ArtifactRef.model_validate(active_refs.get(key))
             if root_ref.parent_digests.get(key) != active_ref.digest:
                 raise RuntimeError(
-                    f"L1Snapshot parent digest mismatch: {key}"
+                    f"L1ObservationSnapshot parent digest mismatch: {key}"
                 )
         for key, evidence_ref in dynamic_parent_refs.items():
             if root_ref.parent_digests.get(key) != evidence_ref.digest:
                 raise RuntimeError(
-                    f"L1Snapshot Evidence parent digest mismatch: {key}"
+                    f"L1ObservationSnapshot Evidence parent digest mismatch: {key}"
                 )
 
         repository = ContentAddressedArtifactRepository(
@@ -208,7 +208,7 @@ class L1Application:
         for descriptor_digest, ref in refs_by_descriptor.items():
             if ref.schema_id != "EvidenceRetrievalArtifact":
                 raise RuntimeError(
-                    "L1Snapshot references a non-Evidence retrieval artifact"
+                    "L1ObservationSnapshot references a non-Evidence retrieval artifact"
                 )
             if ref.run_id != request.run_id or ref.branch_id != request.branch_id:
                 raise RuntimeError(
@@ -253,7 +253,7 @@ class L1Application:
             for ref in mention.evidence_artifact_refs:
                 if ref.descriptor_digest not in top_level_descriptors:
                     raise RuntimeError(
-                        "LocationMention Evidence ref is absent from L1Snapshot"
+                        "LocationMention Evidence ref is absent from L1ObservationSnapshot"
                     )
                 artifact = artifacts[ref.descriptor_digest]
                 requirement = artifact.canonical_request.requirements[0]
@@ -339,7 +339,7 @@ class L1Application:
         replay_state = {**dict(state), **patch, "artifact_refs": refs}
         snapshot = self.load(replay_state)
         if snapshot is None:
-            raise RuntimeError("L1 aggregate did not commit an L1Snapshot artifact")
+            raise RuntimeError("L1 aggregate did not commit an L1ObservationSnapshot artifact")
         from app.infrastructure.artifacts.runtime import validate_artifact_context
 
         validate_artifact_context(replay_state, "l1_snapshot", refs.get("l1_snapshot"))
@@ -364,10 +364,10 @@ class L1Application:
         )
 
     @staticmethod
-    def load(state: Mapping[str, Any]) -> L1Snapshot | None:
+    def load(state: Mapping[str, Any]) -> L1ObservationSnapshot | None:
         from app.infrastructure.artifacts.runtime import load_artifact
 
-        return load_artifact(dict(state), "l1_snapshot", L1Snapshot)
+        return load_artifact(dict(state), "l1_snapshot", L1ObservationSnapshot)
 
 
 async def analyze_dimension(state: Mapping[str, Any]) -> dict[str, Any]:

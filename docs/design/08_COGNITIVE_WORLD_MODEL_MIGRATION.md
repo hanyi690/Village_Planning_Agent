@@ -124,7 +124,7 @@ DATA
 
 回滚：
 
-- 保留现有 <code>L1Snapshot</code> 作为 observation product；
+- 统一使用 <code>L1ObservationSnapshot</code> 作为 observation product；
 - manifest 缺失时不得把旧 snapshot 当完整 final product。
 
 ## 7. Phase E：L1-GROUND

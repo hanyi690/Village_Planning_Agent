@@ -43,10 +43,20 @@ class CognitionRound(StrictContractModel):
     parent_world_model_snapshot_ref: str = Field(min_length=1)
     parent_world_model_snapshot_digest: str = Field(min_length=1)
     requirement_set_digest: str = Field(min_length=1)
+    requirement_refs: tuple[str, ...] = Field(min_length=1)
     max_rounds: int = Field(default=8, ge=1)
     previous_proposal_fingerprint: str = ""
     proposal_fingerprint: str = ""
     status: CognitionRoundStatus = "open"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_requirement_refs(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        payload["requirement_refs"] = tuple(payload.get("requirement_refs") or ())
+        return payload
 
     @model_validator(mode="after")
     def _validate_round_state(self) -> "CognitionRound":

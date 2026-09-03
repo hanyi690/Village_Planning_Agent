@@ -14,7 +14,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.contracts.artifacts.ref import ArtifactRef
-from app.contracts.l1.l1_contracts import L1Snapshot
+from app.contracts.l1.l1_contracts import L1ObservationSnapshot
 from app.contracts.l2.l2_contracts import L2Strategy
 from app.contracts.l3.l3_contracts import PlanningProgram
 
@@ -77,8 +77,8 @@ class L3Application:
             raise RuntimeError(f"L3 cannot proceed without a reloaded {key} artifact")
         return value
 
-    def load_l1(self, state: Mapping[str, Any]) -> L1Snapshot:
-        return self._load(state, "l1_snapshot", L1Snapshot)
+    def load_l1(self, state: Mapping[str, Any]) -> L1ObservationSnapshot:
+        return self._load(state, "l1_snapshot", L1ObservationSnapshot)
 
     def load_l2(self, state: Mapping[str, Any]) -> L2Strategy:
         return self._load(state, "l2_strategy", L2Strategy)
@@ -211,7 +211,7 @@ class L3Application:
         validate_artifact_context(dict(state), "l1_snapshot", request.l1_snapshot_ref)
         validate_artifact_context(dict(state), "l2_strategy", request.l2_strategy_ref)
         if l1.context_version != request.context_version:
-            raise RuntimeError("L3 input L1Snapshot context version mismatch")
+            raise RuntimeError("L3 input L1ObservationSnapshot context version mismatch")
         if l2.context_version != request.context_version:
             raise RuntimeError("L3 input L2Strategy context version mismatch")
 

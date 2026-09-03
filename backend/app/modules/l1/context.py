@@ -2,28 +2,24 @@
 
 from __future__ import annotations
 
-import html
 import hashlib
 import inspect
 import json
-import re
-import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
-
-from pydantic import TypeAdapter
 
 from app.contracts.l1.l1_contracts import (
     L1DimensionInput,
     L1DimensionPassState,
     L1EvidenceGapInputRow,
     L1InputContext,
+    L1QuarantineRecord,
     L1SourceIndex,
+    SourceSpanValidationReport,
 )
 from app.modules.l1.retrieval import render_l1_source_index
 from app.infrastructure.context_runtime import project_source_index
 from app.modules.l1.observation_draft import (
-    L1PlanningFactDraft,
     L1DimensionCheckpoint,
     L1DimensionOutput,
     L1DisplayProjection,
@@ -31,11 +27,10 @@ from app.modules.l1.observation_draft import (
     l1_observation_provider_model_for_dimension,
     normalize_l1_observation_provider_output,
 )
-from app.modules.l1.spatial_admission import spatial_labels
+from app.modules.l1.source_span_validation import validate_observation_sources
 
 
 CheckpointWriter = Callable[[dict[str, Any]], Awaitable[None] | None]
-_FACT_ADAPTER = TypeAdapter(L1PlanningFactDraft)
 _L1_OBSERVE_PAGE_CHARS = 6200
 
 
@@ -54,6 +49,43 @@ class L1DimensionRunResult:
 
 def _unique(values: list[str]) -> list[str]:
     return list(dict.fromkeys(str(value) for value in values if str(value).strip()))
+
+
+def _dedup_validation_products(
+    reports: list[SourceSpanValidationReport],
+    quarantines: list[L1QuarantineRecord],
+) -> tuple[list[SourceSpanValidationReport], list[L1QuarantineRecord]]:
+    return (
+        list({item.validation_ref: item for item in reports}.values()),
+        list({item.quarantine_ref: item for item in quarantines}.values()),
+    )
+
+
+def _provider_quarantine_record(
+    item: Any,
+    *,
+    dimension_key: str,
+    page_index: int,
+) -> L1QuarantineRecord:
+    payload = item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
+    payload_digest = str(payload.get("payload_digest") or "").strip()
+    if not payload_digest:
+        payload_digest = hashlib.sha256(
+            json.dumps(payload.get("raw_payload"), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        ).hexdigest()
+    errors = tuple(
+        str(value).strip()
+        for value in (payload.get("error_paths") or ())
+        if str(value).strip()
+    )
+    return L1QuarantineRecord(
+        quarantine_ref=f"l1-quarantine:{payload_digest[:24]}",
+        raw_row_digest=payload_digest,
+        dimension=dimension_key,
+        reason_code=errors[0] if errors else "schema_invalid",
+        validation_errors=errors,
+        page_ref=f"{dimension_key}:page:{page_index}",
+    )
 
 
 def _source_pages(
@@ -211,189 +243,38 @@ def _observation_label(observation: Any) -> str:
     return "observation"
 
 
-def _canonical_source_text(value: Any) -> str:
-    """Canonicalize literal source text for quote matching only.
-
-    This removes presentation noise introduced by MinerU/HTML table markup and
-    normalizes Unicode punctuation.  It does not summarize, tokenize, or apply
-    fuzzy matching: the resulting quote must still be a literal substring of
-    the current source segment.
-    """
-
-    text = html.unescape(str(value or ""))
-    text = re.sub(r"<[^>]*>", "", text)
-    text = unicodedata.normalize("NFKC", text)
-    text = text.replace("\u200b", "").replace("\u200c", "").replace("\u200d", "")
-    text = text.replace("\ufeff", "").replace("\u00a0", " ")
-    text = text.translate(str.maketrans({
-        "“": '"',
-        "”": '"',
-        "‘": "'",
-        "’": "'",
-        "–": "-",
-        "—": "-",
-        "－": "-",
-    }))
-    return re.sub(r"\s+", "", text)
-
-
-def _match_source_segments(
-    observation: Any,
-    source_segments: list[Any],
-) -> tuple[list[Any], str, bool]:
-    """Match a literal quote against the claimed segment and its neighbors.
-
-    Source indexing can split one original sentence at a bounded character
-    boundary. A quote may therefore span adjacent segments even when the
-    provider cites only one anchor segment. The returned match is still a
-    literal substring of the current page and is expanded to every segment
-    that supplies that substring for provenance.
-    """
-
-    ids = {
-        str(value).strip()
-        for value in (getattr(observation, "source_segment_ids", []) or [])
-        if str(value).strip()
-    }
-    segments = [
-        segment
-        for segment in (source_segments or [])
-        if str(getattr(segment, "segment_id", "") or "").strip()
-    ]
-    matched = [
-        segment
-        for segment in segments
-        if str(getattr(segment, "segment_id", "") or "").strip() in ids
-    ]
-    quote = str(getattr(observation, "source_quote", "") or "").strip()
-    if not matched or not quote:
-        return matched, "", False
-
-    def matches(parts: list[Any]) -> str:
-        raw_text = re.sub(
-            r"\s+",
-            " ",
-            "".join(str(getattr(part, "text", "") or "") for part in parts),
-        )
-        raw_quote = re.sub(r"\s+", " ", quote)
-        if raw_quote and raw_quote in raw_text:
-            return "raw"
-        canonical_text = _canonical_source_text(
-            "".join(str(getattr(part, "text", "") or "") for part in parts)
-        )
-        canonical_quote = _canonical_source_text(quote)
-        if canonical_quote and canonical_quote in canonical_text:
-            return "canonical"
-        return ""
-
-    direct_kind = matches(matched)
-    if direct_kind:
-        return matched, direct_kind, False
-
-    by_source: dict[str, list[Any]] = {}
-    for segment in segments:
-        source_key = str(getattr(segment, "source_key", "") or "")
-        by_source.setdefault(source_key, []).append(segment)
-    for source_key, grouped in by_source.items():
-        grouped.sort(key=lambda item: int(getattr(item, "start_char", 0) or 0))
-        anchors = [
-            index
-            for index, segment in enumerate(grouped)
-            if str(getattr(segment, "segment_id", "") or "").strip() in ids
-        ]
-        for anchor in anchors:
-            for start in range(max(0, anchor - 1), anchor + 1):
-                for end in range(anchor, min(len(grouped), anchor + 3)):
-                    window = grouped[start : end + 1]
-                    if len(window) <= 1:
-                        continue
-                    kind = matches(window)
-                    if kind:
-                        return window, kind, True
-    return matched, "", False
-
-
 def _validate_observation_sources(
     observations: list[Any],
     source_index: L1SourceIndex | None,
-) -> tuple[list[Any], list[str], int]:
-    """Verify fact evidence locators against generic source segments."""
+    *,
+    dimension_key: str,
+    source_snapshot_ref: str = "",
+    page_ref: str = "",
+    model_call_ref: str = "",
+) -> tuple[
+    list[Any],
+    list[str],
+    int,
+    list[SourceSpanValidationReport],
+    list[L1QuarantineRecord],
+]:
+    """Verify source locators and return persisted validation products."""
 
-    page_segments = list(getattr(source_index, "source_segments", []) or [])
-    segments = {segment.segment_id: segment for segment in page_segments}
-    if not observations:
-        return observations, [], 0
-    diagnostics: list[str] = []
-    validated: list[Any] = []
-    rejected_count = 0
-    for item in observations:
-        try:
-            observation = (
-                item
-                if hasattr(item, "fact_type")
-                else _FACT_ADAPTER.validate_python(item)
-            )
-        except Exception:
-            diagnostics.append("observation_source_invalid")
-            rejected_count += 1
-            continue
-        ids = [
-            str(value).strip()
-            for value in observation.source_segment_ids
-            if str(value).strip()
-        ]
-        matched = [segments[value] for value in ids if value in segments]
-        unknown = [value for value in ids if value not in segments]
-        diagnostics.extend(
-            f"observation_source_segment_unknown:{value}" for value in unknown
-        )
-        matched, evidence_kind, spans_segments = _match_source_segments(
-            observation,
-            page_segments,
-        )
-        raw_evidence_ok = evidence_kind == "raw"
-        canonical_evidence_ok = evidence_kind == "canonical"
-        if spans_segments:
-            diagnostics.append(
-                f"observation_source_quote_spans_segments:{_observation_label(observation)}"
-            )
-        if canonical_evidence_ok and not raw_evidence_ok:
-            diagnostics.append(
-                f"observation_source_quote_normalized:{_observation_label(observation)}"
-            )
-        evidence_ok = raw_evidence_ok or canonical_evidence_ok
-        if not evidence_ok:
-            name = _observation_label(observation)
-            diagnostics.append(f"observation_source_quarantined:{name}")
-            rejected_count += 1
-            continue
-        source_text = _canonical_source_text(
-            "".join(str(getattr(segment, "text", "") or "") for segment in matched)
-        )
-        unsupported_labels = [
-            label
-            for label in spatial_labels(observation)
-            if _canonical_source_text(label) not in source_text
-        ]
-        if unsupported_labels:
-            diagnostics.extend(
-                "observation_spatial_label_not_source_backed:"
-                + str(label).strip()[:80]
-                for label in unsupported_labels
-            )
-            rejected_count += 1
-            continue
-        canonical_refs = list(
-            dict.fromkeys(
-                [
-                    *observation.source_refs,
-                    *(segment.source_ref for segment in matched),
-                ]
-            )
-        )
-        observation = observation.model_copy(update={"source_refs": canonical_refs})
-        validated.append(observation)
-    return validated, diagnostics, rejected_count
+    validated = validate_observation_sources(
+        observations,
+        source_index,
+        dimension_key=dimension_key,
+        source_snapshot_ref=source_snapshot_ref,
+        page_ref=page_ref,
+        model_call_ref=model_call_ref,
+    )
+    return (
+        validated.accepted,
+        validated.diagnostics,
+        len(validated.quarantine_records),
+        validated.reports,
+        validated.quarantine_records,
+    )
 
 
 def _dimension_mismatch_diagnostics(
@@ -435,6 +316,8 @@ async def _write_checkpoint(
     cursor: L1DimensionPassState,
     input_context: L1InputContext,
     rejected_count: int,
+    source_span_validation_reports: list[SourceSpanValidationReport],
+    quarantine_records: list[L1QuarantineRecord],
 ) -> None:
     if writer is None:
         return
@@ -444,6 +327,8 @@ async def _write_checkpoint(
         diagnostics=_unique(diagnostics),
         accepted_count=len(observations),
         rejected_count=max(0, int(rejected_count)),
+        source_span_validation_reports=source_span_validation_reports,
+        quarantine_records=quarantine_records,
         status=(
             cursor.status
             if cursor.status in {"running", "complete", "diagnostic"}
@@ -480,6 +365,8 @@ def _build_l1_output(
     observations: list[Any],
     diagnostics: list[str],
     rejected_count: int,
+    source_span_validation_reports: list[SourceSpanValidationReport],
+    quarantine_records: list[L1QuarantineRecord],
     status: str,
 ) -> L1DimensionOutput:
     """Build the only L1 output envelope exposed beyond the loop."""
@@ -492,6 +379,8 @@ def _build_l1_output(
             diagnostics=_unique(diagnostics),
             accepted_count=len(observations),
             rejected_count=max(0, int(rejected_count)),
+            source_span_validation_reports=source_span_validation_reports,
+            quarantine_records=quarantine_records,
             status=normalized_status,
         ),
         display=L1DisplayProjection(
@@ -649,6 +538,8 @@ async def run_l1_dimension_loop(
                     "observations": checkpoint.output.semantic.observations,
                     "diagnostics": checkpoint.output.semantic.diagnostics,
                     "rejected_count": checkpoint.output.semantic.rejected_count,
+                    "source_span_validation_reports": checkpoint.output.semantic.source_span_validation_reports,
+                    "quarantine_records": checkpoint.output.semantic.quarantine_records,
                     "cursor": checkpoint.cursor.model_dump(mode="json"),
                 }
         except Exception:
@@ -697,10 +588,33 @@ async def run_l1_dimension_loop(
     report_body = str(resume_payload.get("report_body") or "").strip()
     observations: list[Any] = list(resume_payload.get("observations") or [])
     rejected_count = max(0, int(resume_payload.get("rejected_count") or 0))
-    observations, source_diagnostics, source_rejected_count = _validate_observation_sources(
+    source_span_validation_reports: list[SourceSpanValidationReport] = list(
+        resume_payload.get("source_span_validation_reports") or []
+    )
+    source_span_validation_reports = [
+        item
+        if isinstance(item, SourceSpanValidationReport)
+        else SourceSpanValidationReport.model_validate(item)
+        for item in source_span_validation_reports
+    ]
+    quarantine_records: list[L1QuarantineRecord] = list(
+        resume_payload.get("quarantine_records") or []
+    )
+    quarantine_records = [
+        item
+        if isinstance(item, L1QuarantineRecord)
+        else L1QuarantineRecord.model_validate(item)
+        for item in quarantine_records
+    ]
+    observations, source_diagnostics, source_rejected_count, reports, quarantines = _validate_observation_sources(
         observations,
         source_index,
+        dimension_key=dimension_key,
+        source_snapshot_ref=input_context.source_digest,
+        page_ref=f"{dimension_key}:resume",
     )
+    source_span_validation_reports.extend(reports)
+    quarantine_records.extend(quarantines)
     rejected_count += source_rejected_count
     diagnostics.extend(source_diagnostics)
     diagnostics.extend(
@@ -713,6 +627,10 @@ async def run_l1_dimension_loop(
         str(value).startswith("l1_observe_page_failed:")
         for value in diagnostics
     )
+    source_span_validation_reports, quarantine_records = _dedup_validation_products(
+        source_span_validation_reports,
+        quarantine_records,
+    )
 
     if cursor.status == "complete" and report_body:
         output = _build_l1_output(
@@ -721,6 +639,8 @@ async def run_l1_dimension_loop(
             observations=observations,
             diagnostics=diagnostics,
             rejected_count=rejected_count,
+            source_span_validation_reports=source_span_validation_reports,
+            quarantine_records=quarantine_records,
             status="complete",
         )
         return L1DimensionRunResult(
@@ -959,6 +879,8 @@ async def run_l1_dimension_loop(
                     cursor=cursor,
                     input_context=input_context,
                     rejected_count=rejected_count,
+                    source_span_validation_reports=source_span_validation_reports,
+                    quarantine_records=quarantine_records,
                 )
                 if page_complete:
                     break
@@ -970,6 +892,14 @@ async def run_l1_dimension_loop(
             )
             quarantined = list(getattr(output, "quarantined_observations", []) or [])
             rejected_count += len(quarantined)
+            quarantine_records.extend(
+                _provider_quarantine_record(
+                    item,
+                    dimension_key=dimension_key,
+                    page_index=page_index,
+                )
+                for item in quarantined
+            )
             quarantine_paths: dict[str, int] = {}
             for item in quarantined:
                 paths = getattr(item, "error_paths", None)
@@ -987,11 +917,20 @@ async def run_l1_dimension_loop(
                         for key, count in sorted(quarantine_paths.items())
                     )
                 )
-            page_observations, source_diagnostics, page_rejected_count = _validate_observation_sources(
+            page_observations, source_diagnostics, page_rejected_count, page_reports, page_quarantines = _validate_observation_sources(
                 list(output.observations or []),
                 source_pages[page_index],
+                dimension_key=dimension_key,
+                source_snapshot_ref=input_context.source_digest,
+                page_ref=f"{dimension_key}:page:{page_index}",
             )
             rejected_count += page_rejected_count
+            source_span_validation_reports.extend(page_reports)
+            quarantine_records.extend(page_quarantines)
+            source_span_validation_reports, quarantine_records = _dedup_validation_products(
+                source_span_validation_reports,
+                quarantine_records,
+            )
             diagnostics.extend(source_diagnostics)
             diagnostics.extend(
                 _dimension_mismatch_diagnostics(
@@ -1021,6 +960,8 @@ async def run_l1_dimension_loop(
                 cursor=cursor,
                 input_context=input_context,
                 rejected_count=rejected_count,
+                source_span_validation_reports=source_span_validation_reports,
+                quarantine_records=quarantine_records,
             )
             if page_complete:
                 break
@@ -1053,6 +994,8 @@ async def run_l1_dimension_loop(
         cursor=cursor,
         input_context=input_context,
         rejected_count=rejected_count,
+        source_span_validation_reports=source_span_validation_reports,
+        quarantine_records=quarantine_records,
     )
     output = _build_l1_output(
         input_context=input_context,
@@ -1060,6 +1003,8 @@ async def run_l1_dimension_loop(
         observations=observations,
         diagnostics=diagnostics,
         rejected_count=rejected_count,
+        source_span_validation_reports=source_span_validation_reports,
+        quarantine_records=quarantine_records,
         status=final_status,
     )
     return L1DimensionRunResult(

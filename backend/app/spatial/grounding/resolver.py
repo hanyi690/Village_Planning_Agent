@@ -2145,9 +2145,7 @@ class SpatialResolver:
         evidence_lineage["relation_refs"].extend(sorted(relation_ids))
 
         for fact in list(
-            getattr(self.context, "location_mentions", None)
-            or getattr(self.context, "location_facts", None)
-            or []
+            getattr(self.context, "location_mentions", None) or []
         ):
             values = {
                 str(getattr(fact, "normalized_name", "") or "").strip(),

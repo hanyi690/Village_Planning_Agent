@@ -11,13 +11,13 @@ approval input, or execution tasks.
 ## Public API
 
 - `application.L1Application.run(state) -> L1RunResult`
-- `application.L1Application.load(state) -> L1Snapshot | None`
+- `application.L1Application.load(state) -> L1ObservationSnapshot | None`
 - `application.run_l1(state) -> L1RunResult`
 - `projections.L1ProjectionBuilder.build_context(...) -> L1InputContext`
 - `projections.L1ProjectionBuilder.build_dimension_input(...) -> L1DimensionInput`
 
 `state` is the workflow control-plane mapping. The result is typed: it carries
-the validated `L1Snapshot` and immutable `ArtifactRef` values for
+the validated `L1ObservationSnapshot` and immutable `ArtifactRef` values for
 `l1_snapshot` and `l1_gate`. The workflow may receive only
 `L1RunResult.to_state_patch()` as a state update.
 
@@ -26,7 +26,7 @@ the validated `L1Snapshot` and immutable `ArtifactRef` values for
 The input identity requires `run_id`, `session_id`, `branch_id`, and a frozen
 `context_version`/`context_ref`. The aggregate reads the session-owned source
 index, report inputs, Bundle/GIS/KG evidence, and bounded observation outputs.
-The authoritative output is `app.contracts.l1.l1_contracts.L1Snapshot`:
+The authoritative output is `app.contracts.l1.l1_contracts.L1ObservationSnapshot`:
 
 - `fact_records` are typed facts with `source_refs`, `source_span`, semantic
   type, value, and derivation metadata;
@@ -63,7 +63,7 @@ context construction are supplied by the centralized runtimes.
 - Do not create geometry, candidate membership, formal scenarios, approval,
   execution plans, or planned state.
 - Do not use report prose as a substitute for typed source-backed facts.
-- Do not persist an empty object or a mock-only result as `L1Snapshot`.
+- Do not persist an empty object or a mock-only result as `L1ObservationSnapshot`.
 - Do not expose raw report bodies in downstream semantic projections.
 
 ## Verification

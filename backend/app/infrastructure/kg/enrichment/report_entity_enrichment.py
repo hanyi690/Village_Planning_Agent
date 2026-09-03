@@ -18,7 +18,7 @@ _BSM_NUM_RE = re.compile(r"(\d{15,25})")
 _VILLAGE_ROLES = frozenset({"village", "natural_village", "settlement", "村庄", "自然村"})
 
 
-def _location_fact_mentions(location_facts: Optional[List[Any]]) -> List[Dict[str, str]]:
+def _location_mentions(location_mentions: Optional[List[Any]]) -> List[Dict[str, str]]:
     """Convert structured L1 location facts into KG enrichment mentions.
 
     Village facts keep the existing ``{base}村`` name suffix (the village-binding
@@ -28,7 +28,7 @@ def _location_fact_mentions(location_facts: Optional[List[Any]]) -> List[Dict[st
     """
     mentions: List[Dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
-    for fact in location_facts or []:
+    for fact in location_mentions or []:
         role = str(getattr(fact, "role", "") or "").strip().lower()
         normalized = str(getattr(fact, "normalized_name", "") or "").strip()
         if not normalized:
@@ -265,7 +265,7 @@ async def extract_bindings(
     reports: Dict[str, str],
     kg: Any = None,
     bundle: Any = None,
-    location_facts: Optional[List[Any]] = None,
+    location_mentions: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
     """Return report projections without admitting report-derived semantics."""
 
@@ -273,7 +273,7 @@ async def extract_bindings(
 
     kg = kg if kg is not None else require_session_kg(session_id)
     projection = project_report_entities(reports)
-    location_mentions = _location_fact_mentions(location_facts)
+    location_mentions = _location_mentions(location_mentions)
 
     # Building the gazetteer is deliberately read-only here.  Spatial
     # candidate selection and semantic writes belong to GROUND, where the
@@ -302,10 +302,10 @@ async def extract_bindings(
 
 
 async def run_wave(session_id: str, wave: int, reports: Dict[str, str], bundle: Any = None,
-                   location_facts: Optional[List[Any]] = None) -> Dict[str, Any]:
+                   location_mentions: Optional[List[Any]] = None) -> Dict[str, Any]:
     return await extract_bindings(
         session_id, wave, reports, bundle=bundle,
-        location_facts=location_facts,
+        location_mentions=location_mentions,
     )
 
 

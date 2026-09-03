@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.contracts.artifacts.ref import ArtifactRef
-from app.contracts.l1.l1_contracts import L1Snapshot
+from app.contracts.l1.l1_contracts import L1ObservationSnapshot
 from app.contracts.l2.l2_contracts import L2Strategy
 
 
@@ -86,12 +86,12 @@ class L2Application:
     """Load L1 by ref, run the real L2 aggregate, then reload its artifact."""
 
     @staticmethod
-    def load_l1(state: Mapping[str, Any]) -> L1Snapshot:
+    def load_l1(state: Mapping[str, Any]) -> L1ObservationSnapshot:
         from app.infrastructure.artifacts.runtime import load_artifact
 
-        snapshot = load_artifact(dict(state), "l1_snapshot", L1Snapshot)
+        snapshot = load_artifact(dict(state), "l1_snapshot", L1ObservationSnapshot)
         if snapshot is None:
-            raise RuntimeError("L2 cannot proceed without a reloaded L1Snapshot")
+            raise RuntimeError("L2 cannot proceed without a reloaded L1ObservationSnapshot")
         return snapshot
 
     @staticmethod
@@ -125,7 +125,7 @@ class L2Application:
             request.l1_snapshot_ref,
         )
         if snapshot.context_version != request.context_version:
-            raise RuntimeError("L2 input L1Snapshot context version mismatch")
+            raise RuntimeError("L2 input L1ObservationSnapshot context version mismatch")
         from .aggregation import l2_aggregate
 
         patch = dict(await l2_aggregate(dict(state)))

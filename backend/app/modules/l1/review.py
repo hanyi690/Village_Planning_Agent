@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
-from app.contracts.l1.l1_contracts import L1Snapshot
+from app.contracts.l1.l1_contracts import L1ObservationSnapshot
 from app.contracts.workflow.review_contracts import (
     ArtifactDescriptorProjection,
     ReviewPackage,
@@ -18,7 +18,7 @@ from app.contracts.workflow.review_contracts import (
 from app.contracts.workflow.workflow_contracts import GateDecision
 
 
-def build_summary_md(snapshot: L1Snapshot, gate_decision: GateDecision) -> str:
+def build_summary_md(snapshot: L1ObservationSnapshot, gate_decision: GateDecision) -> str:
     lines: list[str] = [f"# L1 OBSERVE 审查包 (artifact={snapshot.artifact_id})", ""]
     lines.append(f"**Gate:** {'PASS' if gate_decision.passed else gate_decision.feedback_route or 'BLOCK'}")
     if gate_decision.evidence_requests:
@@ -70,7 +70,7 @@ def build_summary_md(snapshot: L1Snapshot, gate_decision: GateDecision) -> str:
 
 
 def build_trace_json(
-    snapshot: L1Snapshot,
+    snapshot: L1ObservationSnapshot,
     dimension_reports_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
@@ -82,14 +82,14 @@ def build_trace_json(
         ],
         "dimension_reports": dimension_reports_meta or {},
         "extraction_steps": [
-            "compile_l1_observation (per dimension)",
+            "merge_structured_l1_observations",
             "merge_l1_snapshots",
             "evaluate_l1_gate",
         ],
     }
 
 
-def build_preview_geojson(snapshot: L1Snapshot) -> dict[str, Any]:
+def build_preview_geojson(snapshot: L1ObservationSnapshot) -> dict[str, Any]:
     return {
         "type": "FeatureCollection",
         "features": [],
@@ -101,7 +101,7 @@ def build_preview_geojson(snapshot: L1Snapshot) -> dict[str, Any]:
 
 
 def build_l1_review_package(
-    snapshot: L1Snapshot,
+    snapshot: L1ObservationSnapshot,
     artifact_ref: ArtifactDescriptor,
     gate_decision: GateDecision,
     run_id: str,

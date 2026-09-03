@@ -1,23 +1,23 @@
 """G1 Evidence Gate evaluator for L1 OBSERVE.
 
-Pure function: L1Snapshot -> GateDecision. No I/O.
+Pure function: L1ObservationSnapshot -> GateDecision. No I/O.
 Wave B delivers the evaluator; Wave M wires it into the main graph.
 
 Decision matrix (docs/design/01_CONTRACTS_AND_INVARIANTS.md gate semantics + docs/design/01_CONTRACTS_AND_INVARIANTS.md):
   PASS    -> L2 STRATEGIZE
-  PASS    -> usable partial snapshot, with unresolved evidence retained
+  PASS    -> complete observation snapshot for the declared consumer
   L1      -> fact contradictions (rework L1)
   EXPLORE -> optional evidence recovery when explicitly requested
   HUMAN   -> empty snapshot / review checkpoint
 """
 from __future__ import annotations
 
-from app.contracts.l1.l1_contracts import L1Snapshot
+from app.contracts.l1.l1_contracts import L1ObservationSnapshot
 from app.contracts.workflow.recovery_pointer import RecoveryPointer
 from app.contracts.workflow.workflow_contracts import GateDecision, PendingRequest
 
 
-def _unverified_quantitative_facts(snapshot: L1Snapshot) -> list[str]:
+def _unverified_quantitative_facts(snapshot: L1ObservationSnapshot) -> list[str]:
     """Find source-feature counts that cannot identify their source snapshot."""
     refs: list[str] = []
     for fact in snapshot.fact_records:
@@ -29,7 +29,7 @@ def _unverified_quantitative_facts(snapshot: L1Snapshot) -> list[str]:
 
 
 def evaluate_l1_gate(
-    snapshot: L1Snapshot,
+    snapshot: L1ObservationSnapshot,
     *,
     run_id: str = "",
     context_version: str = "",
@@ -79,6 +79,103 @@ def evaluate_l1_gate(
             route_reason="typed_dimension_product_incomplete",
         )
 
+    invalid_reports = [
+        report
+        for report in snapshot.source_span_validation_reports
+        if report.status != "valid"
+    ]
+    if invalid_reports:
+        needs_source_recovery = any(
+            report.status in {"source_missing", "segment_missing"}
+            for report in invalid_reports
+        )
+        route = "EXPLORE" if needs_source_recovery else "L1"
+        return GateDecision(
+            stage=stage,
+            passed=False,
+            feedback_route=route,
+            evidence_requests=[
+                "修复 observation 的 source span、source segment 或来源快照绑定"
+            ],
+            pending_requests=[
+                PendingRequest(
+                    request_id=f"pr-l1-source-span-{index}",
+                    stage="explore" if needs_source_recovery else "l1",
+                    request_type="source_span_recovery",
+                    context={
+                        "validation_ref": report.validation_ref,
+                        "fact_ref": report.fact_ref,
+                        "status": report.status,
+                        "validation_errors": list(report.validation_errors),
+                    },
+                )
+                for index, report in enumerate(invalid_reports[:24])
+            ],
+            context_version=cv,
+            artifact_id=gate_artifact_id,
+            route_reason="l1_source_span_validation_failed",
+        )
+
+    if snapshot.quarantine_records:
+        return GateDecision(
+            stage=stage,
+            passed=False,
+            feedback_route="L1",
+            evidence_requests=["处理被隔离的 L1 observation 行并重新提交可审计记录"],
+            pending_requests=[
+                PendingRequest(
+                    request_id=f"pr-l1-quarantine-{index}",
+                    stage="l1",
+                    request_type="observation_quarantine_review",
+                    context={
+                        "quarantine_ref": record.quarantine_ref,
+                        "dimension": record.dimension,
+                        "reason_code": record.reason_code,
+                        "validation_errors": list(record.validation_errors),
+                    },
+                )
+                for index, record in enumerate(snapshot.quarantine_records[:24])
+            ],
+            context_version=cv,
+            artifact_id=gate_artifact_id,
+            route_reason="l1_observation_quarantine_present",
+        )
+
+    blocking_conflicts = [
+        group
+        for group in snapshot.conflict_groups
+        if group.status in {"REQUIRES_EVIDENCE", "REQUIRES_HUMAN", "OPEN"}
+    ]
+    if blocking_conflicts:
+        route = (
+            "HUMAN"
+            if any(group.status == "REQUIRES_HUMAN" for group in blocking_conflicts)
+            else "L1"
+        )
+        return GateDecision(
+            stage=stage,
+            passed=False,
+            feedback_route=route,
+            evidence_requests=["解决 L1 comparable fact conflict 后再进入下游"],
+            pending_requests=[
+                PendingRequest(
+                    request_id=f"pr-l1-conflict-{index}",
+                    stage="human" if route == "HUMAN" else "l1",
+                    request_type="fact_conflict_resolution",
+                    context={
+                        "conflict_ref": group.conflict_ref,
+                        "fact_refs": list(group.fact_refs),
+                        "dimension": group.dimension,
+                        "reason": group.reason,
+                    },
+                )
+                for index, group in enumerate(blocking_conflicts[:24])
+            ],
+            context_version=cv,
+            artifact_id=gate_artifact_id,
+            route_reason="l1_conflict_group_requires_resolution",
+        )
+
     if not snapshot.facts and not snapshot.constraints and not snapshot.sources:
         return GateDecision(
             stage=stage, passed=False, feedback_route="HUMAN",
@@ -90,6 +187,8 @@ def evaluate_l1_gate(
         if i.code in {
             "fact_contradiction",
             "spatial_semantic_admission_failed",
+            "required_fact_type_missing",
+            "l1_observation_diagnostic",
         }
         and i.severity == "error"
     ]

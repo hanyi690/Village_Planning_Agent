@@ -32,7 +32,7 @@ L1 不负责：
 
 | 能力 | 当前代码事实 | 设计终态 |
 |---|---|---|
-| 事实产物 | 已有 <code>L1Snapshot</code>、fact、mention、gap 兼容 contract | 收敛为 <code>L1ObservationSnapshot</code> 与分型 rows |
+| 事实产物 | <code>L1ObservationSnapshot</code>、fact、mention、gap typed contracts | L1 只产生 observation snapshot 与分型 rows；Evidence 负责采集与 Sufficiency |
 | 有界输入 | 已有 <code>L1InputContext</code>、<code>L1DimensionInput</code>、分页和 digest | 保留；补齐统一 source-span 验证报告 |
 | 观察与绑定分离 | 已有 <code>EvidenceObservationSnapshot</code>、binding sidecar | 收敛为 <code>L1BindingSnapshot</code>，由 final manifest 引用且不修改冻结观察 |
 | WM 提交回执 | 已有 <code>L1WorldProjectionSnapshot</code> 和 identity commit envelope | 回执必须成为 L2/L3 的前置引用 |

@@ -7,13 +7,68 @@ from app.infrastructure.llm.table_protocol import (
     build_llm_table,
     validate_flat_llm_rows,
 )
-from app.data.ingestion.compiler.profiles.l1_observation import (
-    compile_l1_observation,
-)
+from app.contracts.artifacts.contract_meta import StageIssue
+from app.contracts.evidence.evidence_contracts import EvidenceSource
+from app.contracts.l1.l1_contracts import L1ObservationSnapshot
+from app.contracts.l1.validation_contracts import L1QuarantineRecord
 from app.modules.l1.gate import evaluate_l1_gate
+from app.modules.l1.facts import (
+    planning_observation_to_l1_fact,
+    planning_observation_to_location_mentions,
+)
 from app.modules.l1.observation_draft import (
     normalize_l1_observation_provider_output,
 )
+
+
+def _snapshot_from_output(output, *, dimension_key: str, report_id: str):
+    observations = list(output.observations)
+    facts = [
+        fact
+        for observation in observations
+        if (fact := planning_observation_to_l1_fact(
+            observation,
+            dimension_key=dimension_key,
+            source_snapshot_ref=report_id,
+        )) is not None
+    ]
+    mentions = [
+        mention
+        for observation in observations
+        for mention in planning_observation_to_location_mentions(
+            observation,
+            dimension_key=dimension_key,
+            source_report_ref=report_id,
+        )
+    ]
+    quarantine_records = [
+        L1QuarantineRecord(
+            quarantine_ref=f"l1-quarantine:{item.payload_digest[:24]}",
+            raw_row_digest=item.payload_digest,
+            dimension=dimension_key,
+            reason_code=(item.error_paths or ["schema_invalid"])[0],
+            validation_errors=tuple(item.error_paths),
+        )
+        for item in output.quarantined_observations
+    ]
+    issues = [
+        StageIssue(
+            stage="l1",
+            severity="error",
+            code="spatial_semantic_admission_failed",
+            message="provider row was rejected by local spatial admission",
+        )
+    ] if quarantine_records else []
+    return L1ObservationSnapshot(
+        artifact_id=report_id,
+        fact_records=facts,
+        facts=[fact.statement for fact in facts],
+        facts_by_dimension={dimension_key: [fact.statement for fact in facts]},
+        location_mentions=mentions,
+        issues=issues,
+        quarantine_records=quarantine_records,
+        sources=[EvidenceSource(source_type="report", reference=report_id)],
+    )
 
 
 def test_build_llm_table_is_bounded_and_tabular():
@@ -57,10 +112,9 @@ def test_l1_abstract_analysis_topic_is_quarantined_before_location_mentions():
             ]
         },
     )
-    snapshot = compile_l1_observation(
+    snapshot = _snapshot_from_output(
+        output,
         dimension_key="superior_planning",
-        content="## 现状\n【事实】农业发展、设施现状评估",
-        instruction=output.model_dump_json(),
         report_id="report-abstract-topic",
     )
     gate = evaluate_l1_gate(snapshot, run_id="run-abstract-topic")
@@ -92,10 +146,9 @@ def test_l1_source_named_physical_objects_remain_location_work_items(name):
             ]
         },
     )
-    snapshot = compile_l1_observation(
+    snapshot = _snapshot_from_output(
+        output,
         dimension_key="superior_planning",
-        content=f"## 现状\n【事实】{name}",
-        instruction=output.model_dump_json(),
         report_id=f"report-{name}",
     )
 
@@ -181,7 +234,7 @@ def test_l1_layer_aggregate_does_not_swallow_location_grounding_failure(
 
 def test_l1_identity_requirements_group_equivalent_mentions_by_scope():
     from app.contracts.l1.l1_contracts import (
-        L1Snapshot,
+        L1ObservationSnapshot,
         LocationMention,
         LocationScopeMention,
     )
@@ -192,7 +245,7 @@ def test_l1_identity_requirements_group_equivalent_mentions_by_scope():
         normalized_name="金田村",
         role="administrative_area",
     )
-    snapshot = L1Snapshot(
+    snapshot = L1ObservationSnapshot(
         artifact_id="l1-grouping",
         context_fingerprint="context-one",
         location_mentions=[
@@ -226,13 +279,13 @@ def test_l1_identity_requirements_group_equivalent_mentions_by_scope():
 
 def test_l1_identity_requirements_keep_same_name_in_distinct_scopes():
     from app.contracts.l1.l1_contracts import (
-        L1Snapshot,
+        L1ObservationSnapshot,
         LocationMention,
         LocationScopeMention,
     )
     from app.modules.evidence.requirements import requirements_from_l1
 
-    snapshot = L1Snapshot(
+    snapshot = L1ObservationSnapshot(
         artifact_id="l1-distinct-scope",
         context_fingerprint="context-one",
         location_mentions=[
@@ -388,10 +441,9 @@ def test_l1_spatial_relation_preserves_direction_and_anchor_role():
     assert mentions[1].relation == ""
     assert mentions[1].related_mentions == []
 
-    snapshot = compile_l1_observation(
+    snapshot = _snapshot_from_output(
+        output,
         dimension_key="location",
-        content="## 区位\n居民点位于主路西侧。",
-        instruction=output.model_dump_json(),
         report_id="report-spatial-relation",
     )
     compiled = {

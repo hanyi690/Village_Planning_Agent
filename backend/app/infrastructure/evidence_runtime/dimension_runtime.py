@@ -615,7 +615,7 @@ def _planning_evidence_query(
     # Location mentions are compact semantic anchors, not an LLM-generated
     # identity.  Keep them bounded so a large L1 snapshot cannot consume the
     # planning prompt budget.
-    for fact in list(getattr(context, "location_facts", []) or [])[:24]:
+    for fact in list(getattr(context, "location_mentions", []) or [])[:24]:
         add(
             " ".join(
                 str(value or "")

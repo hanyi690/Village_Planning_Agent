@@ -6,7 +6,7 @@ import hashlib
 import json
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.contracts.artifacts.classification_ref import ClassificationRef
 from app.contracts.artifacts.ref import ArtifactRef
@@ -17,8 +17,11 @@ from app.contracts.evidence.evidence_contracts import (
 )
 from app.contracts.evidence.requirement_contracts import EvidenceRequirement
 from app.contracts.target_projection.parse_result_contracts import ParseDiagnostic
-from app.contracts.target_projection.parsing_contracts import CompilerTrace
 from app.contracts.artifacts.provenance import Provenance
+from app.contracts.l1.validation_contracts import (
+    L1QuarantineRecord,
+    SourceSpanValidationReport,
+)
 
 
 class L1SpatialProvenance(BaseModel):
@@ -72,31 +75,6 @@ class LocationScopeMention(BaseModel):
         return payload
 
 
-def _legacy_scope_objects(data: Any, *, field_name: str) -> Any:
-    """Translate the retired flat scope lists at the L1 boundary only."""
-
-    if not isinstance(data, dict):
-        return data
-    payload = dict(data)
-    if field_name in payload:
-        return payload
-    scopes: list[dict[str, Any]] = []
-    for legacy_key, role in (
-        ("village_scopes", "natural_village"),
-        ("place_scopes", "place"),
-    ):
-        values = payload.pop(legacy_key, None) or []
-        if isinstance(values, str):
-            values = [values]
-        for value in values:
-            name = str(value or "").strip()
-            if name:
-                scopes.append({"name": name, "role": role})
-    if scopes:
-        payload[field_name] = scopes
-    return payload
-
-
 class LocationMentionDraft(BaseModel):
     """Provider-side semantic location draft.
 
@@ -125,42 +103,6 @@ class LocationMentionDraft(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     source_feature_ids: list[str] = Field(default_factory=list)
     provenance: L1SpatialProvenance = Field(default_factory=L1SpatialProvenance)
-
-    @model_validator(mode="before")
-    @classmethod
-    def translate_legacy_scopes(cls, data: Any) -> Any:
-        payload = _legacy_scope_objects(data, field_name="scope_mentions")
-        if not isinstance(payload, dict):
-            return payload
-        payload = dict(payload)
-        for field_name in (
-            "scope_mentions",
-            "aliases",
-            "related_mentions",
-            "source_feature_ids",
-            "source_segment_ids",
-            "source_refs",
-        ):
-            if payload.get(field_name) is None:
-                payload[field_name] = []
-        return payload
-
-    @property
-    def village_scopes(self) -> list[str]:
-        return [
-            scope.name
-            for scope in self.scope_mentions
-            if scope.role == "natural_village"
-        ]
-
-    @property
-    def place_scopes(self) -> list[str]:
-        return [
-            scope.name
-            for scope in self.scope_mentions
-            if scope.role != "natural_village"
-        ]
-
 
 class LocationMention(BaseModel):
     """Traceable semantic place work item compiled by L1.
@@ -194,46 +136,11 @@ class LocationMention(BaseModel):
     source_report_ref: str = ""
     dimension_key: str = ""
     source_span: str = ""
+    source_span_refs: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     evidence_artifact_refs: list[ArtifactRef] = Field(default_factory=list)
     source_feature_ids: list[str] = Field(default_factory=list)
     confidence: float = 0.0
-
-    @model_validator(mode="before")
-    @classmethod
-    def translate_legacy_scopes(cls, data: Any) -> Any:
-        payload = _legacy_scope_objects(data, field_name="scopes")
-        if not isinstance(payload, dict):
-            return payload
-        payload = dict(payload)
-        for field_name in (
-            "scopes",
-            "aliases",
-            "related_mentions",
-            "evidence_refs",
-            "evidence_artifact_refs",
-            "source_feature_ids",
-        ):
-            if payload.get(field_name) is None:
-                payload[field_name] = []
-        return payload
-
-    @property
-    def village_scopes(self) -> list[str]:
-        return [
-            scope.name
-            for scope in self.scopes
-            if scope.role == "natural_village"
-        ]
-
-    @property
-    def place_scopes(self) -> list[str]:
-        return [
-            scope.name
-            for scope in self.scopes
-            if scope.role != "natural_village"
-        ]
-
 
 class L1Fact(BaseModel):
     """Authoritative, provenance-rich fact consumed by later stages.
@@ -279,9 +186,32 @@ class L1Fact(BaseModel):
     source_refs: list[str] = Field(default_factory=list, min_length=1)
     evidence_refs: list[str] = Field(default_factory=list)
     source_span: str = ""
+    source_span_refs: list[str] = Field(default_factory=list)
     source_snapshot_ref: str = ""
     source_feature_ids: list[str] = Field(default_factory=list)
     derivation: str = ""
+
+
+class L1ConflictGroup(BaseModel):
+    """Minimal deterministic conflict product for comparable L1 facts."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    conflict_ref: str = Field(min_length=1)
+    fact_refs: tuple[str, ...] = Field(min_length=2)
+    dimension: str = Field(min_length=1)
+    subject_scope: str = ""
+    comparable_identity: str = Field(min_length=1)
+    unit: str = ""
+    counting_basis: str = ""
+    conflict_kind: Literal["value_mismatch", "authority_mismatch", "temporal_mismatch"]
+    status: Literal[
+        "OPEN",
+        "RESOLVED",
+        "REQUIRES_EVIDENCE",
+        "REQUIRES_HUMAN",
+    ] = "REQUIRES_EVIDENCE"
+    reason: str = ""
 
 
 class EvidenceGap(BaseModel):
@@ -521,7 +451,7 @@ class L1DimensionPassState(BaseModel):
     status: Literal["running", "complete", "diagnostic"] = "running"
 
 
-class L1Snapshot(ContractMeta):
+class L1ObservationSnapshot(ContractMeta):
     # Authoritative typed records.  ``facts`` below is a deterministic
     # display projection generated from these records.
     fact_records: list[L1Fact] = Field(default_factory=list)
@@ -529,10 +459,7 @@ class L1Snapshot(ContractMeta):
     # Dimension-scoped facts are the auditable source for downstream strategy
     # prompts; ``facts`` remains the flattened view used by summaries.
     facts_by_dimension: dict[str, list[str]] = Field(default_factory=dict)
-    location_mentions: list[LocationMention] = Field(
-        default_factory=list,
-        validation_alias=AliasChoices("location_mentions", "location_facts"),
-    )
+    location_mentions: list[LocationMention] = Field(default_factory=list)
     constraints: list[str] = Field(default_factory=list)
     issues: list[StageIssue] = Field(default_factory=list)
     opportunities: list[str] = Field(default_factory=list)
@@ -546,30 +473,24 @@ class L1Snapshot(ContractMeta):
     dimension_provenance: list[Provenance] = Field(default_factory=list)
     spatial_facts_by_dimension: dict[str, list[str]] = Field(default_factory=dict)
     diagnostics_by_dimension: dict[str, list[ParseDiagnostic]] = Field(default_factory=dict)
-    traces_by_dimension: dict[str, CompilerTrace] = Field(default_factory=dict)
     provenance: "Provenance | None" = None
     evidence_requirements: list[EvidenceRequirement] = Field(default_factory=list)
-
-    @property
-    def location_facts(self) -> list[LocationMention]:
-        """Read-only transition view for callers not yet on the new name."""
-
-        return self.location_mentions
-
-
-# Source-compatibility names are intentionally not exported.  They allow old
-# persisted fixtures to cross the boundary while all new records use the
-# LocationMention contract and the new ``location_mentions`` field.
-L1LocationFact = LocationMention
-L1SpatialMention = LocationMentionDraft
+    source_span_validation_reports: list[SourceSpanValidationReport] = Field(
+        default_factory=list
+    )
+    quarantine_records: list[L1QuarantineRecord] = Field(default_factory=list)
+    conflict_groups: list[L1ConflictGroup] = Field(default_factory=list)
 
 __all__ = [
-    "L1Snapshot",
+    "L1ObservationSnapshot",
     "LocationMention",
     "LocationMentionDraft",
     "LocationScopeMention",
     "L1SpatialProvenance",
     "L1Fact",
+    "L1ConflictGroup",
+    "L1QuarantineRecord",
+    "SourceSpanValidationReport",
     "EvidenceGap",
     "L1SourceSegment",
     "L1SourceIndex",

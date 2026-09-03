@@ -110,9 +110,6 @@ class PlanningContext:
     l1_world_projection_ref: str = ""
     l1_fact_records: List[Any] = field(default_factory=list)
     location_mentions: List[Any] = field(default_factory=list)
-    # Read compatibility for persisted callers created before the contract
-    # rename. New code should use location_mentions.
-    location_facts: List[Any] = field(default_factory=list)
     source_semantic_decisions: Dict[str, Any] = field(default_factory=dict)
     source_semantic_fingerprint: str = ""
     source_semantic_diagnostics: List[Dict[str, Any]] = field(default_factory=list)
@@ -130,10 +127,6 @@ class PlanningContext:
     _content_inputs: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.location_mentions:
-            self.location_facts = self.location_mentions
-        elif self.location_facts:
-            self.location_mentions = self.location_facts
         if not self.capabilities:
             self._record_capabilities()
         if not self.content_hash:

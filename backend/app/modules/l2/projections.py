@@ -5,12 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from app.contracts.l1.l1_contracts import L1Snapshot
+from app.contracts.l1.l1_contracts import L1ObservationSnapshot
 from app.infrastructure.context_runtime import ContextBudget, build_bounded_table
 
 
 def build_l2_projection(
-    snapshot: L1Snapshot,
+    snapshot: L1ObservationSnapshot,
     *,
     budget: ContextBudget | None = None,
 ) -> dict[str, Any]:

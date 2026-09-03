@@ -390,15 +390,15 @@ def _l3_snapshot_data(
     if artifact_ref:
         try:
             from app.infrastructure.artifacts.runtime import load_artifact
-            from app.contracts.l1.l1_contracts import L1Snapshot
+            from app.contracts.l1.l1_contracts import L1ObservationSnapshot
 
             payload = load_artifact(state, "l1_snapshot")
             if payload is None:
                 return [], []
             snapshot = (
                 payload
-                if isinstance(payload, L1Snapshot)
-                else L1Snapshot.model_validate(
+                if isinstance(payload, L1ObservationSnapshot)
+                else L1ObservationSnapshot.model_validate(
                     payload.model_dump(mode="json")
                     if hasattr(payload, "model_dump")
                     else payload,
@@ -407,7 +407,7 @@ def _l3_snapshot_data(
             )
             return (
                 list(snapshot.fact_records or []),
-                list(snapshot.location_facts or []),
+                list(snapshot.location_mentions or []),
             )
         except Exception:
             # An explicit but unreadable snapshot must not fall back to a
@@ -422,7 +422,7 @@ def _l3_snapshot_data(
             return [], []
         return (
             list(getattr(context, "l1_fact_records", []) or []),
-            list(getattr(context, "location_facts", []) or []),
+            list(getattr(context, "location_mentions", []) or []),
         )
     except Exception:
         return [], []
@@ -442,7 +442,7 @@ def _l3_fact_catalog(
     )
 
     try:
-        facts, _location_facts = _l3_snapshot_data(state)
+        facts, _location_mentions = _l3_snapshot_data(state)
         options = source_fact_options(
             dimension_key,
             "fact",
@@ -496,8 +496,8 @@ def _typed_l1_fact_evidence(
     """
     from app.workflow.validation.l1_fact_catalog import SPATIAL_L1_FACT_KINDS
 
-    facts, location_facts = _l3_snapshot_data(state)
-    if not facts and not location_facts:
+    facts, location_mentions = _l3_snapshot_data(state)
+    if not facts and not location_mentions:
         return "（当前上下文没有可用的 L1 spatial evidence；不得据此创建空间 claim。）"
 
     source_dimension_values = tuple(
@@ -510,7 +510,7 @@ def _typed_l1_fact_evidence(
     }
     if location_only:
         rows: list[dict[str, Any]] = []
-        for item in location_facts:
+        for item in location_mentions:
             fact_dimension = str(_fact_value(item, "dimension_key", "") or "").strip()
             if fact_dimension not in allowed_dimensions:
                 continue

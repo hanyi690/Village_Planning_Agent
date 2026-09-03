@@ -1,6 +1,6 @@
 # L2 STRATEGIZE
 
-L2 consumes only the reloaded `L1Snapshot` artifact. It identifies problems,
+L2 consumes only the reloaded `L1ObservationSnapshot` artifact. It identifies problems,
 builds abstract objectives/demand/suitability/strategies and emits the typed
 strategy artifact used by L3. It cannot create parcels, geometry, candidates,
 scenarios, approvals or execution tasks.
@@ -21,7 +21,7 @@ state.
 
 An `EXPLORE` gate attaches one `RecoveryPointer` to each actionable evidence
 gap. The pointer names the gap id, the producing L2 dimension, the current
-`l2_strategy` artifact, the consumed `L1Snapshot`/decision inputs, and the
+`l2_strategy` artifact, the consumed `L1ObservationSnapshot`/decision inputs, and the
 required fact. Recovery therefore returns to the responsible producer input;
 it does not replay the whole layer or accept a prose substitute.
 

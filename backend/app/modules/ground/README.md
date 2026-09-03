@@ -4,7 +4,7 @@ GROUND owns two related but independent entry points.  L1 does not pass
 through `TARGET_PROJECTION` just to resolve a place name.
 
 ```text
-L1Snapshot.LocationMention
+L1ObservationSnapshot.LocationMention
         -> GROUND location resolution
         -> l1_observations + l1_bindings
 

@@ -447,10 +447,10 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
     """Attach persisted L1 observation inputs to the planning context."""
     try:
         from app.infrastructure.artifacts.runtime import load_artifact
-        from app.contracts.l1.l1_contracts import L1Snapshot
+        from app.contracts.l1.l1_contracts import L1ObservationSnapshot
         from app.contracts.evidence.identity_contracts import EvidenceObservationSnapshot
 
-        snapshot = load_artifact(state, "l1_snapshot", L1Snapshot)
+        snapshot = load_artifact(state, "l1_snapshot", L1ObservationSnapshot)
         if snapshot is None:
             return
         l1_ref = (state.get("artifact_refs") or {}).get("l1_snapshot")
@@ -485,7 +485,6 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
             # payloads. L2/L3 retrieve bounded rows through a typed world view.
             context.l1_fact_records = []
             context.location_mentions = []
-            context.location_facts = []
             context.evidence_observations = []
             context.grounded_bindings = []
             return
@@ -493,7 +492,6 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
         facts = list(getattr(snapshot, "location_mentions", []) or [])
         context.l1_fact_records = fact_records
         context.location_mentions = facts
-        context.location_facts = facts
 
         observation_snapshot = load_artifact(
             state,
@@ -722,7 +720,7 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
     fingerprint = "sha256:" + content_hash[:16]
 
     try:
-        from app.contracts.l1.l1_contracts import L1Snapshot
+        from app.contracts.l1.l1_contracts import L1ObservationSnapshot
 
         l1_snapshot = None
         refs = state.get("artifact_refs") or {}
@@ -730,12 +728,11 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
         if l1_ref_data:
             from app.infrastructure.artifacts.runtime import load_artifact
 
-            l1_snapshot = load_artifact(state, "l1_snapshot", L1Snapshot)
+            l1_snapshot = load_artifact(state, "l1_snapshot", L1ObservationSnapshot)
         if l1_snapshot is not None:
             context.location_mentions = list(
                 getattr(l1_snapshot, "location_mentions", []) or []
             )
-            context.location_facts = context.location_mentions
             await _hydrate_l1_spatial_facts(state, context)
     except Exception as exc:
         logger.debug("[bootstrap] L1 location facts unavailable: %s", exc)
