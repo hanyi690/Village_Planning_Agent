@@ -60,7 +60,7 @@ UploadFile / YAML remote declaration
 ```text
 process_uploaded_file(..., layer_ref="", boundary_scope_mode="")
   → assess_uploaded_source_admission(
-       input_role, category, filename, parsed_text, gis_data,
+       input_role, category, filename, source_digest, parsed_text, gis_data,
        gis_data_type, parse_status, temporal_llm_enabled
     )
   → DataAdmissionRequest(source_kind="upload", source_ref=...)
@@ -79,6 +79,19 @@ generic feature catalog 准入，但不会被猜成 boundary 或其他业务层�
 basename/扩展名解析和规划成果冲突信号，不能决定 `layer_ref`、`geometry_kind` 或时态角色。
 因此旧的 `infer_data_type_from_filename` 兼容模块已删除，session reload 也不再从文件名或
 属性字段重新推断图层。
+
+上传时态准入还要区分“typed channel declaration”和“LLM semantic audit”。`village_data`
+会由 session application 显式声明为 `current_evidence`；在解析、预算、CRS、geometry 和
+强规划成果冲突检查通过后，该 typed channel 可以进入 `DataAdmissionFacade`。LLM
+`temporal_role_classifier` 通过统一 `structured_runtime` 执行有界 structured calls，
+并把 provider failure、协议失败和语义分歧记录为审计诊断；它不能用不稳定的 positive
+classification 阻断一个已经明确声明且确定性检查通过的 current upload。未声明的 upload
+仍然是 `unclassified → quarantine`，明确的 `planned_output` 或强规划成果信号仍然拒绝。
+
+所有 LLM 业务阶段共享 `structured_runtime` 的 provider response、reasoning transport、
+schema validation、retry、timeout、budget 和 audit 边界。reasoning 只作为 provider
+continuation/安全元数据保留，不能进入 DATA source fact、WM `WorldEntity` 或 Evidence
+fact；时态 role、reason code 和 admission 仍由 DATA 领域策略裁决。
 
 HTTP multipart 的 `create-session` 适配器使用同一规则：`village_data_layer_refs` 是与
 `village_data_files` 按序对应的显式字符串数组；`boundary_scope_file_index` 显式选择哪一个

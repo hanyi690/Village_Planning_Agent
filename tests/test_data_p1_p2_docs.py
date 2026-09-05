@@ -18,6 +18,10 @@ def test_data_docs_describe_the_canonical_p1_p2_boundary():
         "DataAdmissionGap",
         "resume()",
         "data/cache/map_observations",
+        "structured_runtime",
+        "temporal_role_classifier",
+        "unclassified → quarantine",
+        "reasoning 只作为 provider",
     ):
         assert name in design
     assert "catalog payload" not in acceptance.casefold()
