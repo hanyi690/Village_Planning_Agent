@@ -404,6 +404,8 @@ def assess_source_admission(
 def apply_temporal_role_decision(
     assessment: SourceAdmissionAssessment,
     decision: Any,
+    *,
+    enforce_positive: bool = True,
 ) -> SourceAdmissionAssessment:
     """Apply a verified semantic conflict decision without granting new facts."""
 
@@ -423,6 +425,22 @@ def apply_temporal_role_decision(
         "classifier_confidence": float(getattr(decision, "confidence", 0.0) or 0.0),
     }
     if decision_status != "accepted" or selected_role == "ambiguous":
+        if (
+            not enforce_positive
+            and assessment.input_role == CURRENT_EVIDENCE_ROLE
+            and assessment.status == "admitted"
+        ):
+            return SourceAdmissionAssessment(
+                declared_role=assessment.declared_role,
+                input_role=assessment.input_role,
+                status=assessment.status,
+                reason=assessment.reason,
+                signals=(*signals, "temporal_role_advisory_only"),
+                **{
+                    **metadata,
+                    "decision_basis": "explicit_typed_channel_temporal_advisory",
+                },
+            )
         return SourceAdmissionAssessment(
             declared_role=assessment.declared_role,
             input_role=UNCLASSIFIED_ROLE,
@@ -430,6 +448,8 @@ def apply_temporal_role_decision(
             reason=(
                 "temporal_role_provider_failed"
                 if decision_status == "provider_failed"
+                else "temporal_role_protocol_failed"
+                if decision_status == "protocol_failed"
                 else "temporal_role_ambiguous"
             ),
             signals=signals,
@@ -542,7 +562,11 @@ async def assess_uploaded_source_admission(
         enabled=temporal_llm_enabled,
         llm=llm,
     )
-    return apply_temporal_role_decision(assessment, decision)
+    return apply_temporal_role_decision(
+        assessment,
+        decision,
+        enforce_positive=assessment.input_role != CURRENT_EVIDENCE_ROLE,
+    )
 
 
 def is_admitted_current_assessment(

@@ -546,6 +546,7 @@ async def process_uploaded_file(
             input_role=input_role,
             category=file_category,
             filename=filename,
+            source_digest=source_digest,
             parsed_text=str(parsed.get("parsed_text") or ""),
             gis_data=(
                 parsed.get("gis_data")

@@ -130,6 +130,7 @@ async def test_upload_calls_async_classifier_and_facade(monkeypatch, tmp_path):
         input_role,
         category,
         filename,
+        source_digest,
         parsed_text,
         gis_data,
         gis_data_type,
@@ -140,6 +141,7 @@ async def test_upload_calls_async_classifier_and_facade(monkeypatch, tmp_path):
             "input_role": input_role,
             "category": category,
             "filename": filename,
+            "source_digest": source_digest,
             "parsed_text": parsed_text,
             "gis_data": gis_data,
             "gis_data_type": gis_data_type,
@@ -170,6 +172,7 @@ async def test_upload_calls_async_classifier_and_facade(monkeypatch, tmp_path):
 
     assert "classifier" in seen
     assert seen["classifier"]["temporal_llm_enabled"] is True
+    assert seen["classifier"]["source_digest"].startswith("sha256:")
     assert seen["db"]["admission_receipt_ref"]["schema_id"] == "DataAdmissionReceipt"
     assert seen["db"]["admission_lifecycle"][-1] == "ADMITTED"
     assert seen["db"]["gis_data_type"] is None
