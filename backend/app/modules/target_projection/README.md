@@ -16,6 +16,8 @@ reloaded `IntentCompilationResult`, plus `target_projection` and
 
 - `stage.py`: production stage orchestration and artifact/gate completion.
 - `requirement_compilation.py`: target admission and grounding requirements.
+- `spatial_reference_mapper.py`: typed spatial-reference mapping over admitted
+  source references; this logic is owned by TARGET_PROJECTION, not DATA ingestion.
 - `target_identity.py` and `admission.py`: stable identity and closed target
   family admission.
 - `intent_graph_compiler.py` and `planning_task_graph_compiler.py`: typed

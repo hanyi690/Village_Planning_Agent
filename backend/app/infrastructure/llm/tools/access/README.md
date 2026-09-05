@@ -29,7 +29,7 @@
 | `evidence.py` | `data_geometry_by_ref` | 仅按 EvidencePacket 返回的 DATA resource/representation/geometry ref 读取几何 |
 | `shared.py` | 共享助手 | bundle 解析（内存缓存 → 版本化快照 → 实时构建）+ `budget_check` 预算 |
 
-**读路径优先级**（shared.py）：① 内存缓存 session bundle（最快）→ ② 持久化版本化快照（`BundleStore`，确定性/不可变）→ ③ 实时构建（`DataCatalog` 兜底）。
+**读路径优先级**（shared.py）：① 当前 session 的内存 World Model → ② 当前 session 的不可变 DATA/WM artifact → ③ 明确的缺失结果；不从文件名或旧 catalog 兜底重建。
 
 ---
 

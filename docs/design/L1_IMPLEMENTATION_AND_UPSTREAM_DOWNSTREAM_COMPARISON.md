@@ -44,9 +44,9 @@ L1 aggregate → merge / contradiction detection / evidence retrieval
 | L1 的事实可靠性 | 已有 typed fact、来源段引用、原文/规范化 quote 校验、冲突检查和不合格行隔离；但独立 source-span validation report 仍未形成最终产品。 |
 | L1 的空间边界 | 已明确区分“地点名称工作项”和“已接地实体”；L1 本身不生成 geometry、candidate 或 BSM。 |
 | L1-GROUND | 真实调用链已存在，能生成 observation/binding sidecar，并调用 Cognition/World Model identity commit；统一终态 taxonomy、proposal ownership、commit 后 revalidation 仍是目标项。 |
-| L2 消费边界 | 代码层面已经要求重载 `l1_snapshot`，并要求 L1 World projection ready；但设计目标要求统一的 `L1FinalProduct / L1ProductManifest + L1BindingSnapshot + WM ref`，当前仍是多引用过渡态。 |
+| L2 消费边界 | 代码层面现在要求重载 ready `L1ProductManifest`，并继续验证 L1 World projection；manifest 统一封装 snapshot、binding、projection、WM current snapshot 和 gate 的引用闭包。 |
 | L3 消费边界 | 已要求 `l1_snapshot`、`l2_strategy` 及 L1/L2 PASS gate，并阻止 geometry、candidate、scenario、approval 等字段；目标仍是由稳定 final view 驱动规划意图。 |
-| 总体成熟度 | 与 `05_MIGRATION.md` 一致：L1、L1-GROUND、L2、L3 当前均应标为 `PARTIAL`，不能写成已完成的完整认知闭环。 |
+| 总体成熟度 | 与 `05_MIGRATION.md` 一致：manifest/final-view boundary 已实现，但 L1、L1-GROUND、L2、L3 仍应标为 `PARTIAL`，真实 fresh run、完整 revalidation 和局部 invalidation 尚未闭合。 |
 
 ## 二、范围与术语
 
@@ -344,13 +344,13 @@ GROUND candidate retrieval
 
 | 项目 | 当前代码 | 目标设计 |
 | --- | --- | --- |
-| 输入 | `l1_snapshot` canonical artifact ref，外加已通过的 data/kg/evidence/l1 gates | `L1FinalProduct`、`L1BindingSnapshot`、current WM ref/digest、task/config/Evidence |
+| 输入 | ready `l1_product_manifest`，同时保留 `l1_snapshot` compatibility ref，外加已通过的 data/kg/evidence/l1 gates | `L1FinalProduct`、`L1BindingSnapshot`、current WM ref/digest、task/config/Evidence |
 | 运行前检查 | 重载 snapshot；验证 L1 transition status 为 `ready`；检查 context version | 对 observation、binding、WM digest 做统一 final-view gate |
 | 输出 | `l2_strategy` + `l2_gate` + review id | `L2DecisionSet` / `L2Strategy`，完整保留 fact/evidence/conflict/uncertainty/gap lineage |
 | 禁止内容 | 代码递归拒绝 candidate、geometry、scenario、execution、planned state；拒绝 goal/target-like metrics | 同样禁止，把规划意图与可执行空间对象严格分离 |
-| 当前风险 | L2 入口仍以 `l1_snapshot` 命名和传递，final manifest/binding/WM 是 transition 中的额外状态，不是单一产品句柄 | 由轻量 `L1ProductManifest` 封装最终可消费视图，L2 不再依赖多处拼装 |
+| 当前风险 | L2 已从 ready manifest 进入，但仍保留 `l1_snapshot_ref` 兼容字段；完整 post-commit binding revalidation 和真实运行验收仍需加强 | L2 只消费版本一致的 final view，并以 manifest 作为唯一产品句柄 |
 
-结论：L2 的防越界校验已经很强，但产品形态尚未收敛。不能只看到 `l1_snapshot` 已重载就宣称“L2 已经消费 L1 final view”；从目标设计角度看还缺 manifest 和统一 finalization contract。
+结论：L2 的防越界校验已经很强，manifest/final-view 入口已经接通；但不能把契约测试通过等同于真实 fresh L1→GROUND→L2 运行闭环，post-commit revalidation 和实际运行验收仍是剩余工作。
 
 ### 8.2 L3 当前实现 vs 目标设计
 
@@ -390,7 +390,7 @@ PlanningProgram / admitted planning intent
 | location mention | explicit structured fields 进入 work item | mention 与 entity 分离，禁止名字即实体 | 基本完成，仍需统一 finalization |
 | relation grounding | relation anchor/方向保留，端点独立接地 | relation binding 有独立终态和 revalidation | `PARTIAL` |
 | aggregation conflict | comparable numeric contradiction 触发 L1 rework | conflict group、supersedes、无平均覆盖 | `PARTIAL` |
-| L1 product | `l1_snapshot`、`l1_gate`、sidecars、WM refs 分散存在 | `L1ProductManifest` 封装 final view | 关键差距，影响 L2/L3 依赖表达 |
+| L1 product | 已有 reference-only `l1_product_manifest`，并通过 parent closure 绑定 snapshot、sidecars、projection、WM current snapshot 和 gate | manifest 成为 L2/L3 final-view authority | `PARTIAL`：完整 commit 后 revalidation、真实 fresh run 和 invalidation 仍缺 |
 | evidence gap | typed gap、recovery pointer、bounded explore | gap/failure/HUMAN 三类语义稳定且可重放 | 基本具备，provider coverage/lease 仍不完整 |
 | L1-GROUND terminal | exact/feature-set/inferred/ambiguous/unresolved 已兼容 | 统一 terminal taxonomy + proposal/decision artifact | `PARTIAL` |
 | World Model 写入权 | 当前 orchestration 调用 `WorldModelCommitPort`，V2 store 原子提交 | GROUND 只产 proposal，Cognition transaction 是 writer | 需要进一步拆 ownership |
@@ -402,11 +402,11 @@ PlanningProgram / admitted planning intent
 
 ## 十、最值得优先处理的风险
 
-### P0：先统一 L1 final product，再继续扩大 L2 消费
+### P0：验证并强化 L1 final product，再继续扩大 L2 消费
 
-当前 L2 的入口已经阻止 partial World projection，但输入句柄仍是 `l1_snapshot`，而最终可消费语义分散在：snapshot、l1 gate、l1 observations、l1 bindings、world model current snapshot 和 transition refs。
+当前 L2 的入口已经要求 ready manifest，并继续阻止 partial World projection。manifest 已把最终可消费语义收拢为引用封套，但仍需通过真实 fresh run 验证它在 GROUND commit 后始终可重载。
 
-建议先定义并持久化轻量 `L1ProductManifest`，至少包含：
+manifest 当前包含：
 
 - `context_version/fingerprint`；
 - `l1_snapshot` ref；
@@ -418,7 +418,7 @@ PlanningProgram / admitted planning intent
 - parent/dependency digest；
 - finalization status 和 generation。
 
-然后让 L2 只从 manifest 解析 final view，并把现有 transition 校验降为 manifest 的内部一致性检查。
+后续应让 L2/L3 持续只从 manifest 解析 final view，并把现有 transition 校验保持为 manifest 的内部一致性检查，而不是重新引入多引用拼装。
 
 ### P1：把 GROUND proposal、Cognition commit、post-commit revalidation 拆成明确的 contract
 
@@ -484,13 +484,12 @@ python -m pytest tests/test_data_p1_p2_docs.py tests/test_data_boundary_contract
 
 建议按以下顺序推进，不要先扩充更多维度或更多 provider：
 
-1. **冻结产品语义**：定义 `L1ProductManifest`，明确 snapshot、binding、WM current snapshot 和 gate 的 parent/digest 关系。
-2. **统一 finalization**：让 L1-GROUND 完成后由单一 finalizer 重新校验 context、binding、WM digest，再发布 manifest。
-3. **重构 L2 入口**：L2 只接收 manifest 解析出的 final view；保留禁止 executable fields 的现有保护。
-4. **拆 GROUND ownership**：把 proposal、decision、Cognition transaction、revalidation 从大 orchestration 中抽出。
-5. **补 conflict/invalidation artifact**：补 conflict group/supersedes 和 dependency/subgraph digest。
-6. **修订 acceptance**：更新 `business_stage_boundary_probe.py` 的 source-family 假设，增加 final manifest、partial gap、post-commit revalidation 和局部 invalidation 的契约测试。
-7. **再做全链路 benchmark**：以真实标注集登记 source-span、地点接地、candidate recall、ambiguity 和 relation accuracy 质量门。
+1. **真实运行验证**：执行 Jintian 三维 `location / land_use / traffic`，再执行完整 12 维 fresh L1 OBSERVE。
+2. **复核 finalization**：验证 GROUND commit 后 manifest、child refs、context 和 WM digest 可重载且闭包一致。
+3. **拆 GROUND ownership**：把 proposal、decision、Cognition transaction、完整 post-commit revalidation 从大 orchestration 中抽出。
+4. **补 conflict/invalidation artifact**：补 conflict group/supersedes 和 dependency/subgraph digest。
+5. **修订 acceptance**：更新 `business_stage_boundary_probe.py` 的 source-family 假设，增加 manifest、partial gap、post-commit revalidation 和局部 invalidation 的契约测试。
+6. **再做全链路 benchmark**：以真实标注集登记 source-span、地点接地、candidate recall、ambiguity 和 relation accuracy 质量门。
 
 ## 十三、推荐阅读路径
 
@@ -517,6 +516,8 @@ python -m pytest tests/test_data_p1_p2_docs.py tests/test_data_boundary_contract
 - [L1 observation contracts](../../backend/app/modules/l1/observation_draft.py)
 - [L1 aggregation](../../backend/app/modules/l1/aggregation.py)
 - [L1 gate](../../backend/app/modules/l1/gate.py)
+- [L1 product manifest contract](../../backend/app/contracts/l1/product_manifest.py)
+- [L1 finalization](../../backend/app/modules/l1/finalization.py)
 - [Layer aggregate workflow](../../backend/app/workflow/layers/layer_aggregate_node.py)
 - [Layer router](../../backend/app/workflow/layers/layer_router.py)
 - [L1-GROUND application](../../backend/app/modules/ground/application.py)

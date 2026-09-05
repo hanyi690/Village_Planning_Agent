@@ -1,6 +1,6 @@
 # 08 认知闭环实施顺序
 
-> Status: TARGET PLAN
+> Status: HISTORICAL PLAN (execution has converged to v2_only)
 >
 > 本文件只规定实施顺序、兼容门和回滚。它不证明任务已经完成；完成度见
 > <code>05_MIGRATION.md</code>。
@@ -26,11 +26,10 @@ DATA
 
 1. contract 先于 producer，producer 先于 consumer；
 2. 每一步同时完成 persist/reload/failure/recovery；
-3. 新旧路径只能通过显式 adapter 共存；
-4. shadow 只比较，不写第二份权威状态；
-5. 每个切换门可按 session/branch 回退；
-6. 代码存在不等于状态 CURRENT；
-7. 先完成真实纵向闭环，再扩横向能力。
+3. 迁移期旧路径只能通过显式 adapter 共存；
+4. 代码存在不等于状态 CURRENT；
+5. 先完成真实纵向闭环，再扩横向能力；
+6. 迁移完成后必须物理删除旧 adapter、shadow 比较器和回退分支。
 
 ## 3. Phase A：统一状态与产品
 
@@ -233,28 +232,24 @@ hard constraint violation
 6. generic point/line/polygon EXECUTE；
 7. VALIDATE/RECONCILE/DELIVER。
 
-## 12. Shadow 与切换
+## 12. 已完成的切换
 
-允许模式：
+本节记录历史迁移决策，不再定义运行时模式。当前执行合同只有：
 
 ~~~text
-legacy_read
-shadow_v2
-prefer_v2
 v2_only
 ~~~
 
 规则：
 
-- shadow 不写第二个 current truth；
-- compare 以 stable refs、status、lineage、candidate set 和 digest 为维度；
-- 差异形成 artifact，不写日志即丢；
-- 切换按 session/branch 配置；
-- <code>v2_only</code> 前必须证明历史 artifact 的读兼容或明确拒绝策略。
+- Context、WM、Evidence、GROUND 均只消费 DATA-backed World Model；
+- 旧 Bundle/BSM/DLBM、shadow compare 和旧 World Model 回退路径已从运行时代码物理删除；
+- 不支持的历史 artifact 必须按明确 schema/replay contract 拒绝，不通过隐式转换恢复；
+- `world_model_mode` 仅作为固定的 `v2_only` authority/version 字段，不是可配置的运行时分支。
 
 ## 13. 删除门
 
-只有同时满足才删除兼容路径：
+历史删除门已经满足并在当前实现中执行：
 
 - 无生产调用者；
 - fresh 纵向闭环通过；

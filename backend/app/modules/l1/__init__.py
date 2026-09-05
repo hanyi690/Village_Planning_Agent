@@ -15,3 +15,6 @@ __all__ = [
     "analyze_dimension",
     "run_l1",
 ]
+from .finalization import finalize_l1_product, load_ready_l1_product_manifest
+
+__all__ = ["finalize_l1_product", "load_ready_l1_product_manifest"]

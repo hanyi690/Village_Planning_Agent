@@ -240,6 +240,7 @@ def _stage_defaults(stage: str, call_type: LLMCallType) -> dict[str, Any]:
             "semaphore_scope": "ground",
         }
     if normalized in {
+        "data",
         "cognition",
         "evidence",
         "select",

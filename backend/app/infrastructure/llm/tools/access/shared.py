@@ -10,15 +10,20 @@ from app.infrastructure.logging import get_logger
 logger = get_logger(__name__)
 
 
-def session_kg(session_id: str):
-    """Return the session KG, or None if no KG is registered for this session."""
+def session_world_model(session_id: str):
+    """Return the session's DATA-backed current-world read object."""
     try:
-        from app.infrastructure.kg.manager import KGManager
+        from app.infrastructure.context_runtime.manager import get_cached_context
 
-        manager = KGManager()
-        return manager.get_session_kg(session_id)
+        context = get_cached_context(session_id)
+        if context is None:
+            return None
+        return (
+            getattr(getattr(context, "ports", None), "current_world", None)
+            or getattr(context, "world_model", None)
+        )
     except Exception as e:
-        logger.warning("[Access] KG access failed for %s: %s", session_id, e)
+        logger.warning("[Access] current-world access failed for %s: %s", session_id, e)
         return None
 
 
@@ -28,10 +33,9 @@ def budget_check(payload: Dict[str, Any], hard_limit: int = 6000) -> Dict[str, A
     Does not hard-truncate (tools already bound their own top_k / max_chars),
     but flags oversized payloads so callers/LLM know the view is partial.
     """
-    from app.infrastructure.kg.queries.contracts import TokenBudget
-
     try:
-        est = TokenBudget.estimate_dict(payload)
+        serialized = json.dumps(payload, ensure_ascii=False, default=str, sort_keys=True)
+        est = max(1, len(serialized) // 2)
     except Exception:
         est = len(str(payload))
     payload["_token_estimate"] = est
@@ -69,7 +73,7 @@ def simplify_geometry(geom: Optional[Dict[str, Any]], factor: float) -> Optional
 
 
 __all__ = [
-    "session_kg",
+    "session_world_model",
     "budget_check",
     "tool_reply",
     "simplify_geometry",

@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
+from threading import RLock
 from typing import Any
 
 from app.contracts.evidence.evidence_contracts import EvidenceFact, EvidenceSource
 
 RETRIEVER_VERSION = "data-catalog-v1"
 _FEATURE_LIMIT = 12
+_SEARCH_INDEX_CACHE: OrderedDict[str, tuple[tuple[Any, str], ...]] = OrderedDict()
+_SEARCH_INDEX_CACHE_LOCK = RLock()
+_SEARCH_INDEX_CACHE_LIMIT = 8
 
 
 def _query_matches(feature: Any, query: str) -> bool:
@@ -18,6 +23,39 @@ def _query_matches(feature: Any, query: str) -> bool:
     values = [getattr(feature, "source_feature_ref", ""), getattr(feature, "layer_ref", "")]
     values.extend(str(value) for value in attrs.values() if value not in (None, "", [], {}))
     return text in " ".join(str(value).casefold() for value in values)
+
+
+def _search_index(snapshot: Any) -> tuple[tuple[Any, str], ...]:
+    """Build one bounded query index for an immutable catalog snapshot."""
+
+    digest = str(getattr(snapshot, "digest", "") or "")
+    if digest:
+        with _SEARCH_INDEX_CACHE_LOCK:
+            cached = _SEARCH_INDEX_CACHE.get(digest)
+            if cached is not None:
+                _SEARCH_INDEX_CACHE.move_to_end(digest)
+                return cached
+    index = []
+    for feature in snapshot.features:
+        attrs = getattr(feature, "raw_attributes", {}) or {}
+        values = [
+            getattr(feature, "source_feature_ref", ""),
+            getattr(feature, "layer_ref", ""),
+        ]
+        values.extend(
+            str(value)
+            for value in attrs.values()
+            if value not in (None, "", [], {})
+        )
+        index.append((feature, " ".join(str(value).casefold() for value in values)))
+    result = tuple(index)
+    if digest:
+        with _SEARCH_INDEX_CACHE_LOCK:
+            _SEARCH_INDEX_CACHE[digest] = result
+            _SEARCH_INDEX_CACHE.move_to_end(digest)
+            while len(_SEARCH_INDEX_CACHE) > _SEARCH_INDEX_CACHE_LIMIT:
+                _SEARCH_INDEX_CACHE.popitem(last=False)
+    return result
 
 
 async def retrieve_from_data_catalog(
@@ -39,8 +77,9 @@ async def retrieve_from_data_catalog(
     assert_current_world_catalog(snapshot)
     facts: list[EvidenceFact] = []
     sources: list[EvidenceSource] = []
-    for feature in snapshot.features:
-        if not _query_matches(feature, query):
+    normalized_query = str(query or "").strip().casefold()
+    for feature, search_text in _search_index(snapshot):
+        if normalized_query and normalized_query not in search_text:
             continue
         attrs = dict(feature.raw_attributes or {})
         label = next(
@@ -60,6 +99,11 @@ async def retrieve_from_data_catalog(
                 "dataset_ref": feature.dataset_ref,
                 "layer_ref": feature.layer_ref,
                 "geometry_kind": feature.geometry_kind,
+                "normalized_geometry_kind": getattr(
+                    feature,
+                    "normalized_geometry_kind",
+                    "unknown",
+                ),
                 "source_crs": feature.source_crs,
                 "source_snapshot_ref": str(snapshot.snapshot_id or ""),
                 "source_feature_digest": feature.source_feature_digest,

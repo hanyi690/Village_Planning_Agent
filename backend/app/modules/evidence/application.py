@@ -295,7 +295,7 @@ class EvidenceContext(BaseModel):
     context_refs: tuple[str, ...] = ()
     available_capabilities: tuple[str, ...] = ()
     available_sources: tuple[str, ...] = ()
-    world_model_mode: str = "off"
+    world_model_mode: str = "v2_only"
     data_catalog: Any = None
     external_observation_snapshot: Any = None
     current_world: Any = None
@@ -459,12 +459,9 @@ class EvidenceContext(BaseModel):
                     data_catalog = DataResourceCatalog(catalog_snapshot)
             except Exception:
                 data_catalog = None
-        world_model_mode = str(state.get("world_model_mode") or "").strip()
-        if not world_model_mode and cached_context is not None:
-            world_model_mode = str(
-                getattr(cached_context, "world_model_mode", "off") or "off"
-            )
-        world_model_mode = world_model_mode or "off"
+        world_model_mode = str(state.get("world_model_mode") or "v2_only").strip()
+        if world_model_mode != "v2_only":
+            raise RuntimeError("Evidence requires the v2_only World Model authority")
         capabilities = {
             str(item).strip()
             for item in state.get("available_capabilities") or ()
@@ -516,7 +513,6 @@ class EvidenceContext(BaseModel):
         if cached_context is not None:
             world_model = (
                 getattr(cached_context, "world_model", None)
-                or getattr(cached_context, "world_model_shadow", None)
                 or getattr(cached_context, "kg", None)
             )
         if data_catalog is not None and session_id:
@@ -722,7 +718,7 @@ class EvidenceContext(BaseModel):
             "context_refs": tuple(context_refs),
             "village_name": str(getattr(context, "village_name", "") or ""),
             "world_model_mode": str(
-                getattr(context, "world_model_mode", "off") or "off"
+                getattr(context, "world_model_mode", "v2_only") or "v2_only"
             ),
             "data_catalog": getattr(context, "data_resource_catalog", None),
             "external_observation_snapshot": getattr(
@@ -2054,7 +2050,7 @@ class EvidenceApplication:
     ) -> dict[str, list[object]]:
         """Return current-session source features through the Evidence boundary."""
 
-        from app.infrastructure.evidence_runtime.source_semantic import (
+        from app.infrastructure.evidence_runtime.source_semantic_runtime import (
             collect_authoritative_source_features,
         )
 
@@ -2066,7 +2062,7 @@ class EvidenceApplication:
     ) -> tuple[list[Any], int]:
         """Describe source features for deterministic semantic binding."""
 
-        from app.infrastructure.evidence_runtime.source_semantic import (
+        from app.infrastructure.evidence_runtime.source_semantic_runtime import (
             source_descriptors,
         )
 
@@ -2075,7 +2071,7 @@ class EvidenceApplication:
     def install_source_semantic_snapshot(self, context: Any, snapshot: Any) -> None:
         """Install a local source-semantic overlay without mutating WM."""
 
-        from app.infrastructure.evidence_runtime.source_semantic import (
+        from app.infrastructure.evidence_runtime.source_semantic_runtime import (
             install_source_semantic_snapshot,
         )
 
@@ -2084,7 +2080,7 @@ class EvidenceApplication:
     def accepted_semantic_decisions(self, snapshot: Any) -> dict[str, Any]:
         """Return only accepted decisions from a persisted semantic snapshot."""
 
-        from app.infrastructure.evidence_runtime.source_semantic import (
+        from app.infrastructure.evidence_runtime.source_semantic_runtime import (
             accepted_semantic_decisions,
         )
 
@@ -2100,7 +2096,7 @@ class EvidenceApplication:
     ) -> Any:
         """Classify current source semantics without exposing runtime routing."""
 
-        from app.infrastructure.evidence_runtime.source_semantic import (
+        from app.infrastructure.evidence_runtime.source_semantic_runtime import (
             classify_source_semantics,
         )
 
@@ -2110,15 +2106,6 @@ class EvidenceApplication:
             source_features=source_features,
             classifier=classifier,
         )
-
-    def install_intent_layer(self, kg: Any, intent: Any) -> None:
-        """Install the accepted target intent into the current KG projection."""
-
-        from app.infrastructure.evidence_runtime.source_semantic import (
-            install_intent_layer,
-        )
-
-        install_intent_layer(kg, intent)
 
     async def retrieve(
         self,

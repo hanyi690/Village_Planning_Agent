@@ -425,13 +425,9 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 suitability_grounding,
                 context,
                 plan_intent=plan_intent,
-                # DATA is the only source authority.  Passing a newly
-                # constructed legacy DataCatalog here used to discard the
-                # session's normalized uploads and made terrain/source
-                # resolution depend on Bundle layer names.  The terrain
-                # resolver accepts both the generic catalog and the narrow
-                # compatibility adapter when a legacy context is explicitly
-                # in use.
+                # DATA is the only source authority. The session's normalized
+                # catalog is passed through unchanged, so terrain/source
+                # resolution cannot depend on a filename or layer convention.
                 catalog=getattr(context, "data_resource_catalog", None),
                 cache_dir=session_run_dir(_run_id(state)) / "terrain-evidence",
             )

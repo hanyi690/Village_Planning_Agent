@@ -550,8 +550,6 @@ def _kg_entities_by_feature(
     if not callable(finder):
         return {}
     world_model = getattr(context, "world_model", None)
-    if _text(getattr(context, "world_model_mode", "")).casefold() == "shadow":
-        world_model = getattr(context, "world_model_shadow", None) or world_model
     snapshot = getattr(
         getattr(context, "data_resource_catalog", None),
         "snapshot",

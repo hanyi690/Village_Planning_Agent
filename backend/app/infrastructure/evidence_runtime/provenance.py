@@ -144,7 +144,7 @@ def canonicalize_fact_provenance(
     if not kg_refs:
         return facts
 
-    session_root = f"session_kg:{str(session_id or '').strip()}"
+    session_root = f"world_model:{str(session_id or '').strip()}"
     kg_root = next(
         (
             reference

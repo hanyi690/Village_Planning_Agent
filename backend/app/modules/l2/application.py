@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.contracts.artifacts.ref import ArtifactRef
 from app.contracts.l1.l1_contracts import L1ObservationSnapshot
 from app.contracts.l2.l2_contracts import L2Strategy
+from app.modules.l1.finalization import load_ready_l1_product_manifest
 
 
 class L2RunRequest(BaseModel):
@@ -19,17 +20,26 @@ class L2RunRequest(BaseModel):
     session_id: str = Field(min_length=1)
     context_version: str = Field(min_length=1)
     l1_snapshot_ref: ArtifactRef
+    l1_product_manifest_ref: ArtifactRef
 
     @classmethod
     def from_state(cls, state: Mapping[str, Any]) -> "L2RunRequest":
         ref = (state.get("artifact_refs") or {}).get("l1_snapshot")
         if not ref:
             raise RuntimeError("L2 requires the canonical l1_snapshot artifact ref")
+        manifest_ref = (state.get("artifact_refs") or {}).get(
+            "l1_product_manifest"
+        )
+        if not manifest_ref:
+            raise RuntimeError(
+                "L2 requires the canonical L1ProductManifest artifact ref"
+            )
         return cls(
             run_id=str(state.get("run_id") or state.get("session_id") or ""),
             session_id=str(state.get("session_id") or ""),
             context_version=str(state.get("context_version") or ""),
             l1_snapshot_ref=ArtifactRef.model_validate(ref),
+            l1_product_manifest_ref=ArtifactRef.model_validate(manifest_ref),
         )
 
 
@@ -102,6 +112,11 @@ class L2Application:
 
     async def run(self, state: Mapping[str, Any]) -> L2RunResult:
         request = L2RunRequest.from_state(state)
+        manifest = load_ready_l1_product_manifest(state)
+        if manifest.l1_snapshot_ref != request.l1_snapshot_ref:
+            raise RuntimeError(
+                "L2 L1ProductManifest does not close over the requested l1_snapshot"
+            )
         from app.workflow.stages.support import require_upstream_gates
 
         require_upstream_gates(dict(state), ("data", "kg", "evidence", "l1"))
@@ -158,6 +173,7 @@ async def run_l2(state: Mapping[str, Any]) -> L2RunResult:
 
 
 async def analyze_l2_dimension(state: Mapping[str, Any]) -> dict[str, Any]:
+    load_ready_l1_product_manifest(state)
     from app.workflow.stages.support import require_upstream_gates
 
     require_upstream_gates(dict(state), ("data", "kg", "evidence", "l1"))

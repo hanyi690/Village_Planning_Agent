@@ -509,7 +509,7 @@ async def retrieve_evidence(
                 )
                 sources = []
                 if facts or cognition.kg_confidence > 0:
-                    sources = [EvidenceSource(source_type="kg", reference=f"session_kg:{session_id}", confidence=cognition.kg_confidence)]
+                    sources = [EvidenceSource(source_type="kg", reference=f"world_model:{session_id}", confidence=cognition.kg_confidence)]
             elif query.retriever == RetrieverKind.DATA_CATALOG.value:
                 facts, sources = await _invoke(
                     retrieve_from_data_catalog,

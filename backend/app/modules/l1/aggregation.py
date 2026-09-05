@@ -738,8 +738,8 @@ async def l1_aggregate(
             ),
             "world_model_mode": str(
                 state.get("world_model_mode")
-                or getattr(cached_context, "world_model_mode", "off")
-                or "off"
+                or getattr(cached_context, "world_model_mode", "v2_only")
+                or "v2_only"
             ),
             "data_catalog": (
                 state.get("data_catalog")

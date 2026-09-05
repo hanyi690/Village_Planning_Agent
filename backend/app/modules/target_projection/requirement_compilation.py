@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import hashlib
 
-from app.data.ingestion.compiler.spec_mapper import (
+from app.modules.target_projection.spatial_reference_mapper import (
     map_intervention_to_spec,
     map_interventions_to_specs,
 )

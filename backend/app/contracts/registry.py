@@ -76,6 +76,14 @@ CONTRACT_REGISTRY: dict[str, ContractRegistration] = {
         version="1",
         description="Bounded closed-set schema mapping proposals for one source-collection table page.",
     ),
+    "data.temporal_role": ContractRegistration(
+        key="data.temporal_role",
+        role="llm_output",
+        owner="data",
+        model_path="app.contracts.data.temporal_role_contracts:TemporalRoleProposalBatch",
+        version="1",
+        description="Bounded closed-set temporal role decision for one uploaded source profile.",
+    ),
     "llm.closed_set": ContractRegistration(
         key="llm.closed_set",
         role="llm_output",

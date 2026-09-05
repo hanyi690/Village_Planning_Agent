@@ -1,8 +1,7 @@
-"""knowledge_graph — 会话 KG 语义查询工具。
+"""knowledge_graph — 会话 current-world 语义查询工具。
 
-Wraps the KG semantic query layer (kg/queries/semantic.py + cognition.py).
-Returns token-budgeted semantic context for villages, parcels, entities,
-constraints — never raw SPARQL / turtle.
+Reads the bounded DATA-backed World Model port. Returns token-budgeted
+entity/representation context and never exposes raw RDF or a legacy Bundle.
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ from typing import Any, Dict, Optional, Annotated
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from .shared import budget_check, session_kg, tool_reply
+from .shared import budget_check, session_world_model, tool_reply
 
 
 async def knowledge_graph_impl(
@@ -22,43 +21,35 @@ async def knowledge_graph_impl(
     entity_type: str = "",
     label: str = "",
 ) -> Dict[str, Any]:
-    kg = session_kg(session_id)
-    if kg is None:
-        return {"success": False, "error": f"无 session KG（session_id={session_id}）"}
+    world_model = session_world_model(session_id)
+    if world_model is None:
+        return {"success": False, "error": f"无 current-world view（session_id={session_id}）"}
 
     try:
-        from app.infrastructure.kg.queries import (
-            get_entity_by_bsm,
-            get_entity_semantics,
-            get_parcel_neighbors_semantic,
-            get_parcel_semantic_context,
-            get_parcels_semantic_list,
-            get_village_constraint_coverage,
-            get_village_semantic_summary,
-        )
-        from app.infrastructure.kg.queries.cognition import get_village_cognition
-
-        if kind == "cognition":
-            r = get_village_cognition(kg, mode="full")
-            return budget_check({"semantic": r.semantic, "structured": r.structured})
-        if kind == "village":
-            return budget_check(get_village_semantic_summary(kg) or {})
+        find_entities = getattr(world_model, "find_entities", None)
+        if not callable(find_entities):
+            return {"success": False, "error": "当前世界模型没有可用的只读查询端口"}
+        rows = list(find_entities(
+            entity_ref=bsm if bsm else "",
+            name=label if label else "",
+            entity_type=entity_type if entity_type else "",
+            limit=32,
+        ))
+        if kind in {"cognition", "village"}:
+            return budget_check({
+                "semantic": {
+                    "village": session_id,
+                    "entity_count": len(rows),
+                },
+                "structured": {"entities": rows},
+            })
         if kind == "constraints":
-            return budget_check({"constraint_coverage": get_village_constraint_coverage(kg) or []})
-        if kind == "parcel":
-            if bsm:
-                payload = {
-                    "bsm": bsm,
-                    "detail": get_parcel_semantic_context(kg, bsm) or {},
-                    "neighbors": get_parcel_neighbors_semantic(kg, bsm) or [],
-                }
-            else:
-                payload = {"parcels": get_parcels_semantic_list(kg) or []}
-            return budget_check(payload)
-        if kind == "entity":
-            if bsm:
-                return budget_check({"entity": get_entity_by_bsm(kg, bsm, entity_type) or {}})
-            return budget_check(get_entity_semantics(kg, entity_label=label, entity_type=entity_type) or {})
+            return budget_check({"constraint_coverage": [], "entities": rows})
+        if kind in {"parcel", "entity"}:
+            return budget_check({
+                "query": {"entity_ref": bsm, "label": label, "entity_type": entity_type},
+                "entities": rows,
+            })
         return {"success": False, "error": f"未知查询类型: {kind}"}
     except Exception as e:
         return {"success": False, "error": f"KG 查询失败: {e}"}

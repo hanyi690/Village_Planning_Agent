@@ -55,6 +55,50 @@ _NON_SEMANTIC_PROPERTY_TOKENS = (
 _RUNTIME_STORE: Any | None = None
 
 
+def _feature_representation_kind(feature: object) -> str:
+    """Return the DATA-normalized family used for semantic source grouping."""
+
+    normalized = str(
+        getattr(feature, "normalized_geometry_kind", "") or ""
+    ).strip().casefold()
+    if normalized and normalized != "unknown":
+        return normalized
+    normalized_geometry = getattr(feature, "normalized_geometry", None)
+    if isinstance(normalized_geometry, dict):
+        normalized_type = str(
+            normalized_geometry.get("type") or ""
+        ).strip().casefold()
+        inferred = {
+            "point": "point",
+            "multipoint": "point",
+            "linestring": "line",
+            "multilinestring": "line",
+            "polygon": "polygon",
+            "multipolygon": "polygon",
+            "geometrycollection": "collection",
+        }.get(normalized_type, "")
+        if inferred:
+            return inferred
+    return str(getattr(feature, "geometry_kind", "") or "").strip().casefold()
+
+
+def _feature_representation_type(feature: object) -> str:
+    """Return the exact normalized GeoJSON type for candidate compatibility."""
+
+    for value in (
+        getattr(feature, "normalized_geometry", None),
+        getattr(feature, "geometry", None),
+    ):
+        if isinstance(value, dict) and str(value.get("type") or "").strip():
+            return str(value["type"]).strip()
+    return {
+        "point": "Point",
+        "line": "LineString",
+        "polygon": "Polygon",
+        "multipatch": "MultiPolygon",
+    }.get(_feature_representation_kind(feature), "")
+
+
 def _runtime_store() -> Any:
     global _RUNTIME_STORE
     if _RUNTIME_STORE is None:
@@ -186,20 +230,9 @@ def collect_authoritative_source_features(context: Any) -> dict[str, list[object
 
         assert_current_world_catalog(snapshot)
     for feature in list(getattr(snapshot, "features", ()) or ()):
-        kind = str(getattr(feature, "geometry_kind", "") or "").casefold()
+        kind = _feature_representation_kind(feature)
         if kind in {"", "unknown"}:
-            geometry = getattr(feature, "geometry", None) or {}
-            geometry_type = str(
-                geometry.get("type", "") if isinstance(geometry, dict) else ""
-            ).casefold()
-            kind = {
-                "point": "point",
-                "multipoint": "point",
-                "linestring": "line",
-                "multilinestring": "line",
-                "polygon": "polygon",
-                "multipolygon": "polygon",
-            }.get(geometry_type, kind)
+            kind = "unknown"
         if kind == "point":
             group_key = "facility"
         elif kind == "line":
@@ -229,15 +262,7 @@ def source_feature_descriptor(
     if not source_feature_id:
         return None
     label, semantic_properties = _semantic_properties(feature)
-    geometry = getattr(feature, "geometry", {}) or {}
-    geometry_kind = str(geometry.get("type") or "") if isinstance(geometry, dict) else ""
-    if not geometry_kind:
-        geometry_kind = {
-            "point": "Point",
-            "line": "LineString",
-            "polygon": "Polygon",
-            "multipatch": "MultiPolygon",
-        }.get(str(getattr(feature, "geometry_kind", "") or "").casefold(), "")
+    geometry_kind = _feature_representation_type(feature)
     properties = semantic_properties
     descriptor_layer_key = str(getattr(feature, "layer_ref", "") or "").strip() or {
         "facility": "annotations_current",
@@ -313,12 +338,9 @@ def kg_semantic_candidates(
     each L1 phrase keeps the vocabulary small even when the bundle contains
     hundreds of roads or parcels.
     """
-    mode = str(getattr(context, "world_model_mode", "") or "").strip().casefold()
-    if mode == "shadow":
-        kg = getattr(context, "world_model_shadow", None)
-    else:
-        kg = getattr(getattr(context, "ports", None), "world_model", None)
-        kg = kg or getattr(context, "kg", None)
+    kg = getattr(getattr(context, "ports", None), "world_model", None)
+    kg = kg or getattr(context, "world_model", None)
+    kg = kg or getattr(context, "kg", None)
     kg = getattr(kg, "read_port", kg)
     finder = getattr(kg, "find_entities", None)
     if not callable(finder):

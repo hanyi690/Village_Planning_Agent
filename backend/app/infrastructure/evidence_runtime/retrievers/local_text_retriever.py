@@ -119,7 +119,7 @@ def _records_from_context(context: Any) -> list[dict[str, str]]:
     for item in list(getattr(context, "input_documents", []) or []):
         if isinstance(item, dict):
             records.append(_record(
-                "bundle_document",
+                "document",
                 item.get("name") or item.get("source") or "document",
                 item.get("content", ""),
                 title=item.get("name") or item.get("source", ""),
@@ -241,7 +241,7 @@ def _retrieve_records(
         if source_ref in seen:
             continue
         seen.add(source_ref)
-        kind = record.get("kind", "bundle_document")
+        kind = record.get("kind", "document")
         fact_type = "l1_semantic_context" if kind == "l1_source_span" else "planning_text"
         fact = EvidenceFact(
             statement=chunk,

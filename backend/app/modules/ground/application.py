@@ -2372,9 +2372,11 @@ class GroundApplication:
         l1_ref = (state.get("artifact_refs") or {}).get("l1_snapshot")
         validate_artifact_context(dict(state), "l1_snapshot", l1_ref)
         context_ref = dict(state.get("context_ref") or {})
-        expected_mode = str(
-            COGNITION_WORLD_MODEL_MODE or "off"
-        ).strip().lower()
+        expected_mode = str(COGNITION_WORLD_MODEL_MODE or "").strip().lower()
+        if expected_mode != "v2_only":
+            raise RuntimeError(
+                "L1_LOCATION_GROUNDING_CONTEXT_MISSING: only v2_only is supported"
+            )
         expected_snapshot_digest = str(
             context_ref.get("snapshot_digest")
             or context_ref.get("data_snapshot_digest")
@@ -2391,10 +2393,7 @@ class GroundApplication:
         )
         context_requires_reload = bool(
             context is None
-            or not context_has_cognition_ports(
-                context,
-                world_model_mode=expected_mode,
-            )
+            or not context_has_cognition_ports(context)
             or (
                 expected_world_model_digest
                 and live_world_model_digest != expected_world_model_digest
@@ -2452,10 +2451,7 @@ class GroundApplication:
                     "schema_mapping_snapshot",
                     SourceSemanticMappingSnapshot,
                 )
-            if expected_mode in {"shadow", "prefer_v2", "v2_only"} and (
-                schema_mapping_snapshot is None
-                or not schema_mapping_artifact_ref
-            ):
+            if schema_mapping_snapshot is None or not schema_mapping_artifact_ref:
                 raise RuntimeError(
                     "L1_LOCATION_GROUNDING_CONTEXT_MISSING: exact schema mapping artifact is required"
                 )
@@ -2485,12 +2481,7 @@ class GroundApplication:
                 artifact_root=str(state.get("artifact_root") or ""),
                 defer_cognition_bootstrap=False,
             )
-        if expected_mode in {"shadow", "prefer_v2", "v2_only"} and not (
-            context_has_cognition_ports(
-                context,
-                world_model_mode=expected_mode,
-            )
-        ):
+        if not context_has_cognition_ports(context):
             raise RuntimeError(
                 "L1_LOCATION_GROUNDING_CONTEXT_MISSING: WorldModel ports are unavailable"
             )
@@ -2502,11 +2493,11 @@ class GroundApplication:
             else getattr((state.get("artifact_refs") or {}).get("l1_snapshot"), "digest", "")
         )
         mode = str(getattr(context, "world_model_mode", "") or "").strip().lower()
-        if mode not in {"shadow", "prefer_v2", "v2_only"}:
+        if mode != "v2_only":
             raise RuntimeError(
                 "L1_LOCATION_GROUNDING_CONTEXT_MISSING: v2 World Model mode is required"
             )
-        is_v2 = mode in {"shadow", "prefer_v2", "v2_only"}
+        is_v2 = True
         from app.modules.ground.projections import build_l1_identity_work_items
 
         mentions, observations = build_l1_identity_work_items(mentions)
@@ -2699,7 +2690,7 @@ class GroundApplication:
                 source_world_model_snapshot_ref=str(
                     getattr(
                         getattr(context, "world_model", None)
-                        or getattr(context, "world_model_shadow", None),
+                        or getattr(context, "kg", None),
                         "snapshot_ref",
                         "",
                     )
@@ -2708,7 +2699,7 @@ class GroundApplication:
                 source_world_model_snapshot_digest=str(
                     getattr(
                         getattr(context, "world_model", None)
-                        or getattr(context, "world_model_shadow", None),
+                        or getattr(context, "kg", None),
                         "snapshot_digest",
                         "",
                     )
@@ -3286,13 +3277,29 @@ class GroundApplication:
                     projection.identity_projection_fingerprint
                 ),
             }
+        final_state = {
+            **dict(state),
+            **identity_transition_patch,
+            "artifact_refs": {
+                **dict(state.get("artifact_refs") or {}),
+                "l1_snapshot": l1_ref_data,
+                "l1_observations": observation_ref_payload,
+                "l1_bindings": binding_ref_payload,
+                **identity_transition_refs,
+            },
+        }
+        from app.modules.l1.finalization import finalize_l1_product
+
+        finalization_patch = finalize_l1_product(final_state)
         return {
             **identity_transition_patch,
             "artifact_refs": {
                 "l1_observations": observation_ref_payload,
                 "l1_bindings": binding_ref_payload,
                 **identity_transition_refs,
+                **dict(finalization_patch.get("artifact_refs") or {}),
             },
+            "l1_finalization": finalization_patch.get("l1_finalization") or {},
             "l1_spatial_resolution": {
                 "status_counts": {
                     status: sum(
