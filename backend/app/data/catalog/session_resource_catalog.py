@@ -433,11 +433,14 @@ async def load_session_data_catalog(
             source_uris=sorted({str(row.get("source_uri")) for row in rows if row.get("source_uri")}),
             admission_decisions=admission_decisions,
         )
-    for persisted_catalog in persisted_catalogs:
-        catalog = persisted_catalog if catalog is None else catalog.merge(
-            persisted_catalog,
-            snapshot_id=f"data-session:{session_id}",
-        )
+    catalogs_to_merge = [item for item in (catalog, *persisted_catalogs) if item is not None]
+    if catalogs_to_merge:
+        catalog = catalogs_to_merge[0]
+        if len(catalogs_to_merge) > 1:
+            catalog = catalog.merge(
+                *catalogs_to_merge[1:],
+                snapshot_id=f"data-session:{session_id}",
+            )
     if catalog is not None and admission_decisions:
         existing_decisions = {
             item.decision_ref: item

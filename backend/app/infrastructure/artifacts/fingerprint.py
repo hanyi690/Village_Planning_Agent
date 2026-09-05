@@ -71,4 +71,56 @@ def semantic_checksum(value: Any) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-__all__ = ["semantic_checksum", "semantic_payload"]
+def _json_safe_semantic_payload(value: Any) -> Any:
+    """Filter a JSON-safe payload without probing every scalar for models.
+
+    Artifact publication already calls ``model_dump(mode="json")`` once in
+    the runtime layer.  This narrower walker has the same volatile-field
+    policy as ``_jsonable`` and is intentionally private to the JSON-safe
+    publication path.
+    """
+
+    if isinstance(value, dict):
+        is_contract = "created_at" in value and any(
+            key in value
+            for key in (
+                "schema_version",
+                "context_version",
+                "artifact_id",
+                "dataset_ref",
+                "snapshot_id",
+            )
+        )
+        is_provenance = all(
+            key in value for key in ("source", "run_id", "module", "timestamp")
+        )
+        is_execution_result = _is_execution_result(value)
+        return {
+            str(key): _json_safe_semantic_payload(item)
+            for key, item in value.items()
+            if not (
+                (is_contract and key in _VOLATILE_CONTRACT_FIELDS)
+                or (is_provenance and key == "timestamp")
+                or (is_execution_result and key == "task_id")
+            )
+        }
+    if isinstance(value, list):
+        return [_json_safe_semantic_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe_semantic_payload(item) for item in value]
+    return value
+
+
+def semantic_checksum_json(value: Any) -> str:
+    """Checksum a value already normalized to JSON-safe primitives."""
+
+    raw = json.dumps(
+        _json_safe_semantic_payload(value),
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+__all__ = ["semantic_checksum", "semantic_checksum_json", "semantic_payload"]

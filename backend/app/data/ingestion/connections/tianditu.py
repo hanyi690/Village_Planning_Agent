@@ -4,8 +4,8 @@ Manages credentials (TIANDITU_API_KEY), rate limit (TIANDITU_RATE_LIMIT QPS),
 retries (TIANDITU_MAX_RETRIES), timeout (GIS_TIMEOUT). One instance is shared
 by the api_vector and wmts_tile drivers targeting the national Tianditu API.
 
-Also provides high-level geocode / POI search methods used by DataCatalog
-for schema-driven village data loading (boundary → bbox derivation).
+It provides transport primitives only. Provider acquisition owns query
+construction, scope proofs, and observation publication.
 """
 
 from __future__ import annotations
@@ -115,7 +115,7 @@ class TiandituConnection(Connection):
             logger.warning("[TiandituConnection] health check failed: %s", e)
             return False
 
-    # ── Geocode / POI methods (for DataCatalog schema-driven loading) ──
+    # Provider-specific geocode/POI helpers are not DATA source discovery.
 
     def geocode(self, address: str) -> GeocodeResult:
         """Geocode an address string to (lon, lat) coordinates.

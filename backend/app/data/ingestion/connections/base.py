@@ -11,7 +11,7 @@ health check, thread-safe. For HTTP APIs we use requests.Session plus a
 shared RateLimiter rather than a C++ connection pool.
 
 Connections read credentials from app.core.settings (env vars). The YAML
-``connections:`` block in sources.yaml declares which connections exist;
+Provider runtime declares which connections exist;
 the catalog instantiates the matching Connection subclass by ``type``.
 """
 

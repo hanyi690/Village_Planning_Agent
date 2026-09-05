@@ -6,8 +6,10 @@ import hashlib
 import json
 import os
 import tempfile
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
@@ -16,6 +18,25 @@ from app.infrastructure.artifacts.fingerprint import semantic_checksum
 
 class NamedRefConflict(RuntimeError):
     """The caller tried to update a named ref from a stale descriptor."""
+
+
+_DESCRIPTOR_CACHE: OrderedDict[tuple[str, str], ArtifactDescriptor] = OrderedDict()
+_DESCRIPTOR_CACHE_LOCK = RLock()
+_DESCRIPTOR_CACHE_LIMIT = 512
+
+
+def _cache_key(base_dir: Path, descriptor_digest: str) -> tuple[str, str]:
+    return str(base_dir.resolve()), str(descriptor_digest)
+
+
+def _cache_descriptor(base_dir: Path, descriptor: ArtifactDescriptor) -> ArtifactDescriptor:
+    key = _cache_key(base_dir, descriptor.descriptor_digest)
+    with _DESCRIPTOR_CACHE_LOCK:
+        _DESCRIPTOR_CACHE[key] = descriptor
+        _DESCRIPTOR_CACHE.move_to_end(key)
+        while len(_DESCRIPTOR_CACHE) > _DESCRIPTOR_CACHE_LIMIT:
+            _DESCRIPTOR_CACHE.popitem(last=False)
+    return descriptor
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -55,10 +76,12 @@ class ContentAddressedArtifactRepository:
         branch_id: str,
         parent_digests: dict[str, str] | None = None,
         provenance: dict[str, Any] | None = None,
+        canonical_payload: bytes | None = None,
+        semantic_digest: str | None = None,
     ) -> ArtifactDescriptor:
         _token(run_id, "run_id")
         _token(branch_id, "branch_id")
-        data = _canonical_json(payload)
+        data = canonical_payload if canonical_payload is not None else _canonical_json(payload)
         blob_digest = _sha256(data)
         self._create_once(self._blob_path(blob_digest), data)
         descriptor_payload = {
@@ -67,7 +90,7 @@ class ContentAddressedArtifactRepository:
             "size_bytes": len(data),
             "schema_id": schema_id,
             "schema_version": schema_version,
-            "semantic_digest": f"sha256:{semantic_checksum(payload)}",
+            "semantic_digest": semantic_digest or f"sha256:{semantic_checksum(payload)}",
             "parent_digests": dict(sorted((parent_digests or {}).items())),
             "producer_stage": producer_stage,
             "run_id": run_id,
@@ -87,9 +110,15 @@ class ContentAddressedArtifactRepository:
             descriptor_path,
             _canonical_json(descriptor.model_dump(mode="json")),
         )
-        return self.get_descriptor(descriptor_digest)
+        return _cache_descriptor(self.base_dir, descriptor)
 
     def get_descriptor(self, descriptor_digest: str) -> ArtifactDescriptor:
+        key = _cache_key(self.base_dir, descriptor_digest)
+        with _DESCRIPTOR_CACHE_LOCK:
+            cached = _DESCRIPTOR_CACHE.get(key)
+            if cached is not None:
+                _DESCRIPTOR_CACHE.move_to_end(key)
+                return cached
         data = self._read_json(self._descriptor_path(descriptor_digest))
         descriptor = ArtifactDescriptor.model_validate(data)
         if descriptor.descriptor_digest != descriptor_digest:
@@ -100,7 +129,7 @@ class ContentAddressedArtifactRepository:
         )
         if _sha256(_canonical_json(descriptor_payload)) != descriptor_digest:
             raise ValueError("artifact descriptor content checksum mismatch")
-        return descriptor
+        return _cache_descriptor(self.base_dir, descriptor)
 
     def put_bytes(
         self,
@@ -144,7 +173,7 @@ class ContentAddressedArtifactRepository:
             descriptor_path,
             _canonical_json(descriptor.model_dump(mode="json")),
         )
-        return self.get_descriptor(descriptor_digest)
+        return _cache_descriptor(self.base_dir, descriptor)
 
     def get_json(self, descriptor: ArtifactDescriptor) -> Any:
         data = self._blob_path(descriptor.digest).read_bytes()

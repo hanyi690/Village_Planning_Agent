@@ -16,13 +16,25 @@ from typing import Any, Iterable, TypeVar
 from pydantic import ValidationError
 
 from app.infrastructure.artifacts import ContentAddressedArtifactRepository, NamedRefConflict
-from app.infrastructure.artifacts.fingerprint import semantic_checksum
+from app.infrastructure.artifacts.fingerprint import semantic_checksum_json
 from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
 from app.infrastructure.paths import run_tmp_root
 
 T = TypeVar("T")
 
 ARTIFACT_SCHEMA_VERSION = "3"
+
+# These DATA products are composed entirely of immutable JSON-safe value
+# objects and contain no nested volatile timestamp fields. For them the semantic
+# fingerprint is exactly the canonical JSON blob digest, so hashing a second
+# recursively filtered copy would only add CPU and memory pressure on large
+# GeoJSON catalogs.
+_CANONICAL_SEMANTIC_ARTIFACTS = frozenset({
+    "NormalizedResourceArtifact",
+    "RepresentationSnapshotArtifact",
+    "CapabilityIndexArtifact",
+    "DataResourceCatalogIndexSnapshot",
+})
 
 ARTIFACT_KEYS = (
     "data_catalog", "source_snapshot", "normalized_resource", "representation_snapshot", "capability_index", "data_snapshot", "data_stage", "schema_mapping_snapshot", "world_model_snapshot", "world_model_current_snapshot",
@@ -209,8 +221,6 @@ def validate_artifact_context(
         "world_model_mode",
         "world_model_snapshot_ref",
         "world_model_snapshot_digest",
-        "world_model_shadow_snapshot_ref",
-        "world_model_shadow_snapshot_digest",
     )
     fields = (*base_fields, *data_fields)
     if producer_stage not in {"data", "kg", "cognition"}:
@@ -513,6 +523,21 @@ def store_artifact(
             f"artifact {key} cannot persist a null payload"
         )
     payload_json = _jsonable(payload)
+    # ``payload_json`` is the exact JSON-safe representation sent to CAS.
+    # For immutable DATA products the canonical blob digest is also the
+    # semantic digest; this avoids a second recursive traversal of large
+    # geometry/attribute trees. ContractMeta roots still use the filtered
+    # semantic checksum below because they contain volatile fields.
+    canonical_payload = json.dumps(
+        payload_json,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if artifact_type in _CANONICAL_SEMANTIC_ARTIFACTS:
+        semantic_digest = "sha256:" + hashlib.sha256(canonical_payload).hexdigest()
+    else:
+        semantic_digest = f"sha256:{semantic_checksum_json(payload_json)}"
     selected_refs = current_refs
     if parent_keys is not None:
         required_parent_keys = tuple(dict.fromkeys(str(item) for item in parent_keys))
@@ -549,7 +574,7 @@ def store_artifact(
                 and existing.schema_version == ARTIFACT_SCHEMA_VERSION
                 and existing.parent_digests == dict(sorted(parent_digests.items()))
                 and existing.semantic_digest
-                == f"sha256:{semantic_checksum(payload)}"
+                == semantic_digest
             ):
                 return existing.model_dump(mode="json")
         except (ArtifactReplayError, ValueError, TypeError):
@@ -571,6 +596,8 @@ def store_artifact(
                 "context_fingerprint": str(state.get("context_fingerprint", "")),
                 "attempt": attempt,
             },
+            canonical_payload=canonical_payload,
+            semantic_digest=semantic_digest,
         )
         expected = None
         if current_refs.get(key):
@@ -597,7 +624,7 @@ def store_artifact(
             and existing.schema_version == ARTIFACT_SCHEMA_VERSION
             and existing.parent_digests == dict(sorted(parent_digests.items()))
             and existing.semantic_digest
-            == f"sha256:{semantic_checksum(payload)}"
+            == semantic_digest
         ):
             return existing.model_dump(mode="json")
         if existing is not None:

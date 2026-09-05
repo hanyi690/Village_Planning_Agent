@@ -161,11 +161,15 @@ class ProviderRunLeaseStore:
     def recover(self, run_ref: str, provider: str, *, now: datetime | None = None) -> ProviderRunRecovery:
         path = self._path(run_ref, provider)
         current_time = _now(now)
-        lease = self._read(path)
-        if lease is None:
-            return ProviderRunRecovery(run_ref=run_ref, provider=provider, status="NOT_FOUND", reason="lease_not_found")
-        if lease.status == "ACTIVE" and lease.expires_at > current_time:
-            return ProviderRunRecovery(run_ref=run_ref, provider=provider, status="ACTIVE", previous_fencing_token=lease.fencing_token, reason="lease_active")
+        with self._locked(path):
+            lease = self._read(path)
+            if lease is None:
+                return ProviderRunRecovery(run_ref=run_ref, provider=provider, status="NOT_FOUND", reason="lease_not_found")
+            if lease.status == "ACTIVE" and lease.expires_at > current_time:
+                return ProviderRunRecovery(run_ref=run_ref, provider=provider, status="ACTIVE", previous_fencing_token=lease.fencing_token, reason="lease_active")
+            if lease.status == "ACTIVE":
+                lease = lease.model_copy(update={"status": "EXPIRED", "expires_at": current_time})
+                self._replace(path, lease.model_dump(mode="json"))
         staging = self.root / _safe(provider) / "runs" / _safe(run_ref)
         marker = staging / "recovery.json"
         marker.parent.mkdir(parents=True, exist_ok=True)
@@ -178,6 +182,36 @@ class ProviderRunLeaseStore:
             staging_path=str(staging),
             reason="expired_lease",
         )
+
+    def reconcile_expired(
+        self,
+        *,
+        provider: str | None = None,
+        now: datetime | None = None,
+    ) -> list[ProviderRunRecovery]:
+        """Mark expired ACTIVE leases and their staging runs as abandoned.
+
+        This is intentionally an explicit recovery operation.  A lease file is
+        an audit record and is retained with status ``EXPIRED``; only the
+        staging run is fenced from later publication.  Re-reading the file
+        under the per-lease lock makes this safe when a worker acquires or
+        releases the same lease concurrently.
+        """
+
+        if provider is not None:
+            provider = _safe(provider)
+        if not self.lease_root.is_dir():
+            return []
+        results: list[ProviderRunRecovery] = []
+        current_time = _now(now)
+        for path in sorted(self.lease_root.glob("*.json")):
+            lease = self._read(path)
+            if lease is None or (provider is not None and lease.provider != provider):
+                continue
+            if lease.status != "ACTIVE" or lease.expires_at > current_time:
+                continue
+            results.append(self.recover(lease.run_ref, lease.provider, now=current_time))
+        return results
 
     def _write_recovery(self, run_ref: str, provider: str, payload: Mapping[str, Any]) -> None:
         key = hashlib.sha256(f"{run_ref}:{provider}".encode()).hexdigest()[:32]

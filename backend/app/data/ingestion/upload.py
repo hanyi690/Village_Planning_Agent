@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -76,32 +77,6 @@ def _upload_declared_crs(parsed: dict[str, Any]) -> str:
     if text.casefold() in {"crs84", "urn:ogc:def:crs:ogc:1.3:crs84"}:
         return "EPSG:4326"
     return text
-
-
-def infer_data_type_from_filename(filename: str) -> str | None:
-    lower = str(filename or "").lower()
-    mapping = (
-        (("planned_landuse", "planning_landuse", "规划用地", "目标年用地"), "landuse_planned"),
-        (("planned_road", "planning_road", "规划道路"), "planned_road"),
-        (("planned_annotation", "planning_annotation", "规划注记"), "planned_annotation"),
-        (("planned_facility", "planning_facility", "规划设施"), "planned_facility"),
-        (("admin_boundary_line", "行政界线"), "admin_boundary_line"),
-        (("boundary", "边界"), "boundary"),
-        (("landuse", "用地", "现状"), "landuse_current"),
-        (("road", "道路"), "road"),
-        (("annotation", "注记"), "current_annotation"),
-        (("water", "水", "河流"), "water"),
-        (("residential", "住宅", "居民"), "residential"),
-        (("construction_zone", "建设区"), "construction_zone"),
-        (("farmland_protection", "基本农田"), "farmland_protection"),
-        (("ecological_protection", "生态保护"), "ecological_protection"),
-        (("historical_protection", "历史保护"), "historical_protection"),
-        (("geological_hazard", "地质灾害"), "geological_hazard_points"),
-    )
-    for needles, layer in mapping:
-        if any(needle in lower for needle in needles):
-            return layer
-    return None
 
 
 def audit_geojson_geometry(geojson: dict[str, Any]) -> dict[str, Any]:
@@ -393,7 +368,7 @@ def parse_table_file_bytes(content: bytes, filename: str) -> dict[str, Any]:
     }
 
 
-async def _parse_upload(
+def _parse_upload(
     file: UploadFile,
     content: bytes,
     *,
@@ -420,12 +395,10 @@ async def _parse_upload(
             if geojson.get("type") != "FeatureCollection":
                 raise ValueError("Not a valid GeoJSON FeatureCollection")
             result["gis_data"] = geojson
-            result["gis_data_type"] = infer_data_type_from_filename(filename)
             result["geometry_audit"] = audit_geojson_geometry(geojson)
         elif file_type in {"shapefile", "kml", "gis_file"}:
             geojson = parse_vector_file_bytes(content, filename)
             result["gis_data"] = geojson
-            result["gis_data_type"] = infer_data_type_from_filename(filename)
             result["geometry_audit"] = audit_geojson_geometry(geojson)
         elif file_type == "raster":
             result["gis_data"] = parse_raster_file_bytes(content, filename)
@@ -489,6 +462,8 @@ async def process_uploaded_file(
     session_id: str,
     file_category: str,
     input_role: str = "",
+    layer_ref: str = "",
+    boundary_scope_mode: str = "",
 ) -> dict[str, Any]:
     from app.core.settings import (
         DATA_MAX_TABLE_ROWS,
@@ -523,8 +498,16 @@ async def process_uploaded_file(
             "source_format": Path(filename).suffix.lower().lstrip("."),
         }
     else:
-        parsed = await _parse_upload(file, content, file_category=file_category)
-    dtype = infer_data_type_from_filename(filename) or parsed.get("gis_data_type")
+        parsed = await asyncio.to_thread(
+            _parse_upload,
+            file,
+            content,
+            file_category=file_category,
+        )
+    # File suffix is a transport/decoder hint only.  Semantic layer identity
+    # and boundary scope must be declared by the caller, never guessed from
+    # an untrusted filename or business field.
+    dtype = parsed.get("gis_data_type")
     parsed["gis_data_type"] = dtype
     table_rows = 0
     if isinstance(parsed.get("gis_data"), dict) and str(parsed["gis_data"].get("type") or "").casefold() == "tableresource":
@@ -561,7 +544,6 @@ async def process_uploaded_file(
     else:
         assessment = await assess_uploaded_source_admission(
             input_role=input_role,
-            source="upload",
             category=file_category,
             filename=filename,
             parsed_text=str(parsed.get("parsed_text") or ""),
@@ -635,20 +617,8 @@ async def process_uploaded_file(
             "classifier_output_digest": assessment.classifier_output_digest,
             "classifier_model": assessment.classifier_model,
             "classifier_confidence": assessment.classifier_confidence,
-            "layer_ref": str(dtype or ""),
-            "boundary_scope_mode": (
-                "admitted_boundary"
-                if (
-                    str(dtype or "").casefold() == "boundary"
-                    and any(
-                        str((feature.get("geometry") or {}).get("type") or "")
-                        in {"Polygon", "MultiPolygon"}
-                        for feature in (parsed.get("gis_data") or {}).get("features", [])
-                        if isinstance(feature, dict)
-                    )
-                )
-                else ""
-            ),
+            "layer_ref": str(layer_ref or ""),
+            "boundary_scope_mode": str(boundary_scope_mode or ""),
             "source_filename": filename,
             "content_size_bytes": total_size,
             "budget_state": {
@@ -660,7 +630,11 @@ async def process_uploaded_file(
     )
     facade = DataAdmissionFacade()
     if assessment.status == "admitted":
-        admission_result = await facade.admit(request)
+        admission_result = await asyncio.to_thread(
+            DataAdmissionFacade._admit_in_worker,
+            facade,
+            request,
+        )
     else:
         admission_result = facade.record_ingress_admission(request, assessment)
     if admission_result.receipt.state == "ADMITTED":
@@ -750,7 +724,6 @@ async def process_uploaded_file(
 
 __all__ = [
     "process_uploaded_file",
-    "infer_data_type_from_filename",
     "audit_geojson_geometry",
     "parse_vector_file_bytes",
     "parse_raster_file_bytes",

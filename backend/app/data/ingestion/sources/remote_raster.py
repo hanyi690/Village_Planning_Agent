@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-from app.data.model.canonical import BBox
+from app.contracts.data.geometry_contracts import BBox
 from app.infrastructure.logging import get_logger
 
 from ..contracts import DataResult, DataSourceMetadata

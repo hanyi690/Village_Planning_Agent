@@ -27,9 +27,9 @@
 | DATA | 统一 local/remote declaration admission、四类 immutable product、BoundaryScope、provider lease/writer、DATA-only DataChangeSet、WM/Evidence consumer 和旧 DATA 物理删除均已落地 | CURRENT（本地） | 真实 provider 在线 coverage、部署 ACL、灾备 restore、线上 SLO/RPO/RTO |
 | Cognition/WM | 有 DATA-backed store、snapshot/CAS、source/entity/representation contracts、identity commit | PARTIAL | assertion 全生命周期、merge/split、typed views、dependency digest、多进程 writer |
 | Evidence | 有 requirement、retrieval authority/outcome、CAS artifact、coverage、EV-02 sufficiency 和 EV-03 proposal batch | PARTIAL | online provider coverage、gap lease/依赖精化、proposal 下游 acceptance/rejection benchmark |
-| L1 | 有 bounded dimension input、typed facts/mentions/gaps、aggregation、gate 和 CAS | PARTIAL | source-span report、冲突组、L1ProductManifest、最终视图 Gate |
-| L1-GROUND | 有 observation/binding sidecars、闭集候选、identity commit 调用和 projection receipt | PARTIAL | 统一终态 taxonomy、proposal ownership、revalidation、状态迁移测试 |
-| L2 | 有 typed strategy/decision rows 和依赖输入 | PARTIAL | 以稳定 L1 final view 完成 fresh 四维消费 |
+| L1 | 有 bounded dimension input、typed facts/mentions/gaps、aggregation、gate、CAS 和 reference-only final manifest | PARTIAL | 独立 source-span report、完整冲突组/supersedes、commit 后 binding revalidation、真实运行验收 |
+| L1-GROUND | 有 observation/binding sidecars、闭集候选、identity commit、projection receipt 和 L1 manifest 发布 | PARTIAL | 统一终态 taxonomy、proposal ownership、完整 revalidation、状态迁移测试 |
+| L2 | 有 typed strategy/decision rows、依赖输入和 ready L1 manifest 门禁 | PARTIAL | fresh 真实运行中以稳定 L1 final view 完成四维消费 |
 | L3 | 有 PlanningProgram/claim contracts 和 bounded reasoning | PARTIAL | 以 L2 PASS 形成非空、可接地 intent |
 | TARGET_PROJECTION | 有 typed projection、pending request 和 admission validation | PARTIAL | pending/admitted 状态与唯一 Gate matrix 对齐 |
 | Planning GROUND | 有 entity/representation/resource lineage、candidate domain、constraint factor | PARTIAL | executable-only Gate、复杂关系/多表示、语义 benchmark |
@@ -49,7 +49,7 @@
 - local GeoJSON/矢量/GeoTIFF/表格/Markdown 的 bounded parse 和 current-role admission；
 - `RemoteSourceAdmissionRequest` 覆盖 API vector/WFS/MapServer/WMTS/remote raster；
 - SourceSnapshot、NormalizedResource、RepresentationSnapshot、CapabilityIndex 和轻量 catalog index；
-- BoundaryScopeArtifact、严格 CRS/type/geometry policy、topology repair audit；
+- BoundaryScopeArtifact、显式 CRS contract、surface-family geometry policy 和 topology repair audit；
 - provider lease/fencing/atomic writer/crash recovery 和完整 coverage manifest；
 - DATA-only `DataChangeSet` publication；跨模块 dependency/subgraph invalidation 归 Dependency Runtime；
 - Jintian upload → WM → Evidence → replay/stale-parent 的本地 E2E；
@@ -131,15 +131,15 @@ workflow。
 - source page、input context、dimension pass state；
 - typed fact、location mention、gap 和 snapshot；
 - spatial work-item admission；
-- observation/binding sidecar 和 WM projection receipt 的实际调用链。
+- observation/binding sidecar 和 WM projection receipt 的实际调用链；
+- reference-only L1ProductManifest 和 L2/L3 ready final-view 门禁。
 
 仍缺：
 
 - 独立 source-span validation report；
 - fact conflict group 与 supersedes；
-- 轻量 <code>L1ProductManifest</code>；
-- commit 后 binding revalidation；
-- L2/L3 只消费 final view 的硬门禁。
+- 完整 commit 后 binding revalidation；
+- 真实 L1 OBSERVE 与 fresh final-view 验收。
 
 ### 3.5 L1-GROUND
 

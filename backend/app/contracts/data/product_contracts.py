@@ -65,6 +65,7 @@ class NormalizedFeatureSnapshot(BaseModel):
     dataset_ref: str
     normalized_geometry: dict[str, Any] | None = None
     geometry_kind: str = "unknown"
+    normalized_geometry_kind: str = "unknown"
     source_crs: str = ""
     normalized_crs: str = ""
     crs_transform: tuple[str, ...] = ()
@@ -82,6 +83,7 @@ class NormalizedFeatureSnapshot(BaseModel):
                     "dataset_ref": self.dataset_ref,
                     "normalized_geometry": self.normalized_geometry,
                     "geometry_kind": self.geometry_kind,
+                    "normalized_geometry_kind": self.normalized_geometry_kind,
                     "source_crs": self.source_crs,
                     "normalized_crs": self.normalized_crs,
                     "crs_transform": self.crs_transform,
@@ -229,6 +231,7 @@ def normalized_product(snapshot: DataResourceCatalogSnapshot) -> NormalizedResou
                 dataset_ref=feature.dataset_ref,
                 normalized_geometry=feature.normalized_geometry,
                 geometry_kind=feature.geometry_kind,
+                normalized_geometry_kind=feature.normalized_geometry_kind,
                 source_crs=feature.source_crs,
                 normalized_crs=feature.normalized_crs,
                 crs_transform=feature.crs_transform,
@@ -264,6 +267,7 @@ def compose_catalog(
             geometry=item.geometry,
             normalized_geometry=normalized_item.normalized_geometry,
             geometry_kind=normalized_item.geometry_kind,
+            normalized_geometry_kind=normalized_item.normalized_geometry_kind,
             source_crs=item.source_crs,
             normalized_crs=normalized_item.normalized_crs,
             crs_transform=normalized_item.crs_transform,

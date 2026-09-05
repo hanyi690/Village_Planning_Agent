@@ -10,7 +10,7 @@
 **负责**：
 - 管理各地图 API 的凭证（从 `app.core.settings` 环境变量读取）、限速、重试与超时
 - 线程安全的共享 `RateLimiter`（按服务名单例，聚合 QPS 不超提供商限额）
-- 提供高层便利方法（如 Tianditu geocode / POI 搜索）供 `DataCatalog` 推导 BBox
+- 提供 provider transport 所需的凭证、限速、session 和健康检查能力
 
 **不负责**：
 - 不做数据读取 / 驱动实现（那是 `sources/` 各 Driver）
@@ -21,7 +21,7 @@
 
 ## 输入/输出契约
 
-**输入**：`app.core.settings` 环境变量（`TIANDITU_API_KEY` / `AMAP_API_KEY` / `GD_TIANDITU_TOKEN` / `GIS_TIMEOUT` 等）+ `sources.yaml` 的 `connections:` 块。
+**输入**：`app.core.settings` 中的 provider 凭证、超时和限速设置；不读取 YAML source registry。
 
 **输出**：`Connection` 实例（经 `ConnectionRegistry.require(name)` 获取）+ `RateLimiter` 单例。
 

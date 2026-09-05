@@ -70,7 +70,10 @@ def build_boundary_scope_artifact(
         )
         if _is_admitted(snapshot, feature)
         and feature.normalized_geometry is not None
-        and feature.geometry_kind == "polygon"
+        and str(
+            getattr(feature, "normalized_geometry_kind", "unknown")
+            or "unknown"
+        ).casefold() == "polygon"
         and str(feature.normalized_crs or "") == "EPSG:4326"
     ]
     if not candidates:

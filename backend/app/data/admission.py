@@ -14,6 +14,8 @@ from dataclasses import dataclass
 import hashlib
 import json
 from collections import Counter
+from collections import OrderedDict
+from threading import RLock
 from typing import Any
 
 from app.contracts.data.source_contracts import (
@@ -46,6 +48,13 @@ class CatalogAdmissionIndex:
     representation_resource_refs: frozenset[str]
 
 
+_ADMISSION_INDEX_CACHE: OrderedDict[str, CatalogAdmissionIndex] = OrderedDict()
+_ADMISSION_INDEX_CACHE_LOCK = RLock()
+_ADMISSION_INDEX_CACHE_LIMIT = 32
+_VALIDATED_CATALOG_CACHE: OrderedDict[str, bool] = OrderedDict()
+_VALIDATED_CATALOG_CACHE_LIMIT = 64
+
+
 @dataclass(frozen=True)
 class CognitionReadinessIssue:
     """One blocking DATA defect that prevents a catalog entering KG.
@@ -72,6 +81,63 @@ class LocalAdmissionDecision:
     state: str
     reason_code: str = ""
     reason: str = ""
+
+
+def _remember_validated_catalog(snapshot: DataResourceCatalogSnapshot) -> None:
+    """Record a snapshot produced by the central admission filter.
+
+    ``current_world_snapshot`` has already evaluated every feature and rebuilt
+    the dependent representation/capability sets.  Remembering that exact
+    immutable digest avoids immediately repeating the same fail-closed scan
+    when Context Runtime and WM perform their read-side guard checks.
+    """
+
+    cache_key = _text(snapshot.digest)
+    if not cache_key:
+        return
+    with _ADMISSION_INDEX_CACHE_LOCK:
+        _VALIDATED_CATALOG_CACHE[cache_key] = True
+        _VALIDATED_CATALOG_CACHE.move_to_end(cache_key)
+        while len(_VALIDATED_CATALOG_CACHE) > _VALIDATED_CATALOG_CACHE_LIMIT:
+            _VALIDATED_CATALOG_CACHE.popitem(last=False)
+
+
+def _admission_decision_index(
+    snapshot: DataResourceCatalogSnapshot,
+) -> dict[str, tuple[SourceAdmissionDecision, ...]]:
+    """Index decisions by every source reference that can score as specific."""
+
+    grouped: dict[str, list[SourceAdmissionDecision]] = {}
+    for decision in snapshot.admission_decisions:
+        grouped.setdefault(_text(decision.source_ref), []).append(decision)
+    return {key: tuple(value) for key, value in grouped.items()}
+
+
+def _feature_decision_candidates(
+    feature: SourceFeature,
+    *,
+    bare_ref_unique: bool,
+    decision_index: dict[str, tuple[SourceAdmissionDecision, ...]],
+) -> tuple[SourceAdmissionDecision, ...]:
+    """Return only decisions that can receive a positive specificity score."""
+
+    keys = [feature_resource_ref(feature), _text(feature.dataset_ref)]
+    if bare_ref_unique:
+        keys.append(_text(feature.source_feature_ref))
+    raw_dataset_ref = _text(
+        (feature.raw_attributes or {}).get("source_dataset_ref")
+    )
+    if raw_dataset_ref:
+        keys.append(raw_dataset_ref)
+    seen: set[str] = set()
+    result: list[SourceAdmissionDecision] = []
+    for key in keys:
+        for decision in decision_index.get(key, ()):
+            if decision.decision_ref in seen:
+                continue
+            seen.add(decision.decision_ref)
+            result.append(decision)
+    return tuple(result)
 
 
 def plan_catalog_invalidation(
@@ -243,7 +309,7 @@ _NON_SPATIAL_RESOURCE_KINDS = frozenset({
     "table", "document", "text", "markdown", "report", "image",
 })
 _SPATIAL_GEOMETRY_KINDS = frozenset({
-    "point", "line", "polygon", "multipatch", "raster",
+    "point", "line", "polygon", "multipatch", "collection", "raster", "opaque",
 })
 
 
@@ -351,7 +417,7 @@ def cognition_readiness_issues(
                 missing_fields=("geometry",),
             ))
             continue
-        if feature.normalized_geometry is None:
+        if feature.normalized_geometry is None and feature.geometry_kind != "opaque":
             trace = "|".join(
                 _text(item)
                 for item in feature.crs_transform
@@ -385,12 +451,17 @@ def cognition_readiness_issues(
                 source_digest=_text(representation.content_digest),
                 missing_fields=("source_snapshot_ref", "content_digest"),
             ))
-        if representation.status != "available":
+        expected_status = (
+            "read_only"
+            if key in spatial_features and spatial_features[key].geometry_kind == "opaque"
+            else "available"
+        )
+        if representation.status != expected_status:
             issues.append(CognitionReadinessIssue(
                 reason="spatial_representation_unresolved",
                 source_feature_ref=_text(representation.source_feature_ref),
                 source_digest=_text(representation.content_digest),
-                missing_fields=("available_spatial_representation",),
+                missing_fields=(f"{expected_status}_spatial_representation",),
             ))
     available_representation_keys = {
         (
@@ -398,7 +469,14 @@ def cognition_readiness_issues(
             _text(representation.source_feature_ref),
         )
         for representation in snapshot.representations
-        if representation.status == "available"
+        if (
+            representation.status == "available"
+            or (
+                representation.status == "read_only"
+                and spatial_features.get(key) is not None
+                and spatial_features[key].geometry_kind == "opaque"
+            )
+        )
         and _text(representation.source_snapshot_ref) == expected_snapshot_ref
         and _text(representation.content_digest)
     }
@@ -475,6 +553,7 @@ def feature_admission_verdict(
     feature: SourceFeature,
     *,
     _bare_ref_unique: bool | None = None,
+    _decision_candidates: tuple[SourceAdmissionDecision, ...] | None = None,
 ) -> FeatureAdmissionVerdict:
     """Resolve one feature's authoritative admission, failing closed.
 
@@ -491,6 +570,11 @@ def feature_admission_verdict(
             for candidate in snapshot.features
         ) == 1
     )
+    decision_pool = (
+        snapshot.admission_decisions
+        if _decision_candidates is None
+        else _decision_candidates
+    )
     ranked = [
         (
             _decision_specificity(
@@ -500,7 +584,7 @@ def feature_admission_verdict(
             ),
             decision,
         )
-        for decision in snapshot.admission_decisions
+        for decision in decision_pool
     ]
     best = max((score for score, _ in ranked), default=0)
     decisions = [decision for score, decision in ranked if score == best and score > 0]
@@ -572,6 +656,7 @@ def admitted_feature_keys(
     bare_counts = Counter(
         feature.source_feature_ref for feature in snapshot.features
     )
+    decision_index = _admission_decision_index(snapshot)
     return frozenset(
         feature_key(feature)
         for feature in snapshot.features
@@ -579,6 +664,11 @@ def admitted_feature_keys(
             snapshot,
             feature,
             _bare_ref_unique=bare_counts[feature.source_feature_ref] == 1,
+            _decision_candidates=_feature_decision_candidates(
+                feature,
+                bare_ref_unique=bare_counts[feature.source_feature_ref] == 1,
+                decision_index=decision_index,
+            ),
         ).admitted
     )
 
@@ -622,13 +712,25 @@ def _direct_representation_is_bound(
         and _text(representation.source_snapshot_ref) == _text(snapshot.snapshot_id)
         and _text(representation.content_digest)
         == _text(feature.source_feature_digest)
-        and _text(representation.geometry_kind) == _text(feature.geometry_kind)
+        and _text(representation.geometry_kind)
+        == _text(
+            getattr(feature, "normalized_geometry_kind", "unknown")
+            if getattr(feature, "normalized_geometry", None) is not None
+            else feature.geometry_kind
+        )
     )
 
 
 def build_admission_index(
     snapshot: DataResourceCatalogSnapshot,
 ) -> CatalogAdmissionIndex:
+    cache_key = _text(snapshot.digest)
+    if cache_key:
+        with _ADMISSION_INDEX_CACHE_LOCK:
+            cached = _ADMISSION_INDEX_CACHE.get(cache_key)
+            if cached is not None:
+                _ADMISSION_INDEX_CACHE.move_to_end(cache_key)
+                return cached
     allowed_keys = admitted_feature_keys(snapshot)
     features = {
         feature_key(feature): feature for feature in snapshot.features
@@ -665,12 +767,19 @@ def build_admission_index(
         representation_refs.add(_text(representation.representation_ref))
         if representation_resource:
             representation_resources.add(representation_resource)
-    return CatalogAdmissionIndex(
+    result = CatalogAdmissionIndex(
         feature_keys=allowed_keys,
         resource_refs=resources,
         representation_refs=frozenset(representation_refs),
         representation_resource_refs=frozenset(representation_resources),
     )
+    if cache_key:
+        with _ADMISSION_INDEX_CACHE_LOCK:
+            _ADMISSION_INDEX_CACHE[cache_key] = result
+            _ADMISSION_INDEX_CACHE.move_to_end(cache_key)
+            while len(_ADMISSION_INDEX_CACHE) > _ADMISSION_INDEX_CACHE_LIMIT:
+                _ADMISSION_INDEX_CACHE.popitem(last=False)
+    return result
 
 
 def is_admitted_representation(
@@ -704,11 +813,18 @@ def non_admitted_feature_verdicts(
     bare_counts = Counter(
         feature.source_feature_ref for feature in snapshot.features
     )
+    decision_index = _admission_decision_index(snapshot)
     for feature in snapshot.features:
+        bare_ref_unique = bare_counts[feature.source_feature_ref] == 1
         verdict = feature_admission_verdict(
             snapshot,
             feature,
-            _bare_ref_unique=bare_counts[feature.source_feature_ref] == 1,
+            _bare_ref_unique=bare_ref_unique,
+            _decision_candidates=_feature_decision_candidates(
+                feature,
+                bare_ref_unique=bare_ref_unique,
+                decision_index=decision_index,
+            ),
         )
         if not verdict.admitted:
             result.append((feature, verdict))
@@ -749,20 +865,60 @@ def _quarantine_decision(
 
 def current_world_snapshot(
     snapshot: DataResourceCatalogSnapshot,
+    *,
+    explicit_decisions_trusted: bool = False,
 ) -> DataResourceCatalogSnapshot:
     """Return the immutable admitted view without retaining forbidden bodies."""
 
     bare_counts = Counter(
         feature.source_feature_ref for feature in snapshot.features
     )
-    verdicts = {
-        feature_key(feature): feature_admission_verdict(
+    decision_index = _admission_decision_index(snapshot)
+    verdicts: dict[tuple[str, str], FeatureAdmissionVerdict] = {}
+    for feature in snapshot.features:
+        bare_ref_unique = bare_counts[feature.source_feature_ref] == 1
+        if explicit_decisions_trusted:
+            exact_decisions = tuple(
+                decision
+                for decision in decision_index.get(feature_resource_ref(feature), ())
+                if _text(decision.source_digest)
+                == _text(feature.source_feature_digest)
+            )
+            if len(exact_decisions) == 1:
+                decision = exact_decisions[0]
+                attributes = dict(feature.raw_attributes or {})
+                declared_roles = {
+                    _text(attributes.get(key)).casefold()
+                    for key in ("input_role", "document_input_role")
+                    if _text(attributes.get(key))
+                }
+                declared_statuses = {
+                    _text(attributes.get("admission_status")).casefold()
+                } if _text(attributes.get("admission_status")) else set()
+                if (
+                    decision.input_role == "current_evidence"
+                    and decision.status == "admitted"
+                    and (not declared_roles or declared_roles == {"current_evidence"})
+                    and (not declared_statuses or declared_statuses == {"admitted"})
+                ):
+                    verdicts[feature_key(feature)] = FeatureAdmissionVerdict(
+                        admitted=True,
+                        input_role=decision.input_role,
+                        status=decision.status,
+                        reason="admitted_current_evidence",
+                        decision_refs=(decision.decision_ref,),
+                    )
+                    continue
+        verdicts[feature_key(feature)] = feature_admission_verdict(
             snapshot,
             feature,
-            _bare_ref_unique=bare_counts[feature.source_feature_ref] == 1,
+            _bare_ref_unique=bare_ref_unique,
+            _decision_candidates=_feature_decision_candidates(
+                feature,
+                bare_ref_unique=bare_ref_unique,
+                decision_index=decision_index,
+            ),
         )
-        for feature in snapshot.features
-    }
     allowed_keys = frozenset(
         key for key, verdict in verdicts.items() if verdict.admitted
     )
@@ -850,7 +1006,7 @@ def current_world_snapshot(
         ),
         datasets[0],
     )
-    return DataResourceCatalogSnapshot(
+    result = DataResourceCatalogSnapshot(
         snapshot_id=snapshot.snapshot_id,
         dataset=primary,
         datasets=datasets,
@@ -862,6 +1018,8 @@ def current_world_snapshot(
         ),
         admission_policy_version=CURRENT_WORLD_ADMISSION_POLICY_VERSION,
     )
+    _remember_validated_catalog(result)
+    return result
 
 
 def assert_current_world_catalog(snapshot: DataResourceCatalogSnapshot) -> None:
@@ -870,6 +1028,12 @@ def assert_current_world_catalog(snapshot: DataResourceCatalogSnapshot) -> None:
         != CURRENT_WORLD_ADMISSION_POLICY_VERSION
     ):
         raise ValueError("DATA catalog uses an unsupported admission policy")
+    cache_key = _text(snapshot.digest)
+    if cache_key:
+        with _ADMISSION_INDEX_CACHE_LOCK:
+            if _VALIDATED_CATALOG_CACHE.get(cache_key):
+                _VALIDATED_CATALOG_CACHE.move_to_end(cache_key)
+                return
     violations = non_admitted_feature_verdicts(snapshot)
     index = build_admission_index(snapshot)
     invalid_representations = [
@@ -886,6 +1050,12 @@ def assert_current_world_catalog(snapshot: DataResourceCatalogSnapshot) -> None:
         if item.resource_ref not in allowed_capability_resources
     ]
     if not violations and not invalid_representations and not invalid_capabilities:
+        if cache_key:
+            with _ADMISSION_INDEX_CACHE_LOCK:
+                _VALIDATED_CATALOG_CACHE[cache_key] = True
+                _VALIDATED_CATALOG_CACHE.move_to_end(cache_key)
+                while len(_VALIDATED_CATALOG_CACHE) > _VALIDATED_CATALOG_CACHE_LIMIT:
+                    _VALIDATED_CATALOG_CACHE.popitem(last=False)
         return
     collections = sorted({
         f"{feature.dataset_ref}:{feature.layer_ref or '<unlayered>'}:"

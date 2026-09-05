@@ -40,7 +40,7 @@
 
 ```
 sources/ → data/connections（Connection / ConnectionRegistry / RateLimiter）、data/contracts（DataResult）
-   ▲ 被 data/catalog（DataCatalog 初始化时经 DriverRegistry 实例化）消费
+   ▲ 由显式 provider acquisition 或测试 probe 实例化
 ```
 
 - 允许：`data/connections`、`data/contracts`、`app.core.settings`、`app.utils`

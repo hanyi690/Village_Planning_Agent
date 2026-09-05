@@ -16,7 +16,7 @@
 **不负责**：
 - 不做 LLM / intent 解析（LLM 解析逻辑在 PARSE agent 侧）
 - 不做空间数据加载（那是 `sources/` 与 `catalog/`）
-- 不替代 Document DataSourceDriver（低层文件访问仍走 Catalog）
+- 不替代 `DataAdmissionFacade`（低层文件访问仍需显式准入）
 
 ---
 
@@ -42,5 +42,5 @@ documents/ → app.infrastructure.logging 等
 ## 禁止行为
 
 - 在文档加载器内做 LLM 调用 / intent 解析（职责属于 PARSE agent 与 parsing 模块）
-- 直接内联文件访问绕过 `DataCatalog` 的 document 驱动（低层读取应走 Catalog 路径）
+- 直接内联文件访问绕过 `DataAdmissionFacade`（低层读取应走准入路径）
 - 通过文件名猜测当前项目输入或向 session 注入仓库文档

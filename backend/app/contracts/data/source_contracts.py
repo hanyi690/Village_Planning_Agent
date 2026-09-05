@@ -10,7 +10,16 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-GeometryKind = Literal["point", "line", "polygon", "multipatch", "raster", "unknown"]
+GeometryKind = Literal[
+    "point",
+    "line",
+    "polygon",
+    "multipatch",
+    "collection",
+    "raster",
+    "opaque",
+    "unknown",
+]
 
 
 def _digest(value: Any) -> str:
@@ -78,6 +87,7 @@ class SourceFeature(BaseModel):
     # normalized view when it is available; keeping both prevents a CRS
     # conversion from destroying auditability.
     normalized_geometry: dict[str, Any] | None = None
+    normalized_geometry_kind: GeometryKind = "unknown"
     geometry_kind: GeometryKind = "unknown"
     source_crs: str = ""
     normalized_crs: str = ""
@@ -107,9 +117,32 @@ class SourceFeature(BaseModel):
                 "polygon": "polygon",
                 "multipolygon": "polygon",
                 "multipatch": "multipatch",
+                "geometrycollection": "collection",
             }.get(str(self.geometry.get("type") or "").casefold())
+            if inferred is None and self.geometry.get("type"):
+                inferred = "opaque"
             if inferred:
                 object.__setattr__(self, "geometry_kind", inferred)
+        if self.normalized_geometry_kind == "unknown" and isinstance(
+            self.normalized_geometry,
+            dict,
+        ):
+            normalized = {
+                "point": "point",
+                "multipoint": "point",
+                "linestring": "line",
+                "multilinestring": "line",
+                "polygon": "polygon",
+                "multipolygon": "polygon",
+                "multipatch": "multipatch",
+                "geometrycollection": "collection",
+            }.get(
+                str(self.normalized_geometry.get("type") or "").casefold()
+            )
+            if normalized is None and self.normalized_geometry.get("type"):
+                normalized = "opaque"
+            if normalized:
+                object.__setattr__(self, "normalized_geometry_kind", normalized)
         if not self.source_feature_digest:
             object.__setattr__(
                 self,
@@ -118,6 +151,7 @@ class SourceFeature(BaseModel):
                     "source_feature_ref": self.source_feature_ref,
                     "geometry": self.geometry,
                     "normalized_geometry": self.normalized_geometry,
+                    "normalized_geometry_kind": self.normalized_geometry_kind,
                     "source_crs": self.source_crs,
                     "normalized_crs": self.normalized_crs,
                     "crs_transform": self.crs_transform,
@@ -151,7 +185,7 @@ class SpatialRepresentation(BaseModel):
     content_digest: str = ""
     derived_from: tuple[str, ...] = ()
     component_refs: tuple[str, ...] = ()
-    status: Literal["available", "unresolved", "deprecated"] = "available"
+    status: Literal["available", "read_only", "unresolved", "deprecated"] = "available"
 
 
 class DataCapability(BaseModel):

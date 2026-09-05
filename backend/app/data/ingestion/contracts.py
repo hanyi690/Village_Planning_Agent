@@ -1,8 +1,8 @@
 """Data contracts - unified result envelope and metadata for all data sources.
 
 All DataSourceDriver.fetch() returns DataResult, never raises.
-Canonical geometry types (BBox) are imported from app.data.model.canonical
-to avoid duplicating the normative data shapes.
+Canonical query geometry types (BBox) are imported from the DATA contracts
+package; source drivers do not depend on historical domain models.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from app.data.model.canonical import BBox
+from app.contracts.data.geometry_contracts import BBox
 
 
 @dataclass

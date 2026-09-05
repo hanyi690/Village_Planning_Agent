@@ -1,74 +1,33 @@
-# schema/types - Pydantic v2 Typed Feature Models
+# DATA model package
 
-> **Purpose**: Defines the typed dataclass hierarchy for all spatial/non-spatial features in the system. The type layer that Data ingests into, KG builds from, and Agent reasons over.
-> **Updated: 2026-07-28 (v4.8.1)**
+当前 DATA 模型层只保留跨运行时仍有直接消费者的不可变产品契约：
 
----
+- `snapshot.py`：`SessionDataSnapshot`、`CollectionSnapshot`，用于 session manifest 和
+  DATA→WM/Evidence 的稳定输入清单；
+- `audit.py`：上层需要的 provenance/audit value objects。
 
-## Key files
+原先的 `base.py`、`spatial_types.py`、`raster_types.py`、`table_types.py`、
+`document_types.py`、`canonical.py`、`layer_registry.py` 以及对应 YAML 已物理删除。
+它们属于旧 typed ingest / Bundle schema，不能再作为 DATA 输入、catalog writer 或
+兼容导入路径。
 
-| File | Role |
-| --- | --- |
-| `base.py` | L0 abstract bases: `SpatialFeature`, `PointFeature`, `LineFeature`, `PolygonFeature`, `RasterDataset` (all Pydantic v2 `BaseModel` with `field_validator` geometry checks) |
-| `spatial_types.py` | L2 vector semantic subclasses (Group A-F, ~33 concrete classes: parcels, roads, facilities, control zones, natural resources, annotations) + `GisFeature` Discriminated Union |
-| `raster_types.py` | Raster subclasses: `DEMInput`, `DOMInput`, `SlopeRaster`, `AspectRaster`, `SuitabilityRaster`, `TerrainAnalysisResult` |
-| `table_types.py` | `TableDataset` + 7 subclasses (PopulationTable, ControlRuleTable, PlanningIndicatorTable, etc.) |
-| `document_types.py` | `Document` + `ReferencePlanningText` + `L3Report` |
-| `canonical.py` | Existing upper-layer typed value objects and historical response models; not a DATA admission input or catalog writer |
-| `layer_registry.py` | `GIS_LAYER_REGISTRY` + `GisLayerTypeEntry` + `build_registry_from_yaml()` |
-| `gis_layer_registry.yaml` | Single source of truth for layer metadata (40+ entries) |
+现在的 DATA 输入不依赖文件名、字段名或预设图层注册表。所有本地和声明式远程输入都先
+进入 `app.modules.data.application.DataAdmissionFacade`，被归一化为：
 
-## Type hierarchy (DU discriminator)
-
-```
-L0  SpatialFeature                  (Pydantic BaseModel: geometry + bsm + ysdm + layer_type)
- ├── L1  PointFeature / LineFeature / PolygonFeature   (geometry_type validated at construction)
- └── L2  semantic subclasses (CurrentLandUseParcel, CurrentRoad, FarmlandProtection, ...)
-
-L0  RasterDataset                   (Pydantic BaseModel: path + crs + bounds + bands)
- └── L1  DEMInput / DOMInput / SlopeRaster / ...
-
-L0  TableDataset                    (rows + columns + schema)
- └── L1  PopulationTable / ControlRuleTable / ...
-
-L0  Document                        (text + doc_type + source)
- └── L1  ReferencePlanningText / L3Report
+```text
+SourceDataset
+SourceFeature
+NormalizedResource
+SpatialRepresentation
+DataCapability
+DataResourceCatalogSnapshot
 ```
 
-The active DATA discriminator is the generic resource metadata in
-`resource_catalog.py`: dataset, layer, source feature, representation and capability.
-The typed classes in this directory remain only where an upper planning contract still
-uses them; they are not exported by `app.data.ingestion` and cannot be used to bypass
-`DataAdmissionFacade`.
+其中 `SourceFeature.geometry` 是不可覆盖的 native geometry，
+`SourceFeature.normalized_geometry` 是经过显式 CRS 和 topology policy 校验后的空间视图。
+Polygon/MultiPolygon 只在同属 polygon surface family 且修复审计通过时适配；不能无损
+保留或无法确定语义的结果进入 read-only/UNRESOLVED 路径，不转换成规划地块。
 
-## Public API
-
-```python
-from app.data.model import (
-    # Bases
-    SpatialFeature, PointFeature, LineFeature, PolygonFeature, RasterDataset,
-    TableDataset, Document,
-    # Semantic subclasses
-    CurrentLandUseParcel, PlannedLandUseParcel, CurrentRoad, PlannedRoad,
-    FarmlandProtection, EcologicalRedline, CurrentFacility, PlannedFacility,
-    # ... 33 total
-    # Upper-layer typed models, where explicitly required
-    # Registry
-    GIS_LAYER_REGISTRY, GisLayerTypeEntry, get_gis_layer_entry, get_all_gis_layer_types,
-)
-```
-
-## Dependencies
-
-- `pydantic` (for `GisLayerTypeEntry` validation)
-- `yaml` (for loading `gis_layer_registry.yaml`)
-- Standard library only (`dataclasses`, `typing`, `pathlib`)
-- **Zero** deps on `data`, `kg`, `agent`, `tools` (Schema is the bottom of the four-layer architecture)
-
-## How to extend
-
-See [`docs/guides/how-to-add-layer.md`](../../../../docs/guides/how-to-add-layer.md) for the full guide. Short version:
-
-1. **New layer type**: add YAML entry to `gis_layer_registry.yaml`
-2. **New Python class**: add it only for an explicit upper-layer contract; do not add a DATA ingest mapping. DATA inputs remain generic mappings and are normalized by `DataResourceCatalog`.
-3. **New DATA layer**: add a declarative source/layer entry and test its admission, representation and capability contract; do not add Bundle fields or typed ingest adapters.
+WM 通过 `source_catalog_adapter` 消费 normalized representation 和 source digest；Evidence
+通过 DATA catalog retriever 消费 feature/ref/attribute/provenance。二者都不能导入旧
+Bundle、BSM 派生对象或固定 layer registry。

@@ -14,7 +14,6 @@ from .sources import DataSourceDriver, DriverRegistry
 from .upload import process_uploaded_file
 
 __all__ = [
-    "DataCatalog",
     "DataResult",
     "DataSourceMetadata",
     "DataSourceDriver",
@@ -23,11 +22,3 @@ __all__ = [
     "ConnectionRegistry",
     "process_uploaded_file",
 ]
-
-
-def __getattr__(name: str):
-    if name == "DataCatalog":
-        from ..catalog import DataCatalog
-
-        return DataCatalog
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

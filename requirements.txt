@@ -127,6 +127,7 @@ httpx>=0.25.0                        # Async HTTP (LLM provider transport)
 # ============================================
 pandas>=2.1.0                        # DataFrame (used alongside geopandas)
 pyyaml>=6.0                          # YAML config/rule loading
+orjson>=3.10.0                       # Fast process-local geometry/cache-key encoding
 
 # ============================================
 # Road Planning (P2 remote port) — terrain routing & network build

@@ -8,6 +8,7 @@ not need to know how a file was decoded or which source fields were present.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 import json
 import os
@@ -125,6 +126,47 @@ class DataRunResult(BaseModel):
 
 class DataAdmissionFacade:
     """Canonical DATA entry point for explicitly declared local files."""
+
+    async def admit_many(
+        self,
+        requests: tuple[DataAdmissionRequest, ...] | list[DataAdmissionRequest],
+        *,
+        max_concurrency: int = 4,
+    ) -> tuple[DataAdmissionResult, ...]:
+        """Admit independent inputs concurrently with bounded workers.
+
+        ``admit`` remains the single-file write boundary.  Each batch item
+        still gets its own receipt, lifecycle artifacts and CAS lineage.  The
+        admission body is CPU/filesystem bound, so each worker runs the
+        existing coroutine in a private event loop instead of blocking the
+        caller's event loop.
+        """
+
+        if max_concurrency < 1:
+            raise ValueError("max_concurrency must be positive")
+        materialized = tuple(requests)
+        if not materialized:
+            return ()
+        semaphore = asyncio.Semaphore(max_concurrency)
+
+        async def admit_one(request: DataAdmissionRequest) -> DataAdmissionResult:
+            async with semaphore:
+                return await asyncio.to_thread(
+                    DataAdmissionFacade._admit_in_worker,
+                    self,
+                    request,
+                )
+
+        return tuple(
+            await asyncio.gather(*(admit_one(item) for item in materialized))
+        )
+
+    @staticmethod
+    def _admit_in_worker(
+        facade: "DataAdmissionFacade",
+        request: DataAdmissionRequest,
+    ) -> DataAdmissionResult:
+        return facade._admit_sync(request)
 
     @staticmethod
     def _attempt_ref(request: DataAdmissionRequest, value: Any) -> str:
@@ -706,6 +748,13 @@ class DataAdmissionFacade:
         )
 
     async def admit(self, request: DataAdmissionRequest) -> DataAdmissionResult:
+        """Admit one input through the async public boundary."""
+
+        return self._admit_sync(request)
+
+    def _admit_sync(self, request: DataAdmissionRequest) -> DataAdmissionResult:
+        """CPU/filesystem-bound admission core used by batch workers."""
+
         from app.data.admission import check_local_admission_boundary
 
         raw_value = request.normalized_input if request.normalized_input is not None else request.content
@@ -772,6 +821,10 @@ class DataAdmissionFacade:
                         reason="TableResource exceeds DATA_MAX_TABLE_ROWS",
                         lifecycle_prefix=("DISCOVERED", "CLASSIFIED", "PARSING"),
                     )
+        # Keep one attempt identity for the whole parse/normalize transaction.
+        # The pre-admission input is the authoritative identity material;
+        # reparsing adds DATA metadata and must not trigger a second full
+        # semantic traversal of a large GeoJSON payload.
         attempt_ref = self._attempt_ref(request, raw_value)
         normalized_source_ref = (
             "/"
@@ -849,8 +902,6 @@ class DataAdmissionFacade:
                     reason="materialized table exceeds DATA_MAX_TABLE_ROWS",
                     lifecycle_prefix=("DISCOVERED", "CLASSIFIED", "PARSING"),
                 )
-        attempt_ref = self._attempt_ref(request, value)
-
         parent_ref: ArtifactRef | None = None
         if request.parent_catalog_ref is not None:
             try:
@@ -949,6 +1000,7 @@ class DataAdmissionFacade:
         if any(
             feature.normalized_geometry is None
             and feature.geometry_kind != "raster"
+            and feature.geometry_kind != "opaque"
             and str((feature.raw_attributes or {}).get("resource_kind") or "").casefold()
             not in {"table", "document", "text", "markdown", "report", "image"}
             for feature in features
@@ -983,7 +1035,11 @@ class DataAdmissionFacade:
         }))
         from app.data.admission import current_world_snapshot
 
-        catalog = DataResourceCatalog(current_world_snapshot(catalog.snapshot))
+        catalog = DataResourceCatalog(current_world_snapshot(
+            catalog.snapshot,
+            explicit_decisions_trusted=True,
+        ))
+        catalog._current_world_validation_token = catalog.snapshot.digest
         data_snapshot = SessionDataSnapshot.from_data_catalog(
             catalog,
             session_id=request.session_id,
@@ -1024,7 +1080,7 @@ class DataAdmissionFacade:
             run_state["artifact_refs"] = {
                 "data_catalog": parent_ref.model_dump(mode="json"),
             }
-        run = await DataApplication().run(
+        run = DataApplication().run(
             run_state,
             catalog=catalog,
             data_snapshot=data_snapshot,
@@ -1498,7 +1554,7 @@ def _catalog_gaps(catalog: DataResourceCatalog) -> tuple[DataGapRecord, ...]:
                 missing_fields=("geometry",),
             )
             continue
-        if feature.normalized_geometry is None:
+        if feature.normalized_geometry is None and feature.geometry_kind != "opaque":
             trace = [
                 str(item)
                 for item in feature.crs_transform
@@ -1702,7 +1758,7 @@ class DataApplication:
             route_reason="data_ready" if passed else reason or "data_bootstrap_failed",
         )
 
-    async def run(
+    def run(
         self,
         state: Mapping[str, Any],
         *,
@@ -1721,16 +1777,28 @@ class DataApplication:
             village_name=str((state.get("config") or {}).get("village_name") or ""),
             source_snapshot_ref=str((state.get("context_ref") or {}).get("snapshot_id") or ""),
         )
-        from app.data.admission import current_world_snapshot
-
-        normalized = DataResourceCatalog(
-            current_world_snapshot(normalized.snapshot)
+        from app.data.admission import (
+            CURRENT_WORLD_ADMISSION_POLICY_VERSION,
+            assert_current_world_catalog,
+            current_world_snapshot,
         )
+
+        if normalized.snapshot.admission_policy_version == CURRENT_WORLD_ADMISSION_POLICY_VERSION:
+            # DataAdmissionFacade has already produced and validated this
+            # immutable current-world view.  Rebuilding it here would scan
+            # every feature a second time and repeat quarantine filtering.
+            if getattr(normalized, "_current_world_validation_token", None) != normalized.snapshot.digest:
+                assert_current_world_catalog(normalized.snapshot)
+        else:
+            normalized = DataResourceCatalog(
+                current_world_snapshot(normalized.snapshot)
+            )
         from app.modules.data.invalidation import build_data_dependency_graph
 
         dependency_graph = build_data_dependency_graph(
             normalized,
         )
+        normalized.data_dependency_graph_digest = dependency_graph.graph_digest
         snapshot = data_snapshot or SessionDataSnapshot.from_data_catalog(
             normalized,
             session_id=request.session_id,
@@ -1986,7 +2054,7 @@ async def run_data(
 ) -> DataRunResult:
     """Convenience entry point for composition roots and one-off probes."""
 
-    return await DataApplication().run(state, catalog=catalog)
+    return DataApplication().run(state, catalog=catalog)
 
 
 __all__ = ["DataApplication", "DataRunRequest", "DataRunResult", "run_data"]

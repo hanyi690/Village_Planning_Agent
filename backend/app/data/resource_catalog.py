@@ -5,7 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections import OrderedDict
 from collections.abc import Iterable, Mapping
+from functools import lru_cache
+from threading import RLock
 from typing import Any
 
 from app.contracts.data.source_contracts import (
@@ -29,12 +32,32 @@ def _kind(geometry: Mapping[str, Any] | None) -> str:
         return "polygon"
     if value in {"multipatch", "multisurface", "polyhedral_surface"}:
         return "multipatch"
-    return "unknown"
+    if value == "geometrycollection":
+        return "collection"
+    return "opaque" if value else "unknown"
 
 
 def _short_digest(value: Any) -> str:
     raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def _geometry_cache_digest(value: Mapping[str, Any]) -> str:
+    """Return a fast process-local key without changing persisted identity."""
+
+    try:
+        import orjson
+
+        raw = orjson.dumps(value, option=orjson.OPT_SORT_KEYS)
+    except Exception:
+        raw = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:20]
 
 
 def _is_empty(value: Any) -> bool:
@@ -107,7 +130,55 @@ def _crs_text(value: Any, fallback: str) -> str:
 
 
 _NORMALIZED_CRS = "EPSG:4326"
-TOPOLOGY_REPAIR_POLICY = "strict_geometry_type"
+
+_GEOMETRY_NORMALIZATION_CACHE_LIMIT = 8192
+_GEOMETRY_NORMALIZATION_CACHE_LOCK = RLock()
+_GEOMETRY_NORMALIZATION_CACHE: OrderedDict[
+    tuple[str, str, str],
+    tuple[dict[str, Any] | None, str, tuple[str, ...], dict[str, Any]],
+] = OrderedDict()
+
+
+@lru_cache(maxsize=32)
+def _transformer_to_wgs84(source_crs: str) -> Any:
+    """Reuse immutable CRS transformers across features and replay runs."""
+
+    from pyproj import Transformer
+
+    return Transformer.from_crs(source_crs, _NORMALIZED_CRS, always_xy=True)
+TOPOLOGY_REPAIR_POLICY = "surface_family_compatible"
+
+_GEOMETRY_FAMILY_TYPES = {
+    "point": frozenset({"Point", "MultiPoint"}),
+    "line": frozenset({"LineString", "MultiLineString"}),
+    "polygon": frozenset({"Polygon", "MultiPolygon"}),
+    "collection": frozenset({"GeometryCollection"}),
+}
+
+
+def _repair_types_are_compatible(
+    source_type: str,
+    repaired_type: str,
+    geometry_family: str,
+) -> bool:
+    allowed_types = _GEOMETRY_FAMILY_TYPES.get(geometry_family)
+    return bool(
+        allowed_types
+        and source_type in allowed_types
+        and repaired_type in allowed_types
+    )
+
+
+def _complete_collection_result(repaired: Any) -> bool:
+    """Allow a complete mixed-dimensional repair as read-only collection data."""
+
+    if _kind({"type": repaired.geom_type}) != "collection":
+        return False
+    if repaired.geom_type != "GeometryCollection" or repaired.is_empty:
+        return False
+    # Every component remains present in the normalized collection.  No
+    # component is extracted, discarded, or coerced into a surface/line.
+    return all(not component.is_empty and component.is_valid for component in repaired.geoms)
 
 
 def _validated_wgs84_geometry(
@@ -122,7 +193,7 @@ def _validated_wgs84_geometry(
         from shapely.geometry import mapping as shapely_mapping, shape
         from shapely.validation import explain_validity
 
-        candidate = shape(dict(geometry))
+        candidate = shape(geometry)
         if candidate.is_empty:
             return None, (transform_ref, "empty_geometry"), {}
         source_type = str(candidate.geom_type)
@@ -131,6 +202,7 @@ def _validated_wgs84_geometry(
             len(candidate.geoms) if hasattr(candidate, "geoms") else 1
         )
         source_area = float(candidate.area) if source_kind == "polygon" else None
+        repaired_geometry = False
         if not candidate.is_valid:
             validity_reason = str(explain_validity(candidate))
             repaired = make_valid(candidate)
@@ -160,23 +232,44 @@ def _validated_wgs84_geometry(
                 "source_area": source_area,
                 "repaired_area": repaired_area,
                 "relative_area_delta": relative_area_delta,
+                "geometry_type_changed": source_type != repaired_type,
+                "part_count_changed": source_parts != repaired_parts,
                 "review_required": bool(
-                    relative_area_delta is not None
-                    and abs(relative_area_delta) > 0.01
+                    source_type != repaired_type
+                    or source_parts != repaired_parts
+                    or (
+                        relative_area_delta is not None
+                        and abs(relative_area_delta) > 0.01
+                    )
                 ),
             }
+            collection_adaptation = _complete_collection_result(repaired)
+            audit["representation_adaptation"] = (
+                "complete_geometry_collection_read_only"
+                if collection_adaptation
+                else "none"
+            )
             if (
                 repaired.is_empty
                 or not repaired.is_valid
-                or repaired_kind not in {"point", "line", "polygon"}
-                or repaired_kind != source_kind
-                or repaired_type != source_type
+                or (
+                    not collection_adaptation
+                    and (
+                        repaired_kind != source_kind
+                        or not _repair_types_are_compatible(
+                            source_type,
+                            repaired_type,
+                            source_kind,
+                        )
+                    )
+                )
             ):
                 return None, (transform_ref, "invalid_geometry"), audit
             candidate = repaired
+            repaired_geometry = True
             transform_ref = (
                 f"{transform_ref}|topology_repair:make_valid:"
-                f"{source_kind}->{repaired_kind}"
+                f"{TOPOLOGY_REPAIR_POLICY}:{source_type}->{repaired_type}"
             )
         bounds = tuple(float(value) for value in candidate.bounds)
         if len(bounds) == 4 and (
@@ -187,7 +280,16 @@ def _validated_wgs84_geometry(
             or bounds[3] > 90.0
         ):
             return None, (transform_ref, "wgs84_bounds_invalid"), locals().get("audit", {})
-        return dict(shapely_mapping(candidate)), (transform_ref,), locals().get("audit", {})
+        # For an already-valid WGS84 input the source mapping is the canonical
+        # normalized representation.  Avoid a Shapely -> Python coordinate
+        # walk in the common path; repaired or CRS-transformed geometries
+        # still use the exact Shapely mapping produced above.
+        normalized_mapping = (
+            dict(shapely_mapping(candidate))
+            if repaired_geometry
+            else dict(geometry)
+        )
+        return normalized_mapping, (transform_ref,), locals().get("audit", {})
     except Exception as exc:
         return None, (transform_ref, f"geometry_validation_failed:{type(exc).__name__}"), {}
 
@@ -207,20 +309,40 @@ def _normalize_geometry(
         return None, "", ("missing_geometry",), {}
     source = str(source_crs or "").strip()
     source_fold = source.casefold()
+    cache_key = (
+        source_fold,
+        TOPOLOGY_REPAIR_POLICY,
+        _geometry_cache_digest(geometry),
+    )
+    with _GEOMETRY_NORMALIZATION_CACHE_LOCK:
+        cached = _GEOMETRY_NORMALIZATION_CACHE.get(cache_key)
+        if cached is not None:
+            _GEOMETRY_NORMALIZATION_CACHE.move_to_end(cache_key)
+            return cached
+
+    def cache_result(
+        result: tuple[dict[str, Any] | None, str, tuple[str, ...], dict[str, Any]],
+    ) -> tuple[dict[str, Any] | None, str, tuple[str, ...], dict[str, Any]]:
+        with _GEOMETRY_NORMALIZATION_CACHE_LOCK:
+            _GEOMETRY_NORMALIZATION_CACHE[cache_key] = result
+            _GEOMETRY_NORMALIZATION_CACHE.move_to_end(cache_key)
+            while len(_GEOMETRY_NORMALIZATION_CACHE) > _GEOMETRY_NORMALIZATION_CACHE_LIMIT:
+                _GEOMETRY_NORMALIZATION_CACHE.popitem(last=False)
+        return result
+
     if source_fold in {"epsg:4326", "4326", "crs84", "urn:ogc:def:crs:ogc:1.3:crs84"}:
         normalized, trace, audit = _validated_wgs84_geometry(
             geometry,
             transform_ref="identity",
         )
-        return normalized, _NORMALIZED_CRS, trace, audit
+        return cache_result((normalized, _NORMALIZED_CRS, trace, audit))
     if not source:
-        return None, "", ("source_crs_missing",), {}
+        return cache_result((None, "", ("source_crs_missing",), {}))
     try:
         from shapely.geometry import mapping as shapely_mapping, shape
         from shapely.ops import transform
-        from pyproj import Transformer
 
-        transformer = Transformer.from_crs(source, _NORMALIZED_CRS, always_xy=True)
+        transformer = _transformer_to_wgs84(source)
 
         def apply(x: Any, y: Any, z: Any = None) -> Any:
             if z is None:
@@ -228,16 +350,16 @@ def _normalize_geometry(
             tx, ty, tz = transformer.transform(x, y, z)
             return tx, ty, tz
 
-        normalized = transform(apply, shape(dict(geometry)))
+        normalized = transform(apply, shape(geometry))
         normalized_geometry, trace, audit = _validated_wgs84_geometry(
             dict(shapely_mapping(normalized)),
             transform_ref=f"{source}->{_NORMALIZED_CRS}",
         )
-        return normalized_geometry, _NORMALIZED_CRS, trace, audit
+        return cache_result((normalized_geometry, _NORMALIZED_CRS, trace, audit))
     except Exception as exc:
-        return None, "", (
+        return cache_result((None, "", (
             f"{source}->{_NORMALIZED_CRS}:failed:{type(exc).__name__}",
-        ), {}
+        ), {}))
 
 
 def _expand_geometry_records(
@@ -611,6 +733,11 @@ class DataResourceCatalog:
 
     def __init__(self, snapshot: DataResourceCatalogSnapshot):
         self.snapshot = snapshot
+        # Set only by DataAdmissionFacade after current_world_snapshot() has
+        # produced this exact immutable view. DataApplication.run() may use
+        # the private digest token to avoid validating the same object twice;
+        # externally supplied catalogs remain unvalidated by default.
+        self._current_world_validation_token: object | None = None
         self.data_dependency_graph_digest = ""
         self._datasets = {
             item.dataset_ref: item
@@ -764,32 +891,49 @@ class DataResourceCatalog:
                     while rep_ref in representations:
                         rep_ref = f"{dataset_ref}:{item.representation_ref}~{suffix}"
                         suffix += 1
+                resolved_resource_ref = resource_map.get(
+                    str(item.resource_ref),
+                    item.resource_ref,
+                )
+                resolved_content_digest = feature_digest_map.get(
+                    (dataset_ref, source_ref),
+                    item.content_digest,
+                )
                 if rep_ref not in representations:
-                    representations[rep_ref] = SpatialRepresentation.model_validate({
-                        **item.model_dump(mode="python"),
-                        "representation_ref": rep_ref,
-                        "dataset_ref": dataset_ref,
-                        "source_feature_ref": source_ref,
-                        "geometry_ref": item.geometry_ref,
-                        "resource_ref": resource_map.get(str(item.resource_ref), item.resource_ref),
-                        "content_digest": feature_digest_map.get(
-                            (dataset_ref, source_ref), item.content_digest
-                        ),
-                    })
+                    updates: dict[str, Any] = {}
+                    if rep_ref != item.representation_ref:
+                        updates["representation_ref"] = rep_ref
+                    if dataset_ref != item.dataset_ref:
+                        updates["dataset_ref"] = dataset_ref
+                    if source_ref != item.source_feature_ref:
+                        updates["source_feature_ref"] = source_ref
+                    if resolved_resource_ref != item.resource_ref:
+                        updates["resource_ref"] = resolved_resource_ref
+                    if resolved_content_digest != item.content_digest:
+                        updates["content_digest"] = resolved_content_digest
+                    representations[rep_ref] = (
+                        item.model_copy(update=updates) if updates else item
+                    )
             for item in getattr(snap, "capabilities", ()) or ():
                 resource_ref = resource_map.get(str(item.resource_ref), str(item.resource_ref))
                 capability_ref = str(item.capability_ref)
                 if resource_ref != str(item.resource_ref):
                     capability_ref = f"{resource_ref}:{item.operation}"
-                capabilities.setdefault(capability_ref, DataCapability.model_validate({
-                    **item.model_dump(mode="python"),
-                    "capability_ref": capability_ref,
-                    "resource_ref": resource_ref,
-                    "content_digest": resource_digest_map.get(
-                        str(item.resource_ref),
-                        item.content_digest,
-                    ),
-                }))
+                resolved_content_digest = resource_digest_map.get(
+                    str(item.resource_ref),
+                    item.content_digest,
+                )
+                if capability_ref not in capabilities:
+                    updates = {}
+                    if capability_ref != item.capability_ref:
+                        updates["capability_ref"] = capability_ref
+                    if resource_ref != item.resource_ref:
+                        updates["resource_ref"] = resource_ref
+                    if resolved_content_digest != item.content_digest:
+                        updates["content_digest"] = resolved_content_digest
+                    capabilities[capability_ref] = (
+                        item.model_copy(update=updates) if updates else item
+                    )
             for item in getattr(snap, "admission_decisions", ()) or ():
                 admission_decisions.setdefault(str(item.decision_ref), item)
         if not datasets:
@@ -938,7 +1082,11 @@ class DataResourceCatalog:
             )
             normalization_diagnostics = []
             if geometry is not None and normalized_geometry is None:
-                normalization_diagnostics.append("normalized_geometry_unavailable")
+                normalization_diagnostics.append(
+                    "opaque_geometry_read_only"
+                    if _kind(geometry) == "opaque"
+                    else "normalized_geometry_unavailable"
+                )
             normalization_diagnostics.extend(
                 f"crs_transform:{item}"
                 for item in crs_transform
@@ -954,7 +1102,12 @@ class DataResourceCatalog:
                 geometry_kind=(
                     _kind(geometry)
                     if geometry is not None
-                    else (declared_kind if declared_kind in {"point", "line", "polygon", "multipatch", "raster"} else "unknown")
+                    else (declared_kind if declared_kind in {"point", "line", "polygon", "multipatch", "collection", "raster"} else "unknown")
+                ),
+                normalized_geometry_kind=(
+                    _kind(normalized_geometry)
+                    if normalized_geometry is not None
+                    else "unknown"
                 ),
                 source_crs=feature_crs,
                 normalized_crs=normalized_crs,
@@ -1006,7 +1159,11 @@ class DataResourceCatalog:
                     dataset_ref=feature_dataset_ref,
                     source_feature_ref=source_feature_ref,
                     purpose="source_geometry",
-                    geometry_kind=feature.geometry_kind,
+                    geometry_kind=(
+                        feature.normalized_geometry_kind
+                        if normalized_geometry is not None
+                        else feature.geometry_kind
+                    ),
                     geometry_ref=source_feature_ref,
                     resource_ref=resource_ref,
                     crs=(feature_crs if is_raster else normalized_crs),
@@ -1018,14 +1175,16 @@ class DataResourceCatalog:
                     status=(
                         "available"
                         if normalized_geometry is not None or (is_raster and feature_crs)
+                        else "read_only"
+                        if feature.geometry_kind == "opaque" and geometry is not None
                         else "unresolved"
                     ),
                 )
             )
             operation_specs = _operation_specs(
-                feature.geometry_kind,
+                feature.normalized_geometry_kind,
                 spatially_executable=(
-                    feature.geometry_kind in {"point", "line", "polygon"}
+                    feature.normalized_geometry_kind in {"point", "line", "polygon"}
                     and normalized_geometry is not None
                 ),
                 topology_repairable=(
@@ -1039,7 +1198,11 @@ class DataResourceCatalog:
                         capability_ref=capability_ref,
                         resource_ref=resource_ref,
                         operation=operation,
-                        geometry_kind=feature.geometry_kind,
+                        geometry_kind=(
+                            feature.normalized_geometry_kind
+                            if normalized_geometry is not None
+                            else feature.geometry_kind
+                        ),
                         crs=(
                             normalized_crs
                             if normalized_geometry is not None
@@ -1208,7 +1371,9 @@ class DataResourceCatalog:
                 "source_crs": item.source_crs,
                 "normalized_crs": item.normalized_crs,
                 "normalization_status": (
-                    "available" if item.normalized_geometry is not None else "unresolved"
+                    "available" if item.normalized_geometry is not None
+                    else "read_only" if item.geometry_kind == "opaque"
+                    else "unresolved"
                 ),
                 "feature_digest": item.source_feature_digest,
                 "attribute_keys": ",".join(sorted(item.raw_attributes)),

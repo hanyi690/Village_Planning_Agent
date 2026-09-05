@@ -2,8 +2,10 @@
 
 DATA 负责把显式声明的本地/远程来源转换成可追踪、不可变、可重载的输入产品。
 唯一的 current DATA 写边界是
-`app.modules.data.application.DataAdmissionFacade`；`DataCatalog` 只管理声明式 source
-registry 和显式 bounded query。
+`app.modules.data.application.DataAdmissionFacade`。远程来源使用
+`RemoteSourceAdmissionRequest` 等声明式 contract；provider run 通过 lease、fencing
+和 coverage manifest 写入 observation cache，不存在独立的 YAML/DataCatalog discovery
+入口。
 
 ## 真实输入闭包
 
@@ -22,7 +24,7 @@ registry 和显式 bounded query。
 | 目录 | 责任 |
 |---|---|
 | `ingestion/` | 上传、文件解析、source admission、连接和远程 driver |
-| `catalog/` | YAML source registry、session artifact reload、provider lease/writer、advisory observation cache |
+| `catalog/` | session artifact reload、provider lease/writer、advisory observation cache |
 | `resource_catalog.py` | generic source/normalized/representation/capability catalog 和严格拓扑审计 |
 | `boundary_scope.py` | 从已准入 boundary 生成 `BoundaryScopeArtifact` |
 | `coordinate_contract.py` | 显式 CRS/坐标转换契约，未知坐标 fail closed |
