@@ -68,7 +68,12 @@ class SourceTemporalRoleDecision(StrictContractModel):
     declared_channel: str
     selected_role: TemporalRole = "ambiguous"
     reason_code: str = "insufficient_evidence"
-    status: Literal["accepted", "ambiguous", "provider_failed"] = "ambiguous"
+    status: Literal[
+        "accepted",
+        "ambiguous",
+        "provider_failed",
+        "protocol_failed",
+    ] = "ambiguous"
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     profile_complete: bool = True
     input_digest: str
@@ -76,6 +81,7 @@ class SourceTemporalRoleDecision(StrictContractModel):
     prompt_version: str
     model_id: str
     provider_pass_count: int = Field(default=0, ge=0, le=2)
+    pass_diagnostics: tuple[dict[str, object], ...] = ()
 
 
 __all__ = [

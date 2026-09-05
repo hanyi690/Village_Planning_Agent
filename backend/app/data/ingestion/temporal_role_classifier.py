@@ -3,8 +3,8 @@
 The classifier never assigns feature semantics, entity identity, geometry or
 coordinates.  It only decides whether one source is current observation,
 planning control, a produced plan, a reference plan, or ambiguous.  Positive
-admission requires two exact provider passes over one complete flat profile;
-provider failure and incomplete profiles fail closed.
+  admission requires two valid provider passes over one complete flat profile;
+  provider, protocol, and incomplete-profile failures fail closed.
 """
 
 from __future__ import annotations
@@ -251,6 +251,27 @@ def _proposal_valid(
     )
 
 
+def _canonical_reason_code(
+    selected_role: str,
+    proposals: tuple[TemporalRoleProposal, ...],
+) -> str:
+    """Reduce valid role evidence without wording-level agreement."""
+
+    allowed = _ROLE_REASON_CODES.get(selected_role, set())
+    reasons = {item.reason_code for item in proposals} & allowed
+    for preferred in (
+        "hard_constraint",
+        "requested_future_action",
+        "observed_current_state",
+        "produced_plan",
+        "reference_plan",
+        "insufficient_evidence",
+    ):
+        if preferred in reasons:
+            return preferred
+    return "insufficient_evidence"
+
+
 def _decision(
     row: TemporalRoleInputRow,
     *,
@@ -262,6 +283,7 @@ def _decision(
     raw_output_material: list[dict[str, Any]],
     model_id: str,
     provider_pass_count: int,
+    pass_diagnostics: tuple[dict[str, Any], ...] = (),
 ) -> SourceTemporalRoleDecision:
     raw_output_digest = _digest(raw_output_material)
     return SourceTemporalRoleDecision(
@@ -290,6 +312,7 @@ def _decision(
         prompt_version=PROMPT_VERSION,
         model_id=model_id,
         provider_pass_count=provider_pass_count,
+        pass_diagnostics=pass_diagnostics,
     )
 
 
@@ -300,7 +323,7 @@ async def classify_temporal_role_async(
     llm: Any = None,
     model_id: str = "",
 ) -> SourceTemporalRoleDecision:
-    """Run two bounded passes and retain only exact temporal-role consensus."""
+    """Run two bounded passes and retain only valid temporal-role consensus."""
 
     from app.core.settings import LLM_MODEL
 
@@ -319,7 +342,10 @@ async def classify_temporal_role_async(
             provider_pass_count=0,
         )
 
-    from app.infrastructure.structured_runtime.facade import LLMCallSpec, run_structured
+    from app.infrastructure.structured_runtime import LLMCallSpec
+    from app.infrastructure.structured_runtime.consensus import (
+        run_structured_consensus,
+    )
 
     messages = [
         {
@@ -332,62 +358,73 @@ async def classify_temporal_role_async(
         },
         {"role": "user", "content": _prompt(row)},
     ]
-    passes: list[TemporalRoleProposal] = []
-    raw_output_material: list[dict[str, Any]] = []
-    for pass_number in range(2):
-        try:
-            batch = await run_structured(
-                LLMCallSpec(
-                    stage="DATA",
-                    contract_key="data.temporal_role",
-                    response_model=TemporalRoleProposalBatch,
-                    call_type="closed_set",
-                    max_retries=1,
-                    timeout_s=90.0,
-                    max_tokens=800,
-                    incomplete_output_max_tokens=1200,
-                    temperature=0.01,
-                    allow_content_json=True,
-                    input_char_limit=24_000,
-                ),
-                messages,
-                llm=llm,
-                context={
-                    "profile_ref": row.profile_ref,
-                    "pass_number": pass_number + 1,
-                },
-            )
-            raw_output_material.append({
-                "pass_number": pass_number + 1,
-                "proposals": [
-                    item.model_dump(mode="json") for item in batch.proposals
-                ],
-            })
-            if _proposal_valid(batch, row):
-                passes.append(batch.proposals[0])
-        except Exception as exc:
-            raw_output_material.append({
-                "pass_number": pass_number + 1,
-                "failure": type(exc).__name__,
-            })
+    spec = LLMCallSpec(
+        stage="DATA",
+        contract_key="data.temporal_role",
+        response_model=TemporalRoleProposalBatch,
+        call_type="closed_set",
+        max_retries=1,
+        timeout_s=90.0,
+        max_tokens=800,
+        incomplete_output_max_tokens=1200,
+        temperature=0.01,
+        allow_content_json=True,
+        input_char_limit=24_000,
+    )
+    consensus = await run_structured_consensus(
+        spec,
+        messages,
+        passes=2,
+        validator=lambda value: _proposal_valid(value, row),
+        llm=llm,
+        context={"profile_ref": row.profile_ref},
+    )
+    passes = [
+        item.typed_output.proposals[0]
+        for item in consensus.passes
+        if item.status == "completed"
+        and isinstance(item.typed_output, TemporalRoleProposalBatch)
+    ]
+    raw_output_material = [
+        {
+            "pass_number": item.pass_number,
+            "status": item.status,
+            "proposals": (
+                [proposal.model_dump(mode="json") for proposal in item.typed_output.proposals]
+                if isinstance(item.typed_output, TemporalRoleProposalBatch)
+                else []
+            ),
+            "failure_code": item.failure_code,
+            "failure_kind": item.failure_kind,
+        }
+        for item in consensus.passes
+    ]
+    pass_diagnostics = tuple(
+        item.model_dump(mode="json", exclude={"typed_output"})
+        for item in consensus.passes
+    )
 
     if len(passes) != 2:
         return _decision(
             row,
             selected_role="ambiguous",
             reason_code="insufficient_evidence",
-            status="provider_failed",
+            status=(
+                "provider_failed"
+                if consensus.provider_failure_count
+                else "protocol_failed"
+                if consensus.protocol_failure_count
+                else "ambiguous"
+            ),
             confidence=0.0,
             input_digest=input_digest,
             raw_output_material=raw_output_material,
             model_id=resolved_model,
             provider_pass_count=len(passes),
+            pass_diagnostics=pass_diagnostics,
         )
     left, right = passes
-    if (
-        left.selected_role != right.selected_role
-        or left.reason_code != right.reason_code
-    ):
+    if left.selected_role != right.selected_role:
         return _decision(
             row,
             selected_role="ambiguous",
@@ -398,8 +435,13 @@ async def classify_temporal_role_async(
             raw_output_material=raw_output_material,
             model_id=resolved_model,
             provider_pass_count=2,
+            pass_diagnostics=pass_diagnostics,
         )
     confidence = min(left.confidence, right.confidence)
+    canonical_reason = _canonical_reason_code(
+        left.selected_role,
+        (left, right),
+    )
     positive_admission = left.selected_role in {
         "current_evidence",
         "planning_control",
@@ -410,13 +452,14 @@ async def classify_temporal_role_async(
     return _decision(
         row,
         selected_role=(left.selected_role if accepted else "ambiguous"),
-        reason_code=(left.reason_code if accepted else "insufficient_evidence"),
+        reason_code=(canonical_reason if accepted else "insufficient_evidence"),
         status="accepted" if accepted else "ambiguous",
         confidence=confidence,
         input_digest=input_digest,
         raw_output_material=raw_output_material,
         model_id=resolved_model,
         provider_pass_count=2,
+        pass_diagnostics=pass_diagnostics,
     )
 
 

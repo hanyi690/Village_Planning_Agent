@@ -1,6 +1,12 @@
 """集中式 structured output parser、validator 和 artifact assembler。"""
 
 from .assembler import ArtifactAssembler
+from .consensus import run_structured_consensus
+from .contracts import (
+    StructuredConsensusResult,
+    StructuredPassResult,
+    StructuredPassStatus,
+)
 from .facade import (
     LLMCallSpec,
     claim_response_model,
@@ -24,6 +30,9 @@ from .validator import validate_output
 
 __all__ = [
     "ArtifactAssembler",
+    "StructuredConsensusResult",
+    "StructuredPassResult",
+    "StructuredPassStatus",
     "LLMCallSpec",
     "claim_response_model",
     "create_flash_model",
@@ -32,6 +41,7 @@ __all__ = [
     "run_structured_output",
     "run_structured_output_sync",
     "run_structured",
+    "run_structured_consensus",
     "run_verified_decision",
     "structured_failure_code",
     "structured_failure_summary",
