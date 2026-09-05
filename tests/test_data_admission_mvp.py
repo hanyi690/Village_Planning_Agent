@@ -125,8 +125,27 @@ async def test_upload_calls_async_classifier_and_facade(monkeypatch, tmp_path):
 
     seen: dict[str, object] = {}
 
-    async def fake_assess(**kwargs):
-        seen["classifier"] = kwargs
+    async def fake_assess(
+        *,
+        input_role,
+        category,
+        filename,
+        parsed_text,
+        gis_data,
+        gis_data_type,
+        parse_status,
+        temporal_llm_enabled,
+    ):
+        seen["classifier"] = {
+            "input_role": input_role,
+            "category": category,
+            "filename": filename,
+            "parsed_text": parsed_text,
+            "gis_data": gis_data,
+            "gis_data_type": gis_data_type,
+            "parse_status": parse_status,
+            "temporal_llm_enabled": temporal_llm_enabled,
+        }
         return SourceAdmissionAssessment(
             declared_role="current_evidence",
             input_role="current_evidence",
@@ -153,6 +172,8 @@ async def test_upload_calls_async_classifier_and_facade(monkeypatch, tmp_path):
     assert seen["classifier"]["temporal_llm_enabled"] is True
     assert seen["db"]["admission_receipt_ref"]["schema_id"] == "DataAdmissionReceipt"
     assert seen["db"]["admission_lifecycle"][-1] == "ADMITTED"
+    assert seen["db"]["gis_data_type"] is None
+    assert result["gis_data_type"] is None
     assert result["admission_status"] == "admitted"
 
 
@@ -250,7 +271,7 @@ def test_real_jintian_p0_inventory_is_present():
     assert Path("docs/MinerU_markdown_泗水镇金田村现状报告_2056637054755487744.md").is_file()
 
 
-def test_real_jintian_topology_repairs_keep_strict_type_and_audit_landuse_feature_343():
+def test_real_jintian_topology_repairs_keep_surface_family_and_audit_landuse_feature_343():
     payload = json.loads(
         Path("data/gis/jintian/current/landuse.geojson").read_text(encoding="utf-8")
     )
@@ -267,7 +288,7 @@ def test_real_jintian_topology_repairs_keep_strict_type_and_audit_landuse_featur
     assert len(repaired) == 5
     feature_343 = catalog.snapshot.features[343]
     audit = feature_343.topology_repair_audit
-    assert audit["policy"] == "strict_geometry_type"
+    assert audit["policy"] == "surface_family_compatible"
     assert audit["source_geometry_type"] == "MultiPolygon"
     assert audit["repaired_geometry_type"] == "MultiPolygon"
     assert audit["source_geometry_family"] == "polygon"
@@ -280,7 +301,7 @@ def test_real_jintian_topology_repairs_keep_strict_type_and_audit_landuse_featur
     assert feature_343.normalized_geometry["type"] == "MultiPolygon"
 
 
-def test_real_jintian_ecological_topology_repair_is_traceable():
+def test_real_jintian_ecological_topology_repair_is_surface_family_compatible():
     payload = json.loads(
         Path("data/gis/jintian/current/ecological_protection.geojson").read_text(
             encoding="utf-8"
@@ -298,11 +319,13 @@ def test_real_jintian_ecological_topology_repair_is_traceable():
     ]
     assert len(repaired) == 1
     audit = repaired[0].topology_repair_audit
-    assert audit["policy"] == "strict_geometry_type"
+    assert audit["policy"] == "surface_family_compatible"
     assert audit["source_geometry_type"] == "MultiPolygon"
     assert audit["repaired_geometry_type"] == "Polygon"
-    assert repaired[0].normalized_geometry is None
-    assert repaired[0].crs_transform[-1] == "invalid_geometry"
+    assert repaired[0].normalized_geometry is not None
+    assert repaired[0].normalized_geometry["type"] == "Polygon"
+    assert repaired[0].geometry["type"] == "MultiPolygon"
+    assert repaired[0].crs_transform[-1].endswith("MultiPolygon->Polygon")
 
 
 @pytest.mark.asyncio
@@ -369,9 +392,7 @@ async def test_real_jintian_p0_inputs_are_admissible_through_facade(tmp_path, mo
     ))
     assert all(
         item.receipt.state == (
-            "GEOMETRY_INVALID"
-            if name in {"landuse.geojson", "ecological_protection.geojson"}
-            else "ADMITTED"
+            "ADMITTED"
         )
         for name, item in zip(names, results)
     )

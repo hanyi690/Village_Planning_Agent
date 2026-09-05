@@ -70,3 +70,17 @@ def test_expired_run_recovery_marks_staging_abandoned(tmp_path):
     assert recovery.status == "RECOVERED"
     assert recovery.previous_fencing_token == lease.fencing_token
     assert '"ABANDONED"' in (staging / "recovery.json").read_text(encoding="utf-8")
+    persisted = json.loads((tmp_path / ".leases" / "run-3__tencent.json").read_text(encoding="utf-8"))
+    assert persisted["status"] == "EXPIRED"
+
+
+def test_reconcile_expired_is_idempotent_and_keeps_lease_audit_record(tmp_path):
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    store = ProviderRunLeaseStore(tmp_path)
+    store.acquire("run-4", "amap", "worker-a", ttl_seconds=1, now=start)
+
+    recovered = store.reconcile_expired(provider="amap", now=start + timedelta(seconds=2))
+    assert [item.run_ref for item in recovered] == ["run-4"]
+    assert store.reconcile_expired(provider="amap", now=start + timedelta(seconds=3)) == []
+    persisted = json.loads((tmp_path / ".leases" / "run-4__amap.json").read_text(encoding="utf-8"))
+    assert persisted["status"] == "EXPIRED"

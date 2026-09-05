@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 from types import SimpleNamespace
 
 from shapely.geometry import box, mapping
@@ -14,6 +15,7 @@ from scripts.collect_amap_jintian_validation import (
     max_pages_for_page_size,
     normalize_amap_location,
     split_saturated_scope,
+    write_candidate_outputs,
     write_json,
 )
 
@@ -111,6 +113,49 @@ def test_around_requests_use_strict_meizhou_scope():
     assert params["city_limit"] == "true"
 
 
+def test_candidate_output_replaces_request_wrappers_before_publish(tmp_path: Path):
+    collector = StageCollector("01_admin_scope", refresh=False, min_interval=0, root=tmp_path)
+    try:
+        collector.events = [{
+            "operation": "poi_v5_text",
+            "request_key": "request-1",
+            "query_name": "金田村",
+            "raw_response": "responses/request-1.json",
+            "status": "success_nonempty",
+            "success": True,
+        }]
+        collector.response_payloads = {
+            "request-1": {
+                "status": "1",
+                "infocode": "10000",
+                "pois": [{
+                    "id": "poi-1",
+                    "name": "金田村服务点",
+                    "cityname": "梅州市",
+                    "adname": "平远县",
+                    "townname": "泗水镇",
+                    "address": "金田村",
+                    "location": "116.044146,24.818629",
+                }],
+            },
+        }
+        summary = write_candidate_outputs(
+            collector,
+            ScopeClassifier(box(116.03, 24.80, 116.06, 24.84)),
+        )
+        assert summary["normalized_record_count"] == 1
+        assert collector.normalized[0]["scope_bucket"] == "project_local"
+        assert "records" not in collector.normalized[0]
+        published = json.loads(
+            (collector.run_dir / "normalized_all.jsonl").read_text(encoding="utf-8").splitlines()[0]
+        )
+        assert published["location_wgs84"]
+        assert published["scope_bucket"] == "project_local"
+        assert "records" not in published
+    finally:
+        collector.lease_store.release(collector.lease)
+
+
 def test_success_empty_is_distinct_from_missing_and_failed():
     assert classify_status(
         attempted=True,
@@ -146,6 +191,27 @@ def test_transient_failure_retries_and_then_caches_success(monkeypatch, tmp_path
     assert event["status"] == "success_empty"
     assert event["retry_count"] == 1
     assert len(event["attempts"]) == 2
+
+
+def test_capability_rejection_skips_repeated_operation_without_network_call(monkeypatch, tmp_path):
+    collector = StageCollector("test", refresh=False, min_interval=0, root=tmp_path, max_retries=1)
+    calls = []
+    monkeypatch.setattr(
+        collector.session,
+        "get",
+        lambda *args, **kwargs: (calls.append((args, kwargs)) or FakeResponse(
+            200,
+            {"status": "0", "infocode": "10012", "info": "INSUFFICIENT_PRIVILEGES"},
+        )),
+    )
+
+    _, first = collector.request("polygon", "https://example.test", {"polygon": "a"}, "poi")
+    _, second = collector.request("polygon", "https://example.test", {"polygon": "b"}, "poi")
+
+    assert first["status"] == "failed"
+    assert second["status"] == "missing_capability"
+    assert second["attempted"] is False
+    assert len(calls) == 1
 
 
 def test_cached_failed_response_is_retried(monkeypatch, tmp_path):

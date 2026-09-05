@@ -109,7 +109,7 @@ def test_remote_drivers_require_the_admitted_receipt_before_fetch():
     from app.data.ingestion.sources.api_vector import ApiVectorDriver
     from app.data.ingestion.sources.remote_raster import RemoteRasterDriver
     from app.data.ingestion.sources.wmts_tile import WmtsTileDriver
-    from app.data.model.canonical import BBox
+    from app.contracts.data.geometry_contracts import BBox
 
     bbox = BBox(west=116.0, south=24.0, east=116.1, north=24.1)
     api = ApiVectorDriver({
@@ -134,7 +134,7 @@ def test_api_vector_does_not_cross_protocol_or_return_wms_as_vector(monkeypatch:
     from types import SimpleNamespace
 
     from app.data.ingestion.sources.api_vector import ApiVectorDriver
-    from app.data.model.canonical import BBox
+    from app.contracts.data.geometry_contracts import BBox
 
     driver = ApiVectorDriver({
         "connection": "gd_tianditu",

@@ -392,6 +392,15 @@ def _is_retryable(http_status: int | None, payload: Any) -> bool:
     return False
 
 
+def _is_capability_unavailable(payload: Any) -> bool:
+    """Detect a provider capability rejection that will not change per query."""
+
+    return (
+        isinstance(payload, dict)
+        and str(payload.get("infocode", "")) in {"10012"}
+    )
+
+
 def records_in(data: Any) -> int:
     if not isinstance(data, dict):
         return 0
@@ -693,6 +702,7 @@ class StageCollector:
         self.skipped: list[dict[str, Any]] = []
         self.response_payloads: dict[str, dict[str, Any]] = {}
         self.query_meta: dict[str, dict[str, Any]] = {}
+        self._unavailable_operations: set[str] = set()
         self.lease_store = ProviderRunLeaseStore(output_root.parent)
         self.lease = self.lease_store.acquire(
             self.run_id,
@@ -712,6 +722,33 @@ class StageCollector:
         self.lease_store.assert_writer(self.lease)
         sanitized = {key: value for key, value in params.items() if key not in {"key", "sig"}}
         key = self._request_key(url, sanitized)
+
+        if operation in self._unavailable_operations:
+            event = {
+                "operation": operation,
+                "url": url,
+                "params": sanitized,
+                "request_key": key,
+                "cache_hit": False,
+                "raw_response": None,
+                "http_status": 200,
+                "api_status": "0",
+                "api_infocode": "10012",
+                "api_info": "INSUFFICIENT_PRIVILEGES",
+                "status": "missing_capability",
+                "success": False,
+                "record_count": 0,
+                "retry_count": 0,
+                "retryable": False,
+                "attempts": [],
+                "error": "provider capability unavailable for this operation; skipped after first rejection",
+                "attempted": False,
+                "capability_available": False,
+            }
+            self.events.append(event)
+            append_jsonl(self.run_dir / "requests.jsonl", event)
+            return {}, event
+
         cache_path = self.cache_dir / f"{key}.json"
         raw_path: Path | None = None
         envelope: dict[str, Any] | None = None
@@ -874,6 +911,8 @@ class StageCollector:
         }
         self.events.append(event)
         append_jsonl(self.run_dir / "requests.jsonl", event)
+        if status == "failed" and _is_capability_unavailable(data):
+            self._unavailable_operations.add(operation)
         return data, event
 
     def add_normalized(self, event: dict[str, Any], kind: str, data: dict[str, Any], query_name: str | None = None) -> None:
@@ -1164,6 +1203,11 @@ def write_candidate_outputs(
     for record in all_records:
         bucket = record.get("scope_bucket", "unknown_scope")
         bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+    # The formal provider writer publishes canonical observation rows.  The
+    # request-level wrappers collected by add_normalized() remain in
+    # normalized.jsonl as an audit index, but must never become the DATA
+    # normalized_all.jsonl product.
+    collector.normalized = all_records
     write_jsonl(collector.run_dir / "normalized_all.jsonl", all_records)
     write_jsonl(collector.run_dir / "retained_candidates.jsonl", retained)
     write_jsonl(collector.run_dir / "rejected_candidates.jsonl", rejected)

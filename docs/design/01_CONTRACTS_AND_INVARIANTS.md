@@ -37,7 +37,7 @@ L1 不负责：
 | 观察与绑定分离 | 已有 <code>EvidenceObservationSnapshot</code>、binding sidecar | 收敛为 <code>L1BindingSnapshot</code>，由 final manifest 引用且不修改冻结观察 |
 | WM 提交回执 | 已有 <code>L1WorldProjectionSnapshot</code> 和 identity commit envelope | 回执必须成为 L2/L3 的前置引用 |
 | 冲突处理 | 已有 fact/gap 状态和部分聚合逻辑 | 补齐逐 predicate 冲突组、authority 与 supersedes 语义 |
-| 最终 L1 产品 | 当前由多个 artifact ref 组合表达 | 增加轻量 <code>L1ProductManifest</code>；不复制完整事实或 binding |
+| 最终 L1 产品 | L1-GROUND 完成后由 reference-only <code>L1ProductManifest</code> 封装多个不可变 artifact ref | manifest 成为 L2/L3 final-view authority；不复制完整事实或 binding |
 
 表中的“当前代码事实”不等于已通过真实会话验收；完成度仍以迁移账本为准。
 
@@ -60,8 +60,8 @@ SessionDataSnapshot + SourceIndex + WorldModelSnapshot v0
   → Cognition validation and atomic commit
   → L1WorldProjectionSnapshot / WorldModelSnapshot v1
   → binding revalidation against v1
-  → L1ProductManifest
-  → L2 / L3 bounded projections
+  → L1ProductManifest（reference-only final view）
+  → L2 / L3 final-view-only bounded projections
 ~~~
 
 观察、绑定和提交是三个不可变事务。不得加载 <code>L1ObservationSnapshot</code> 后修改
@@ -375,17 +375,22 @@ contracts/evidence/identity_contracts.py
 contracts/cognition/stage_contracts.py
 ~~~
 
-目标新增或收敛点：
+已新增或收敛点：
 
 ~~~text
 modules/l1/source_span_validation.py
-modules/l1/fact_acceptance.py
-modules/l1/conflict_resolution.py
 contracts/l1/product_manifest.py
-modules/l1/final_projection.py
+modules/l1/finalization.py
 ~~~
 
-文件名是实施落点，不表示上述目标能力已经存在。
+仍需继续收敛：
+
+~~~text
+modules/l1/fact_acceptance.py
+modules/l1/conflict_resolution.py
+~~~
+
+上述仍需收敛的文件名是目标实施落点，不表示对应完整能力已经存在。
 
 ## 14. 验收
 

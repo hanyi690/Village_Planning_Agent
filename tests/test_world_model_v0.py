@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from rdflib import Literal, RDF, URIRef
+from rdflib import Graph, Literal, RDF, URIRef
 import pytest
 
 from app.contracts.cognition import (
@@ -15,6 +15,7 @@ from app.infrastructure.cognition_runtime.world_model_store import (
     WorldModelKGStore,
 )
 from app.infrastructure.kg.ontology import PLN
+from app.infrastructure.kg.adapters.source_catalog_adapter import project_source_catalog
 
 
 def _catalog() -> DataResourceCatalog:
@@ -37,6 +38,7 @@ def _catalog() -> DataResourceCatalog:
         name="wm-v0",
         crs="EPSG:4326",
     )
+
     feature = draft.snapshot.features[0]
     return DataResourceCatalog.from_records(
         records,
@@ -55,6 +57,77 @@ def _catalog() -> DataResourceCatalog:
             "reason": "wm_v0_exit_gate",
         }],
     )
+
+
+def test_source_catalog_projection_replays_identical_split_graphs():
+    catalog = _catalog()
+    first_source = Graph()
+    first_world = Graph()
+    first_count = project_source_catalog(
+        first_source,
+        catalog,
+        world_graph=first_world,
+    )
+
+    second_source = Graph()
+    second_world = Graph()
+    second_count = project_source_catalog(
+        second_source,
+        catalog,
+        world_graph=second_world,
+    )
+
+    assert second_count == first_count
+    assert set(second_source) == set(first_source)
+    assert set(second_world) == set(first_world)
+
+
+def test_source_catalog_projection_cache_does_not_replay_unrelated_graph_content():
+    records = [{
+        "type": "Feature",
+        "id": "cache-isolation-parcel",
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [[[116.2, 24.2], [116.201, 24.2], [116.2, 24.201], [116.2, 24.2]]],
+        },
+    }]
+    draft = DataResourceCatalog.from_records(
+        records,
+        dataset_ref="dataset:cache-isolation",
+        crs="EPSG:4326",
+    )
+    feature = draft.snapshot.features[0]
+    catalog = DataResourceCatalog.from_records(
+        records,
+        dataset_ref="dataset:cache-isolation",
+        crs="EPSG:4326",
+        admission_decisions=[{
+            "decision_ref": "admission:cache-isolation:parcel",
+            "source_ref": f"resource:{feature.dataset_ref}:{feature.source_feature_ref}",
+            "source_digest": feature.source_feature_digest,
+            "input_role": "current_evidence",
+            "status": "admitted",
+            "resource_kind": "gis",
+            "reason": "projection_cache_test",
+        }],
+    )
+    marker = (URIRef("urn:test:marker"), URIRef("urn:test:kind"), Literal("unrelated"))
+    first_source = Graph()
+    first_world = Graph()
+    first_source.add(marker)
+    first_world.add(marker)
+    project_source_catalog(first_source, catalog, world_graph=first_world)
+
+    second_source = Graph()
+    second_world = Graph()
+    second_source.add(marker)
+    second_world.add(marker)
+    project_source_catalog(second_source, catalog, world_graph=second_world)
+
+    assert marker in second_source
+    assert marker in second_world
+    assert len(second_source) == len(first_source)
+    assert len(second_world) == len(first_world)
 
 
 def test_wm_v0_bootstrap_reload_and_current_view_are_deterministic(tmp_path):

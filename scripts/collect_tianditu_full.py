@@ -914,7 +914,7 @@ class TiandituFullCollector:
         self.records: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
         self.coverage: list[dict[str, Any]] = []
-        self.lease_store = ProviderRunLeaseStore(self.config.output_root)
+        self.lease_store = ProviderRunLeaseStore(self.config.output_root.parent)
         self.lease = self.lease_store.acquire(
             self.run_id,
             "tianditu",
@@ -1102,7 +1102,7 @@ class TiandituFullCollector:
         rejected = [row for row in normalized if row not in retained]
         for row in rejected:
             row["rejection_reasons"] = [row.get("scope_bucket", "unknown_scope")]
-        ProviderObservationWriter(
+        published_dir = ProviderObservationWriter(
             self.config.output_root.parent,
             "tianditu",
             self.run_id,
@@ -1118,6 +1118,7 @@ class TiandituFullCollector:
                 "request_count": len(self.events),
             },
         )
+        published_manifest = json.loads((published_dir / "manifest.json").read_text(encoding="utf-8"))
         write_jsonl(run_dir / "retained_candidates.jsonl", retained)
         write_jsonl(run_dir / "rejected_candidates.jsonl", rejected)
         write_jsonl(run_dir / "coverage.jsonl", self.coverage)
@@ -1154,6 +1155,7 @@ class TiandituFullCollector:
                 "coverage_summary": {"partial_or_overflow": sum(item["status"] == "failed" or not item["complete_within_documented_limit"] for item in self.coverage)},
             }
         )
+        manifest = {**published_manifest, **manifest}
         write_json(run_dir / "manifest.json", manifest)
         write_json(
             run_dir / "query_plan.json",

@@ -365,7 +365,7 @@ class ValidationCollector:
                 row["rejection_reasons"] = [row.get("scope_bucket", "unknown_scope")]
                 rejected.append(row)
             normalized.append(row)
-        ProviderObservationWriter(
+        published_dir = ProviderObservationWriter(
             self.stage_dir.parent.parent,
             self.provider,
             self.run_id,
@@ -381,6 +381,7 @@ class ValidationCollector:
                 "request_count": len(self.events),
             },
         )
+        published_manifest = json.loads((published_dir / "manifest.json").read_text(encoding="utf-8"))
         write_jsonl(self.run_dir / "retained_candidates.jsonl", retained)
         write_jsonl(self.run_dir / "rejected_candidates.jsonl", rejected)
         bucket_counts: dict[str, int] = {}
@@ -421,6 +422,7 @@ class ValidationCollector:
             },
             "provider_acquisition_plan": self.boundary_context.get("provider_acquisition_plans", {}).get(self.provider, {}),
         })
+        manifest = {**published_manifest, **manifest}
         write_json(self.run_dir / "manifest.json", manifest)
         write_json(
             self.run_dir / "query_plan.json",
@@ -556,7 +558,12 @@ def run_tianditu_admin(collector: ValidationCollector, context: dict[str, Any]) 
         collector.request("tianditu_route", f"{TD_BASE}/drive", {"postStr": td_poststr({"orig": "116.044146,24.818629", "dest": "116.029180,24.749940", "style": str(route_type)}), "type": "search"}, "Tianditu lon/lat; local checks WGS84", query_name=f"行政锚点路线-{route_type}")
 
 
-def run_tencent_admin(collector: ValidationCollector, context: dict[str, Any]) -> None:
+def run_tencent_admin(
+    collector: ValidationCollector,
+    context: dict[str, Any],
+    *,
+    expand_admin: bool = False,
+) -> None:
     bbox = context["bbox_wgs84"]
     anchor = (116.044146, 24.818629)
     for address in ("广东省梅州市平远县泗水镇金田村", "广东省梅州市平远县泗水镇"):
@@ -569,9 +576,10 @@ def run_tencent_admin(collector: ValidationCollector, context: dict[str, Any]) -
                 break
     for keyword in ("村", "学校", "医院", "公交站", "村委会", "道路", "河", "公园", "停车场"):
         collector.request("tencent_suggestion", f"{TX_BASE}/place/v1/suggestion", {"keyword": keyword, "region": "梅州市", "location": f"{anchor[1]},{anchor[0]}"}, "Tencent coord_type=wgs84; request lat,lng", query_name=keyword)
-        for index, (lon, lat) in enumerate(_grid_points(bbox, 1000), 1):
-            boundary = f"nearby({lat},{lon},1000,0)"
-            collector.request("tencent_nearby", f"{TX_BASE}/place/v1/search", {"keyword": keyword, "boundary": boundary, "page_size": 20, "page_index": 1, "coord_type": "wgs84", "orderby": "_distance"}, "Tencent coord_type=wgs84; request lat,lng", query_name=f"{keyword}-网格-{index}")
+        if expand_admin:
+            for index, (lon, lat) in enumerate(_grid_points(bbox, 1000), 1):
+                boundary = f"nearby({lat},{lon},1000,0)"
+                collector.request("tencent_nearby", f"{TX_BASE}/place/v1/search", {"keyword": keyword, "boundary": boundary, "page_size": 20, "page_index": 1, "coord_type": "wgs84", "orderby": "_distance"}, "Tencent coord_type=wgs84; request lat,lng", query_name=f"{keyword}-网格-{index}")
     collector.request("tencent_rectangle", f"{TX_BASE}/place/v1/search", {"keyword": "村", "boundary": f"rectangle({bbox[1]},{bbox[0]},{bbox[3]},{bbox[2]})", "page_size": 20, "page_index": 1, "coord_type": "wgs84"}, "Tencent coord_type=wgs84; request lat,lng", query_name="金田村矩形范围")
     for route in ("driving", "walking", "bicycling"):
         collector.request("tencent_route", f"{TX_BASE}/direction/v1/{route}/", {"from": f"{anchor[1]},{anchor[0]}", "to": "24.749940,116.029180", "output": "json"}, "Tencent coord_type=wgs84; request lat,lng", query_name=f"行政锚点路线-{route}")
@@ -631,6 +639,7 @@ def run(
     min_interval: float,
     *,
     boundary_scope: Any | None = None,
+    expand_admin: bool = False,
 ) -> Path:
     if boundary_scope is None:
         raise ValueError("provider collection requires an admitted boundary_scope")
@@ -648,7 +657,7 @@ def run(
             refresh=refresh,
             min_interval=min_interval,
             root=OUTPUT_ROOT / "amap",
-            expand_admin=True,
+            expand_admin=expand_admin,
             boundary_scope=boundary_scope,
         )
         return canonical.collect(stage)
@@ -666,8 +675,8 @@ def run(
         elif provider == "tianditu":
             run_tianditu_admin(collector, context)
         else:
-            run_tencent_admin(collector, context)
-        manifest = {"purpose": "三 provider 行政基线：仅使用已知梅州市/平远县/泗水镇/金田村行政范围和本地边界几何", "scope": ADMIN_SCOPE, "expanded": True, "boundary_context": {key: value for key, value in context.items() if not key.endswith("_geometry_wgs84")}}
+            run_tencent_admin(collector, context, expand_admin=expand_admin)
+        manifest = {"purpose": "三 provider 行政基线：仅使用已知梅州市/平远县/泗水镇/金田村行政范围和本地边界几何", "scope": ADMIN_SCOPE, "expanded": expand_admin, "boundary_context": {key: value for key, value in context.items() if not key.endswith("_geometry_wgs84")}}
     else:
         l1_meta = run_l1_provider(collector, context)
         manifest = {"purpose": "三 provider L1 地名检索：使用最新有效 L1Snapshot，查询从项目范围逐级扩展至梅州市", "scope": ADMIN_SCOPE, **l1_meta}
@@ -683,6 +692,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--boundary-artifact-root", type=Path, help="CAS root containing an admitted BoundaryScopeArtifact")
     parser.add_argument("--boundary-run-id", help="DATA admission run id whose named boundary scope is used")
     parser.add_argument("--boundary-branch-id", default="main")
+    parser.add_argument(
+        "--expand-admin",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="AMap 行政阶段启用扩展 polygon/采样探测；默认只执行边界锚点和基础检索",
+    )
     return parser.parse_args()
 
 
@@ -704,7 +719,16 @@ def main() -> int:
     stages = ("01_admin_scope", "02_l1_place_names") if args.stage == "all" else ("01_admin_scope" if args.stage == "admin" else "02_l1_place_names",)
     for provider in providers:
         for stage in stages:
-            print(run(provider, stage, args.refresh, args.min_interval, boundary_scope=boundary_scope))
+            print(
+                run(
+                    provider,
+                    stage,
+                    args.refresh,
+                    args.min_interval,
+                    boundary_scope=boundary_scope,
+                    expand_admin=args.expand_admin,
+                )
+            )
     return 0
 
 

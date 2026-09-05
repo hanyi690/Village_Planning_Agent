@@ -449,17 +449,26 @@
           "Stable v1"
         ],
         "summary": "Get Current Source Layers",
-        "description": "Expose configured current vectors and raster manifests.\n\nThis is context data, not planning output. DELIVER remains the only source\nfor generated/planned layers.",
+        "description": "Expose normalized features from one admitted session catalog.\n\nThis endpoint is a presentation projection only. It never discovers a\nsource by filename, initializes the YAML source registry, or reads a\nfixed village directory.",
         "operationId": "get_current_source_layers_api_v1_source_layers_get",
         "parameters": [
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Session Id"
+            }
+          },
           {
             "name": "village_name",
             "in": "query",
             "required": false,
             "schema": {
               "type": "string",
-              "minLength": 1,
-              "default": "金田村",
+              "default": "",
               "title": "Village Name"
             }
           }
@@ -820,6 +829,27 @@
             ],
             "title": "Village Data Files"
           },
+          "village_data_layer_refs": {
+            "type": "string",
+            "title": "Village Data Layer Refs",
+            "default": ""
+          },
+          "boundary_scope_file_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boundary Scope File Index"
+          },
+          "boundary_scope_mode": {
+            "type": "string",
+            "title": "Boundary Scope Mode",
+            "default": ""
+          },
           "task_files": {
             "anyOf": [
               {
@@ -856,98 +886,6 @@
           "project_name"
         ],
         "title": "Body_create_session_api_v1_sessions_post"
-      },
-      "BundleFeatureIdentity": {
-        "properties": {
-          "bundle_feature_bsm": {
-            "type": "string",
-            "title": "Bundle Feature Bsm"
-          },
-          "canonical_name": {
-            "type": "string",
-            "title": "Canonical Name",
-            "default": ""
-          },
-          "entity_type": {
-            "type": "string",
-            "title": "Entity Type",
-            "default": ""
-          },
-          "role": {
-            "type": "string",
-            "title": "Role",
-            "default": ""
-          },
-          "aliases": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Aliases"
-          },
-          "admin_code_12": {
-            "type": "string",
-            "title": "Admin Code 12",
-            "default": ""
-          },
-          "sequence_code_8": {
-            "type": "string",
-            "title": "Sequence Code 8",
-            "default": ""
-          },
-          "source_feature_id": {
-            "type": "string",
-            "title": "Source Feature Id",
-            "default": ""
-          },
-          "source_layer": {
-            "type": "string",
-            "title": "Source Layer",
-            "default": ""
-          },
-          "source_bsm": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source Bsm"
-          },
-          "bsm_kind": {
-            "type": "string",
-            "enum": [
-              "source",
-              "synthetic",
-              "unknown"
-            ],
-            "title": "Bsm Kind",
-            "default": "unknown"
-          },
-          "geometry_digest": {
-            "type": "string",
-            "title": "Geometry Digest",
-            "default": ""
-          },
-          "bundle_snapshot_digest": {
-            "type": "string",
-            "title": "Bundle Snapshot Digest",
-            "default": ""
-          },
-          "crs": {
-            "type": "string",
-            "title": "Crs",
-            "default": "EPSG:4326"
-          }
-        },
-        "type": "object",
-        "required": [
-          "bundle_feature_bsm"
-        ],
-        "title": "BundleFeatureIdentity",
-        "description": "Stable identity of one feature in one immutable bundle snapshot."
       },
       "CurrentSourceLayer": {
         "properties": {
@@ -1097,11 +1035,8 @@
           },
           "layer_type": {
             "type": "string",
-            "enum": [
-              "dem",
-              "dom"
-            ],
-            "title": "Layer Type"
+            "title": "Layer Type",
+            "default": "raster"
           },
           "format": {
             "type": "string",
@@ -1189,8 +1124,7 @@
         "type": "object",
         "required": [
           "source_name",
-          "layer_name",
-          "layer_type"
+          "layer_name"
         ],
         "title": "CurrentSourceRaster",
         "description": "Safe public manifest for a configured raster source.\n\nThe local filesystem path is intentionally not exposed. Consumers use the\nmanifest to explain availability while terrain analysis reads the raster\nthrough the backend catalog."
@@ -1438,6 +1372,11 @@
       },
       "EvidenceFact": {
         "properties": {
+          "fact_id": {
+            "type": "string",
+            "title": "Fact Id",
+            "default": ""
+          },
           "statement": {
             "type": "string",
             "title": "Statement"
@@ -1475,19 +1414,6 @@
             "type": "object",
             "title": "Fields",
             "default": {}
-          },
-          "feature_bsm": {
-            "type": "string",
-            "title": "Feature Bsm",
-            "default": ""
-          },
-          "related_parcel_bsms": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Related Parcel Bsms",
-            "default": []
           },
           "evidence_span": {
             "type": "string",
@@ -1588,9 +1514,24 @@
             "title": "Query Fingerprint",
             "default": ""
           },
-          "bundle_snapshot_digest": {
+          "data_snapshot_ref": {
             "type": "string",
-            "title": "Bundle Snapshot Digest",
+            "title": "Data Snapshot Ref",
+            "default": ""
+          },
+          "data_snapshot_digest": {
+            "type": "string",
+            "title": "Data Snapshot Digest",
+            "default": ""
+          },
+          "world_model_snapshot_ref": {
+            "type": "string",
+            "title": "World Model Snapshot Ref",
+            "default": ""
+          },
+          "world_model_snapshot_digest": {
+            "type": "string",
+            "title": "World Model Snapshot Digest",
             "default": ""
           },
           "kg_version": {
@@ -1622,6 +1563,30 @@
             "minimum": 0.0,
             "title": "Candidate Total",
             "default": 0
+          },
+          "candidate_identity_total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Candidate Identity Total",
+            "default": 0
+          },
+          "candidate_entity_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Candidate Entity Refs"
+          },
+          "identity_grouping": {
+            "type": "string",
+            "enum": [
+              "world_entity",
+              "mixed",
+              "source_feature",
+              "none"
+            ],
+            "title": "Identity Grouping",
+            "default": "none"
           },
           "candidate_offset": {
             "type": "integer",
@@ -1925,7 +1890,7 @@
       "FeatureEvidenceRef": {
         "properties": {
           "identity": {
-            "$ref": "#/components/schemas/BundleFeatureIdentity"
+            "$ref": "#/components/schemas/SourceFeatureIdentity"
           },
           "entity_refs": {
             "items": {
@@ -1945,14 +1910,36 @@
             ],
             "title": "Geometry Ref"
           },
+          "resource_ref": {
+            "type": "string",
+            "title": "Resource Ref",
+            "default": ""
+          },
+          "representation_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Representation Refs"
+          },
+          "source_snapshot_ref": {
+            "type": "string",
+            "title": "Source Snapshot Ref",
+            "default": ""
+          },
+          "normalized_crs": {
+            "type": "string",
+            "title": "Normalized Crs",
+            "default": ""
+          },
           "geometry_authority": {
             "type": "string",
             "enum": [
-              "bundle",
+              "data_resource_catalog",
               "none"
             ],
             "title": "Geometry Authority",
-            "default": "bundle"
+            "default": "none"
           },
           "relation_refs": {
             "items": {
@@ -1960,13 +1947,6 @@
             },
             "type": "array",
             "title": "Relation Refs"
-          },
-          "related_parcel_bsms": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Related Parcel Bsms"
           },
           "provenance_refs": {
             "items": {
@@ -2049,7 +2029,7 @@
           "identity"
         ],
         "title": "FeatureEvidenceRef",
-        "description": "A reference to a bundle/KG feature; it never embeds executable geometry."
+        "description": "A reference to a source feature; it never embeds executable geometry.\n\n``geometry_ref`` is opaque until GROUND resolves it.  DATA references use\n``resource:<dataset_ref>:<source_feature_ref>``."
       },
       "HTTPValidationError": {
         "properties": {
@@ -2690,6 +2670,81 @@
         ],
         "title": "SessionProjection"
       },
+      "SourceFeatureIdentity": {
+        "properties": {
+          "canonical_name": {
+            "type": "string",
+            "title": "Canonical Name",
+            "default": ""
+          },
+          "entity_type": {
+            "type": "string",
+            "title": "Entity Type",
+            "default": ""
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "default": ""
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases"
+          },
+          "source_feature_id": {
+            "type": "string",
+            "title": "Source Feature Id",
+            "default": ""
+          },
+          "source_layer": {
+            "type": "string",
+            "title": "Source Layer",
+            "default": ""
+          },
+          "geometry_digest": {
+            "type": "string",
+            "title": "Geometry Digest",
+            "default": ""
+          },
+          "source_dataset_ref": {
+            "type": "string",
+            "title": "Source Dataset Ref",
+            "default": ""
+          },
+          "source_snapshot_digest": {
+            "type": "string",
+            "title": "Source Snapshot Digest",
+            "default": ""
+          },
+          "crs": {
+            "type": "string",
+            "title": "Crs",
+            "default": ""
+          },
+          "source_crs": {
+            "type": "string",
+            "title": "Source Crs",
+            "default": ""
+          },
+          "normalized_crs": {
+            "type": "string",
+            "title": "Normalized Crs",
+            "default": ""
+          },
+          "source_snapshot_ref": {
+            "type": "string",
+            "title": "Source Snapshot Ref",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SourceFeatureIdentity",
+        "description": "Identity for a generic DATA source record.\n\nThis is the canonical identity on the V2 path.  A source feature may be\nunnamed and is never required to carry a cadastral BSM.  ``entity_refs``\nlive on :class:`FeatureEvidenceRef` because one source record can be\nlinked to multiple cognition entities during reconciliation."
+      },
       "SpatialCognitionEvidence": {
         "properties": {
           "village_overview": {
@@ -2785,7 +2840,7 @@
           "crs": {
             "type": "string",
             "title": "Crs",
-            "default": "EPSG:4326"
+            "default": ""
           },
           "computation_method": {
             "type": "string",
