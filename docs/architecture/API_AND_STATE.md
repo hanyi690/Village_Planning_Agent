@@ -69,7 +69,7 @@ Current outward delivery/layer views are shaped from typed artifacts in:
 - [`backend/app/api/v1/routes/map_layers.py`](../../backend/app/api/v1/routes/map_layers.py)
 - [`backend/app/api/v1/routes/source_layers.py`](../../backend/app/api/v1/routes/source_layers.py)
 
-The runtime exposes `delivery_status` and `statutory_complete` through API contracts. `/map-layers` is the current session delivery projection. `/source-layers` is a read-only source-context projection and is not a planning-result endpoint.
+The runtime exposes `delivery_status` and `statutory_complete` through API contracts. `/map-layers` is the current session delivery projection. `/source-layers` is a read-only projection of the explicitly supplied session's admitted DATA catalog and is not a planning-result endpoint; it has no fixed-village or filename fallback.
 
 ## 7. Verification entry points
 

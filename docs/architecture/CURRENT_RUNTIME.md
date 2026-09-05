@@ -151,11 +151,13 @@ L1 Identity GROUND 当前包含：
 - <code>IdentityBindingCommitEnvelope</code>；
 - V2 store 的 atomic identity projection；
 - <code>L1WorldProjectionSnapshot</code> receipt。
+- post-GROUND reference-only <code>L1ProductManifest</code>；
+- L2/L3 对 ready manifest 和 exact child closure 的校验。
 
 当前 orchestration 位于 <code>modules/ground/application.py</code>，它通过
 <code>WorldModelCommitPort</code> 提交。目标设计把“proposal producer”和“Cognition writer”
-进一步显式分层；当前代码尚未具备完整终态 taxonomy、post-commit revalidation 和
-<code>L1ProductManifest</code>。
+进一步显式分层；当前代码仍未具备完整终态 taxonomy、完整 post-commit binding
+revalidation 和 dependency-local invalidation。
 
 ## 6. L2/L3、TARGET 与 Planning GROUND
 
@@ -222,7 +224,7 @@ approval；因此不能把 HUMAN 状态存在描述成完整人工决策模块�
 3. global WM digest 尚未配套 dependency/subgraph digest；
 4. assertion merge/split/rebase 生命周期未闭合；
 5. Evidence sufficiency 仍未业务化到所有 requirement；
-6. L1 final product 仍由多个 ref 组合，尚无 manifest；
+6. L1ProductManifest 已建立，但真实 L1 OBSERVE → GROUND → final-view 运行验收尚未完成；
 7. 语义 benchmark 尚未成为 release gate。
 
 这些差距在 <code>../design/05_MIGRATION.md</code> 维护。

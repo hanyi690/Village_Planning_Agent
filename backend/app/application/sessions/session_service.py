@@ -50,15 +50,18 @@ async def _clear_session_context(session_id: str) -> bool:
         return False
 
 
-async def _delete_session_kg(session_id: str) -> bool:
+async def _clear_session_world_model(session_id: str) -> bool:
     try:
-        from app.infrastructure.kg.manager import get_kg_manager
-        get_kg_manager().remove_session(session_id)
+        from app.infrastructure.cognition_runtime.world_model_store import (
+            clear_world_model_store,
+        )
+
+        clear_world_model_store(session_id)
         from app.modules.evidence.application import clear_session_evidence_cache
         clear_session_evidence_cache(session_id)
         return True
     except Exception as e:
-        logger.warning(f"[SessionService] [{session_id}] KG delete failed: {e}")
+        logger.warning(f"[SessionService] [{session_id}] world model clear failed: {e}")
         return False
 
 
@@ -120,25 +123,6 @@ async def _clear_provider_failures(session_id: str) -> bool:
         return True
     except Exception as e:
         logger.warning(f"[SessionService] [{session_id}] provider failure reset failed: {e}")
-        return False
-
-
-async def _delete_session_kg_memory(session_id: str) -> bool:
-    try:
-        import glob
-        import os
-        import shutil
-        from app.infrastructure.kg.memory import get_memory_dir
-
-        base = get_memory_dir()
-        for f in glob.glob(str(base / f"{session_id}_round_*.json")):
-            os.remove(f)
-        subdir = base / session_id
-        if subdir.exists():
-            shutil.rmtree(subdir)
-        return True
-    except Exception as e:
-        logger.warning(f"[SessionService] [{session_id}] kg_memory delete failed: {e}")
         return False
 
 
@@ -217,8 +201,8 @@ class SessionService:
         Removes session from:
         1. Running planning tasks (TaskSupervisor)
         2. PlanningContext cache
-        3. Session bundle cache
-        4. Knowledge graph
+        3. PlanningContext cache
+        4. DATA-backed World Model
         5. Artifact files on disk
         6. LangGraph checkpoint thread
         7. SSE session data
@@ -228,8 +212,7 @@ class SessionService:
          11. Database record
          12. Evidence cache
          13. Provider-failure circuit breaker
-         14. kg_memory round files
-         15. CAS named refs (runs/<session_id>)
+         14. CAS named refs (runs/<session_id>)
 
         Args:
             session_id: Session identifier
@@ -243,13 +226,12 @@ class SessionService:
         for key, coro in [
             ("tasks", _cancel_session_tasks(session_id)),
             ("context", _clear_session_context(session_id)),
-            ("kg", _delete_session_kg(session_id)),
+            ("world_model", _clear_session_world_model(session_id)),
             ("artifacts", _delete_session_artifacts(session_id)),
             ("checkpoint", _delete_session_checkpoint(session_id)),
             ("sse", _clear_session_sse(session_id)),
             ("evidence_cache", _clear_session_evidence(session_id)),
             ("provider_failures", _clear_provider_failures(session_id)),
-            ("kg_memory", _delete_session_kg_memory(session_id)),
         ]:
             try:
                 result[key] = await coro

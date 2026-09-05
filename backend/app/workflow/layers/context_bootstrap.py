@@ -35,7 +35,7 @@ def _context_authority(context: Any, *, session_id: str) -> tuple[str, str, dict
     fingerprint = "sha256:" + content_hash[:16]
     world_model = getattr(context, "world_model", None)
     legacy_kg = getattr(context, "kg", None)
-    world_model_mode = str(getattr(context, "world_model_mode", "off") or "off")
+    world_model_mode = str(getattr(context, "world_model_mode", "v2_only") or "v2_only")
     world_ref = str(
         getattr(world_model, "snapshot_ref", "")
         or getattr(context, "kg_session_ref", "")
@@ -47,7 +47,6 @@ def _context_authority(context: Any, *, session_id: str) -> tuple[str, str, dict
         or getattr(legacy_kg, "snapshot_digest", "")
         or ""
     )
-    shadow = getattr(context, "world_model_shadow", None)
     catalog = getattr(context, "data_resource_catalog", None)
     catalog_digest = str(
         getattr(getattr(catalog, "snapshot", None), "digest", "") or ""
@@ -66,15 +65,6 @@ def _context_authority(context: Any, *, session_id: str) -> tuple[str, str, dict
             getattr(world_model, "version", "")
             or getattr(legacy_kg, "version", "")
             or ""
-        ),
-        "world_model_shadow_snapshot_ref": str(
-            getattr(shadow, "snapshot_ref", "") or ""
-        ),
-        "world_model_shadow_snapshot_digest": str(
-            getattr(shadow, "snapshot_digest", "") or ""
-        ),
-        "world_model_shadow_diff_ref": str(
-            getattr(context, "world_model_shadow_diff_ref", "") or ""
         ),
         "boundary_scope_ref": str(
             getattr(getattr(context, "boundary_scope_artifact", None), "scope_ref", "") or ""
@@ -349,7 +339,7 @@ async def _persist_context_stage_artifacts(
     from app.modules.cognition.application import CognitionApplication
     from app.modules.evidence.application import EvidenceApplication
 
-    data_result = await DataApplication().run(
+    data_result = DataApplication().run(
         artifact_state,
         catalog=catalog,
         data_snapshot=data_snapshot,
@@ -401,10 +391,7 @@ async def _persist_context_stage_artifacts(
     )
 
     published_context = get_cached_context(session_id)
-    if not context_has_cognition_ports(
-        published_context,
-        world_model_mode=str(getattr(context, "world_model_mode", "off") or "off"),
-    ):
+    if not context_has_cognition_ports(published_context):
         raise RuntimeError(
             "CONTEXT_BOOTSTRAP_FAILED: Cognition did not publish WorldModel ports"
         )
@@ -458,15 +445,7 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
             context.l1_snapshot_ref = str(l1_ref.get("digest") or "")
         else:
             context.l1_snapshot_ref = str(getattr(l1_ref, "digest", "") or "")
-        mode = str(
-            getattr(context, "world_model_mode", "off") or "off"
-        ).strip().casefold()
-        if (
-            mode in {"shadow", "prefer_v2", "v2_only"}
-            and (state.get("artifact_refs") or {}).get(
-                "l1_world_projection"
-            )
-        ):
+        if (state.get("artifact_refs") or {}).get("l1_world_projection"):
             from app.infrastructure.artifacts.runtime import (
                 validate_l1_world_projection_transition,
             )
@@ -571,12 +550,12 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 or ""
             )
-            expected_mode = str(
-                COGNITION_WORLD_MODEL_MODE or "off"
-            ).strip().lower()
-            cached_mode = str(
-                getattr(cached, "world_model_mode", "off") or "off"
-            ).strip().lower()
+            expected_mode = str(COGNITION_WORLD_MODEL_MODE or "").strip().lower()
+            cached_mode = str(getattr(cached, "world_model_mode", "")).strip().lower()
+            if expected_mode != "v2_only":
+                raise RuntimeError(
+                    "CONTEXT_BOOTSTRAP_FAILED: only v2_only is supported"
+                )
             if (
                 cached_mode != expected_mode
                 or (
@@ -587,10 +566,7 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     expected_world_model_digest
                     and cached_world_model_digest != expected_world_model_digest
                 )
-                or not context_has_cognition_ports(
-                    cached,
-                    world_model_mode=expected_mode,
-                )
+                or not context_has_cognition_ports(cached)
             ):
                 invalidate_planning_context(session_id)
                 cached = None
@@ -742,7 +718,7 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "snapshot_id": str(getattr(snapshot, "snapshot_id", "") or ""),
         "snapshot_digest": str(getattr(snapshot, "digest", "") or ""),
     }
-    world_model_mode = str(getattr(context, "world_model_mode", "off") or "off")
+    world_model_mode = str(getattr(context, "world_model_mode", "v2_only") or "v2_only")
     world_model_snapshot_ref = str(
         getattr(getattr(context, "world_model", None), "snapshot_ref", "")
         or getattr(context, "kg_session_ref", "")
@@ -754,17 +730,10 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
         or getattr(getattr(context, "kg", None), "snapshot_digest", "")
         or ""
     )
-    world_model_shadow_snapshot_ref = str(
-        getattr(getattr(context, "world_model_shadow", None), "snapshot_ref", "") or ""
-    )
-    world_model_shadow_snapshot_digest = str(
-        getattr(getattr(context, "world_model_shadow", None), "snapshot_digest", "") or ""
-    )
     data_catalog_digest = str(
         getattr(getattr(getattr(context, "data_resource_catalog", None), "snapshot", None), "digest", "")
         or ""
     )
-    shadow_diff_ref = str(getattr(context, "world_model_shadow_diff_ref", "") or "")
     # The context reference is intentionally flat and bounded.  It is copied
     # into StepReport/artifact provenance; the large catalog and graph stay in
     # their own stores and are addressed by these immutable digests.
@@ -772,9 +741,6 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "world_model_mode": world_model_mode,
         "world_model_snapshot_ref": world_model_snapshot_ref,
         "world_model_snapshot_digest": world_model_snapshot_digest,
-        "world_model_shadow_snapshot_ref": world_model_shadow_snapshot_ref,
-        "world_model_shadow_snapshot_digest": world_model_shadow_snapshot_digest,
-        "world_model_shadow_diff_ref": shadow_diff_ref,
         "data_resource_catalog_digest": data_catalog_digest,
         "boundary_scope_ref": str(
             getattr(boundary_scope_artifact, "scope_ref", "") or ""
@@ -802,7 +768,6 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "world_model_mode": world_model_mode,
         "world_model_snapshot_ref": world_model_snapshot_ref,
         "world_model_snapshot_digest": world_model_snapshot_digest,
-        "world_model_shadow_diff_ref": shadow_diff_ref,
         "context_ref": {
             "session_id": session_id,
             "version": version,

@@ -7,8 +7,6 @@ import type { CurrentSourceRaster } from '@/features/planning/api/types';
 const cachedSources = new Map<string, CurrentSourceLayersResult>();
 const pendingSources = new Map<string, Promise<CurrentSourceLayersResult>>();
 
-const DEFAULT_CENTER: [number, number] = [116.0735, 24.8317];
-
 export interface CurrentSourceLayersResult {
   layers: GISLayerConfig[];
   center: [number, number] | null;
@@ -95,19 +93,19 @@ export function styleOfflineBasemapLayers(layers: GISLayerConfig[]): GISLayerCon
   return layers.map(styleOfflineBasemapLayer);
 }
 
-export async function fetchCurrentSourceLayers(villageName = '金田村'): Promise<CurrentSourceLayersResult> {
-  const sourceKey = String(villageName || '金田村').trim().toLowerCase();
+export async function fetchCurrentSourceLayers(villageName = '', sessionId = ''): Promise<CurrentSourceLayersResult> {
+  const sourceKey = `${String(sessionId || '').trim().toLowerCase()}:${String(villageName || '').trim().toLowerCase()}`;
   const cached = cachedSources.get(sourceKey);
   if (cached) return cached;
   const pending = pendingSources.get(sourceKey);
   if (pending) return pending;
 
-  const sourceRequest = planningApi.getCurrentSourceLayers(villageName)
+  const sourceRequest = planningApi.getCurrentSourceLayers(villageName, sessionId)
     .then((payload) => {
       const layers = styleOfflineBasemapLayers(normalizeGisLayers(payload.layers));
       const center = Array.isArray(payload.center) && payload.center.length === 2
         ? [Number(payload.center[0]), Number(payload.center[1])] as [number, number]
-        : DEFAULT_CENTER;
+        : null;
       const result = { layers, center, rasters: payload.rasters, diagnostics: payload.diagnostics };
       cachedSources.set(sourceKey, result);
       return result;

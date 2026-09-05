@@ -281,7 +281,7 @@ def _adopt_context(state: Dict[str, Any], context: Any) -> Dict[str, Any]:
             getattr(getattr(getattr(context, "data_resource_catalog", None), "snapshot", None), "digest", "")
             or ""
         ),
-        "world_model_mode": str(getattr(context, "world_model_mode", "off") or "off"),
+        "world_model_mode": str(getattr(context, "world_model_mode", "v2_only") or "v2_only"),
         "world_model_snapshot_ref": str(
             getattr(getattr(context, "world_model", None), "snapshot_ref", "")
             or getattr(getattr(context, "kg", None), "snapshot_ref", "")
@@ -296,17 +296,6 @@ def _adopt_context(state: Dict[str, Any], context: Any) -> Dict[str, Any]:
             getattr(getattr(context, "world_model", None), "version", "")
             or getattr(getattr(context, "kg", None), "version", "")
             or ""
-        ),
-        "world_model_shadow_snapshot_ref": str(
-            getattr(getattr(context, "world_model_shadow", None), "snapshot_ref", "")
-            or ""
-        ),
-        "world_model_shadow_snapshot_digest": str(
-            getattr(getattr(context, "world_model_shadow", None), "snapshot_digest", "")
-            or ""
-        ),
-        "world_model_shadow_diff_ref": str(
-            getattr(context, "world_model_shadow_diff_ref", "") or ""
         ),
     }
     meta = context.snapshot_meta()

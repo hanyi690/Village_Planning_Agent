@@ -136,7 +136,7 @@ class CurrentSourceRaster(PublicModel):
 
     source_name: str
     layer_name: str
-    layer_type: Literal['dem', 'dom']
+    layer_type: str = 'raster'
     format: str = ''
     crs: str = ''
     available: bool = False

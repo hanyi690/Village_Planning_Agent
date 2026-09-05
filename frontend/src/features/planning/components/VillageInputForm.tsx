@@ -429,7 +429,7 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
                 <div className="flex-1 h-px bg-gradient-to-l from-amber-300 to-transparent" />
               </div>
               {demoError && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{demoError}</p>}
-              <p className="mb-3 rounded-lg bg-cyan-50 px-3 py-2 text-xs text-cyan-700">村庄名称“金田村”将绑定 DataCatalog GIS 参考数据；此按钮不会上传 GIS 文件。</p>
+              <p className="mb-3 rounded-lg bg-cyan-50 px-3 py-2 text-xs text-cyan-700">GIS 只绑定当前 session 已准入的数据；此按钮不会注入隐式 GIS 文件。</p>
 
               <InputField
                 id="projectName"

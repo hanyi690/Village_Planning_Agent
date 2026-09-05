@@ -1,7 +1,8 @@
-"""Read-only catalog projection for the current GIS context."""
+"""Read-only projection of an admitted session DATA catalog."""
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
 
 from fastapi import APIRouter, Query
@@ -11,174 +12,153 @@ from app.api.v1.contracts import (
     CurrentSourceLayerCollection,
     CurrentSourceRaster,
 )
-from app.data.catalog.catalog import DataCatalog
 
 
-router = APIRouter(prefix='/api/v1', tags=['Stable v1'])
+router = APIRouter(prefix="/api/v1", tags=["Stable v1"])
 
 
-_CURRENT_VECTOR_SOURCES: tuple[tuple[str, str, str, str, str], ...] = (
-    ('jintian_boundary', 'boundary', 'boundary', '村域边界', 'boundary'),
-    ('jintian_current_landuse', 'function_zone', 'landuse_current', '现状地块', 'current_landuse'),
-    ('jintian_road', 'infrastructure', 'current_road', '现状道路', 'current_road'),
-    ('jintian_admin_boundary_line', 'boundary', 'admin_boundary_line', '行政边界线', 'admin_boundary'),
-    ('jintian_annotation', 'facility_point', 'current_annotation', '现状注记点', 'current_annotation'),
-    ('jintian_farmland_protection', 'construction_control', 'farmland_protection', '永久基本农田', 'farmland_protection'),
-    ('jintian_ecological_protection', 'sensitivity_zone', 'ecological_protection', '生态保护区', 'ecological_protection'),
-    ('jintian_historical_protection', 'sensitivity_zone', 'historical_protection', '历史保护区', 'historical_protection'),
-    ('jintian_construction_zone', 'construction_control', 'conditional_construction_zone', '建设控制区', 'construction_zone'),
-    ('jintian_geological_hazard', 'hazard_point', 'geological_hazard_point', '地质灾害点', 'geological_hazard'),
-)
+def _feature_geojson(feature: Any) -> dict[str, Any] | None:
+    """Project one normalized executable feature without changing geometry."""
 
-
-def _is_jintian_reference(village_name: str) -> bool:
-    normalized = str(village_name or '').strip().lower()
-    return normalized in {'金田', '金田村', 'jintian'}
-
-
-def _feature_count(geojson: dict[str, Any]) -> int:
-    features = geojson.get('features')
-    return len(features) if isinstance(features, list) else 0
-
-
-def _geojson_center(geojson: dict[str, Any]) -> list[float] | None:
-    """Return a center from the first boundary geometry without GIS mutation."""
-
-    points: list[tuple[float, float]] = []
-
-    def collect(value: Any) -> None:
-        if isinstance(value, list) and len(value) >= 2:
-            try:
-                first, second = float(value[0]), float(value[1])
-            except (TypeError, ValueError):
-                first = second = None
-            if (
-                first is not None
-                and second is not None
-                and -180 <= first <= 180
-                and -90 <= second <= 90
-            ):
-                points.append((first, second))
-                return
-        if isinstance(value, list):
-            for child in value:
-                collect(child)
-
-    features = geojson.get('features')
-    if not isinstance(features, list):
+    geometry = getattr(feature, "normalized_geometry", None)
+    if not isinstance(geometry, dict):
         return None
-    for feature in features:
-        if not isinstance(feature, dict):
-            continue
-        geometry = feature.get('geometry')
-        if isinstance(geometry, dict):
-            collect(geometry.get('coordinates'))
-    if not points:
+    normalized_kind = str(
+        getattr(feature, "normalized_geometry_kind", "unknown") or "unknown"
+    ).casefold()
+    if normalized_kind not in {"point", "line", "polygon"}:
         return None
-    return [sum(point[0] for point in points) / len(points), sum(point[1] for point in points) / len(points)]
+    properties = dict(getattr(feature, "raw_attributes", {}) or {})
+    properties.update({
+        "source_dataset_ref": str(getattr(feature, "dataset_ref", "") or ""),
+        "source_feature_ref": str(getattr(feature, "source_feature_ref", "") or ""),
+        "source_layer_ref": str(getattr(feature, "layer_ref", "") or ""),
+        "source_feature_digest": str(
+            getattr(feature, "source_feature_digest", "") or ""
+        ),
+        "geometry_authority": "data_resource_catalog",
+    })
+    return {"type": "Feature", "geometry": geometry, "properties": properties}
 
 
-def _raster_manifest(catalog: DataCatalog, source_name: str, layer_type: str) -> CurrentSourceRaster:
-    try:
-        result = catalog.get_source(source_name).fetch()
-    except KeyError as exc:
-        return CurrentSourceRaster(
-            source_name=source_name,
-            layer_name='数字高程模型' if layer_type == 'dem' else '数字正射影像',
-            layer_type=layer_type,
-            source_ref=f'catalog://{source_name}',
-            reason=str(exc),
-        )
-    metadata = result.metadata if result.success else {}
-    raw_bounds = metadata.get('bounds')
-    bounds = {
-        key: float(raw_bounds[key])
-        for key in ('west', 'south', 'east', 'north')
-        if isinstance(raw_bounds, dict) and isinstance(raw_bounds.get(key), (int, float))
-    }
-    return CurrentSourceRaster(
-        source_name=source_name,
-        layer_name='数字高程模型' if layer_type == 'dem' else '数字正射影像',
-        layer_type=layer_type,
-        format=str(metadata.get('format') or ''),
-        crs=str(metadata.get('crs') or ''),
-        available=bool(result.success),
-        resolution=float(metadata['resolution']) if isinstance(metadata.get('resolution'), (int, float)) else None,
-        width=int(metadata['width']) if isinstance(metadata.get('width'), int) else None,
-        height=int(metadata['height']) if isinstance(metadata.get('height'), int) else None,
-        bands=int(metadata['bands']) if isinstance(metadata.get('bands'), int) else None,
-        dtype=str(metadata.get('dtype') or ''),
-        bounds=bounds,
-        source_ref=f'catalog://{source_name}',
-        reason='' if result.success else str(result.error or '栅格源不可用'),
-    )
+def _catalog_projection(catalog: Any) -> CurrentSourceLayerCollection:
+    """Project only normalized executable features from an admitted catalog."""
 
-
-@router.get('/source-layers', response_model=CurrentSourceLayerCollection)
-def get_current_source_layers(
-    village_name: str = Query(default='金田村', min_length=1),
-) -> CurrentSourceLayerCollection:
-    """Expose configured current vectors and raster manifests.
-
-    This is context data, not planning output. DELIVER remains the only source
-    for generated/planned layers.
-    """
-
-    if not _is_jintian_reference(village_name):
+    snapshot = getattr(catalog, "snapshot", catalog)
+    if snapshot is None:
         return CurrentSourceLayerCollection(
-            village_name=village_name,
-            center=None,
-            layers=[],
-            rasters=[],
-            diagnostics=[
-                f'no catalog-backed current spatial source is configured for village {village_name!r}'
-            ],
+            village_name="",
+            diagnostics=["admitted DATA catalog is unavailable"],
         )
 
-    catalog = DataCatalog()
-    layers: list[CurrentSourceLayer] = []
-    diagnostics: list[str] = []
-    center: list[float] | None = None
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    raster_features: list[Any] = []
+    skipped_read_only = 0
+    for feature in getattr(snapshot, "features", ()) or ():
+        if str(getattr(feature, "geometry_kind", "") or "").casefold() == "raster":
+            raster_features.append(feature)
+            continue
+        projected = _feature_geojson(feature)
+        if projected is None:
+            if getattr(feature, "geometry", None) is not None:
+                skipped_read_only += 1
+            continue
+        grouped[
+            (
+                str(getattr(feature, "dataset_ref", "") or ""),
+                str(getattr(feature, "layer_ref", "") or ""),
+            )
+        ].append(projected)
 
-    for source_name, layer_type, source_layer_type, layer_name, display_role in _CURRENT_VECTOR_SOURCES:
-        try:
-            result = catalog.get_source(source_name).fetch()
-        except KeyError as exc:
-            diagnostics.append(f'{source_name}: {exc}')
-            continue
-        if not result.success or not isinstance(result.data, dict):
-            diagnostics.append(f'{source_name}: {result.error or "数据源不可用"}')
-            continue
-        geojson = result.data
-        if geojson.get('type') != 'FeatureCollection':
-            diagnostics.append(f'{source_name}: 返回内容不是 FeatureCollection')
-            continue
-        if source_name == 'jintian_boundary':
-            center = _geojson_center(geojson)
-        count = _feature_count(geojson)
+    layers: list[CurrentSourceLayer] = []
+    for (dataset_ref, layer_ref), features in sorted(grouped.items()):
+        layer_name = layer_ref or dataset_ref or "unnamed-resource"
         layers.append(CurrentSourceLayer(
-            source_name=source_name,
-            source_layer_type=source_layer_type,
-            layer_type=layer_type,
+            source_name=dataset_ref or layer_name,
+            source_layer_type=layer_ref,
+            layer_type="generic",
             layer_name=layer_name,
-            display_role=display_role,
-            crs='EPSG:4326',
-            feature_count=count,
-            geojson=geojson,
+            display_role="current",
+            crs="EPSG:4326",
+            feature_count=len(features),
+            geojson={"type": "FeatureCollection", "features": features},
             metadata={
-                'path': f'catalog://{source_name}/current',
-                'sourceRef': f'catalog://{source_name}',
-                'displayRole': display_role,
-                'featureCount': count,
-                'villageName': village_name,
+                "source": "data_catalog",
+                "datasetRef": dataset_ref,
+                "layerRef": layer_ref,
+                "featureCount": len(features),
             },
         ))
 
-    rasters = [_raster_manifest(catalog, 'dem_local', 'dem')]
+    rasters: list[CurrentSourceRaster] = []
+    for feature in raster_features:
+        raw = dict(getattr(feature, "raw_attributes", {}) or {})
+        layer_name = str(getattr(feature, "layer_ref", "") or "raster")
+        valid = str(getattr(feature, "validity_status", "") or "") == "valid"
+        rasters.append(CurrentSourceRaster(
+            source_name=str(getattr(feature, "dataset_ref", "") or layer_name),
+            layer_name=layer_name,
+            layer_type="raster",
+            format=str(raw.get("format") or ""),
+            crs=str(
+                getattr(feature, "normalized_crs", "")
+                or getattr(feature, "source_crs", "")
+                or ""
+            ),
+            available=valid,
+            source_ref=(
+                f"data:{getattr(feature, 'dataset_ref', '')}:"
+                f"{getattr(feature, 'source_feature_ref', '')}"
+            ),
+            reason="" if valid else "raster resource is not admitted as valid",
+        ))
+
+    diagnostics = []
+    if skipped_read_only:
+        diagnostics.append(
+            f"{skipped_read_only} read-only or non-executable feature(s) omitted from map projection"
+        )
     return CurrentSourceLayerCollection(
-        village_name=village_name,
-        center=center,
+        village_name="",
+        center=None,
         layers=layers,
         rasters=rasters,
         diagnostics=diagnostics,
     )
+
+
+@router.get("/source-layers", response_model=CurrentSourceLayerCollection)
+async def get_current_source_layers(
+    session_id: str = Query(..., min_length=1),
+    village_name: str = Query(default=""),
+) -> CurrentSourceLayerCollection:
+    """Expose normalized features from one admitted session catalog.
+
+    This endpoint is a presentation projection only. It never discovers a
+    source by filename, initializes the YAML source registry, or reads a
+    fixed village directory.
+    """
+
+    catalog = None
+    try:
+        from app.infrastructure.context_runtime.manager import get_cached_context
+
+        context = get_cached_context(str(session_id))
+        catalog = getattr(context, "data_resource_catalog", None)
+    except Exception:
+        catalog = None
+    if catalog is None:
+        try:
+            from app.data.catalog.session_resource_catalog import load_session_data_catalog
+
+            catalog = await load_session_data_catalog(
+                str(session_id),
+                village_name=village_name,
+            )
+        except Exception:
+            catalog = None
+    projection = _catalog_projection(catalog)
+    return projection.model_copy(update={"village_name": village_name})
+
+
+__all__ = ["get_current_source_layers", "router"]

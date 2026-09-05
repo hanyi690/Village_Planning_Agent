@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Protocol
@@ -44,6 +45,9 @@ class CreateSessionCommand:
         rag_layer_config: Mapping[int, bool] | None = None,
         village_data: str = "",
         village_data_files: tuple[object, ...] = (),
+        village_data_layer_refs: tuple[str, ...] = (),
+        boundary_scope_file_index: int | None = None,
+        boundary_scope_mode: str = "",
         task_files: tuple[object, ...] = (),
         constraint_files: tuple[object, ...] = (),
         session_id: str | None = None,
@@ -62,6 +66,11 @@ class CreateSessionCommand:
         self.rag_layer_config = dict(rag_layer_config or {})
         self.village_data = village_data
         self.village_data_files = village_data_files
+        self.village_data_layer_refs = tuple(
+            str(value).strip() for value in village_data_layer_refs
+        )
+        self.boundary_scope_file_index = boundary_scope_file_index
+        self.boundary_scope_mode = str(boundary_scope_mode or "").strip()
         self.task_files = task_files
         self.constraint_files = constraint_files
         self.session_id = session_id or str(uuid4())
@@ -69,6 +78,28 @@ class CreateSessionCommand:
     def validate(self) -> None:
         if not self.project_name.strip():
             raise CreateSessionValidationError("项目名称不能为空")
+        if len(self.village_data_layer_refs) > len(self.village_data_files):
+            raise CreateSessionValidationError(
+                "village_data_layer_refs cannot exceed village_data_files"
+            )
+        if self.boundary_scope_mode not in {
+            "",
+            "admitted_boundary",
+            "polygonized_admin_boundary",
+        }:
+            raise CreateSessionValidationError(
+                "boundary_scope_mode must be explicit and supported"
+            )
+        if self.boundary_scope_file_index is not None and not (
+            0 <= self.boundary_scope_file_index < len(self.village_data_files)
+        ):
+            raise CreateSessionValidationError(
+                "boundary_scope_file_index is outside village_data_files"
+            )
+        if self.boundary_scope_mode and self.boundary_scope_file_index is None:
+            raise CreateSessionValidationError(
+                "boundary_scope_file_index is required for boundary scope"
+            )
 
 
 class CreateSessionResult(BaseModel):
@@ -101,7 +132,15 @@ class _SessionDefaults:
 
 
 class _IngestionDefault:
-    async def process(self, file: object, session_id: str, category: str) -> Mapping[str, object]:
+    async def process(
+        self,
+        file: object,
+        session_id: str,
+        category: str,
+        *,
+        layer_ref: str = "",
+        boundary_scope_mode: str = "",
+    ) -> Mapping[str, object]:
         from app.data.ingestion.upload import process_uploaded_file
 
         declared_roles = {
@@ -114,6 +153,8 @@ class _IngestionDefault:
             session_id,
             category,
             input_role=declared_roles.get(category, "unclassified"),
+            layer_ref=layer_ref,
+            boundary_scope_mode=boundary_scope_mode,
         )
 
 
@@ -223,13 +264,48 @@ class CreateSessionService:
                 }
             )
             created = True
+            ingestion_semaphore = asyncio.Semaphore(4)
+
+            async def process_ingestion(
+                file: object,
+                category: str,
+                *,
+                layer_ref: str,
+                boundary_scope_mode: str,
+            ) -> Mapping[str, object]:
+                async with ingestion_semaphore:
+                    return await self._ingestion.process(
+                        file,
+                        command.session_id,
+                        category,
+                        layer_ref=layer_ref,
+                        boundary_scope_mode=boundary_scope_mode,
+                    )
+
             for files, category in (
                 (command.village_data_files, "village_data"),
                 (command.task_files, "task_description"),
                 (command.constraint_files, "constraint"),
             ):
-                for file in files:
-                    result = await self._ingestion.process(file, command.session_id, category)
+                ingestion_jobs = []
+                for file_index, file in enumerate(files):
+                    layer_ref = ""
+                    boundary_scope_mode = ""
+                    if category == "village_data":
+                        if file_index < len(command.village_data_layer_refs):
+                            layer_ref = command.village_data_layer_refs[file_index]
+                        if file_index == command.boundary_scope_file_index:
+                            boundary_scope_mode = command.boundary_scope_mode
+                    ingestion_jobs.append(
+                        process_ingestion(
+                            file,
+                            category,
+                            layer_ref=layer_ref,
+                            boundary_scope_mode=boundary_scope_mode,
+                        )
+                    )
+                results = await asyncio.gather(*ingestion_jobs)
+                for result in results:
                     parsed_text = str(result.get("parsed_text") or "")
                     input_role = str(result.get("input_role") or "")
                     admission_status = str(

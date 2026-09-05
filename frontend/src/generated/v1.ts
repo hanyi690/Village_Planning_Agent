@@ -150,10 +150,11 @@ export interface paths {
         };
         /**
          * Get Current Source Layers
-         * @description Expose configured current vectors and raster manifests.
+         * @description Expose normalized features from one admitted session catalog.
          *
-         *     This is context data, not planning output. DELIVER remains the only source
-         *     for generated/planned layers.
+         *     This endpoint is a presentation projection only. It never discovers a
+         *     source by filename, initializes the YAML source registry, or reads a
+         *     fixed village directory.
          */
         get: operations["get_current_source_layers_api_v1_source_layers_get"];
         put?: never;
@@ -368,78 +369,22 @@ export interface components {
             village_data: string;
             /** Village Data Files */
             village_data_files?: string[] | null;
+            /**
+             * Village Data Layer Refs
+             * @default
+             */
+            village_data_layer_refs: string;
+            /** Boundary Scope File Index */
+            boundary_scope_file_index?: number | null;
+            /**
+             * Boundary Scope Mode
+             * @default
+             */
+            boundary_scope_mode: string;
             /** Task Files */
             task_files?: string[] | null;
             /** Constraint Files */
             constraint_files?: string[] | null;
-        };
-        /**
-         * BundleFeatureIdentity
-         * @description Stable identity of one feature in one immutable bundle snapshot.
-         */
-        BundleFeatureIdentity: {
-            /** Bundle Feature Bsm */
-            bundle_feature_bsm: string;
-            /**
-             * Canonical Name
-             * @default
-             */
-            canonical_name: string;
-            /**
-             * Entity Type
-             * @default
-             */
-            entity_type: string;
-            /**
-             * Role
-             * @default
-             */
-            role: string;
-            /** Aliases */
-            aliases?: string[];
-            /**
-             * Admin Code 12
-             * @default
-             */
-            admin_code_12: string;
-            /**
-             * Sequence Code 8
-             * @default
-             */
-            sequence_code_8: string;
-            /**
-             * Source Feature Id
-             * @default
-             */
-            source_feature_id: string;
-            /**
-             * Source Layer
-             * @default
-             */
-            source_layer: string;
-            /** Source Bsm */
-            source_bsm?: string | null;
-            /**
-             * Bsm Kind
-             * @default unknown
-             * @enum {string}
-             */
-            bsm_kind: "source" | "synthetic" | "unknown";
-            /**
-             * Geometry Digest
-             * @default
-             */
-            geometry_digest: string;
-            /**
-             * Bundle Snapshot Digest
-             * @default
-             */
-            bundle_snapshot_digest: string;
-            /**
-             * Crs
-             * @default EPSG:4326
-             */
-            crs: string;
         };
         /**
          * CurrentSourceLayer
@@ -530,9 +475,9 @@ export interface components {
             layer_name: string;
             /**
              * Layer Type
-             * @enum {string}
+             * @default raster
              */
-            layer_type: "dem" | "dom";
+            layer_type: string;
             /**
              * Format
              * @default
@@ -723,6 +668,11 @@ export interface components {
         };
         /** EvidenceFact */
         EvidenceFact: {
+            /**
+             * Fact Id
+             * @default
+             */
+            fact_id: string;
             /** Statement */
             statement: string;
             /**
@@ -752,16 +702,6 @@ export interface components {
             fields: {
                 [key: string]: string;
             };
-            /**
-             * Feature Bsm
-             * @default
-             */
-            feature_bsm: string;
-            /**
-             * Related Parcel Bsms
-             * @default []
-             */
-            related_parcel_bsms: string[];
             /**
              * Evidence Span
              * @default
@@ -851,10 +791,25 @@ export interface components {
              */
             query_fingerprint: string;
             /**
-             * Bundle Snapshot Digest
+             * Data Snapshot Ref
              * @default
              */
-            bundle_snapshot_digest: string;
+            data_snapshot_ref: string;
+            /**
+             * Data Snapshot Digest
+             * @default
+             */
+            data_snapshot_digest: string;
+            /**
+             * World Model Snapshot Ref
+             * @default
+             */
+            world_model_snapshot_ref: string;
+            /**
+             * World Model Snapshot Digest
+             * @default
+             */
+            world_model_snapshot_digest: string;
             /**
              * Kg Version
              * @default
@@ -874,6 +829,19 @@ export interface components {
              * @default 0
              */
             candidate_total: number;
+            /**
+             * Candidate Identity Total
+             * @default 0
+             */
+            candidate_identity_total: number;
+            /** Candidate Entity Refs */
+            candidate_entity_refs?: string[];
+            /**
+             * Identity Grouping
+             * @default none
+             * @enum {string}
+             */
+            identity_grouping: "world_entity" | "mixed" | "source_feature" | "none";
             /**
              * Candidate Offset
              * @default 0
@@ -1038,24 +1006,42 @@ export interface components {
         };
         /**
          * FeatureEvidenceRef
-         * @description A reference to a bundle/KG feature; it never embeds executable geometry.
+         * @description A reference to a source feature; it never embeds executable geometry.
+         *
+         *     ``geometry_ref`` is opaque until GROUND resolves it.  DATA references use
+         *     ``resource:<dataset_ref>:<source_feature_ref>``.
          */
         FeatureEvidenceRef: {
-            identity: components["schemas"]["BundleFeatureIdentity"];
+            identity: components["schemas"]["SourceFeatureIdentity"];
             /** Entity Refs */
             entity_refs?: string[];
             /** Geometry Ref */
             geometry_ref?: string | null;
             /**
+             * Resource Ref
+             * @default
+             */
+            resource_ref: string;
+            /** Representation Refs */
+            representation_refs?: string[];
+            /**
+             * Source Snapshot Ref
+             * @default
+             */
+            source_snapshot_ref: string;
+            /**
+             * Normalized Crs
+             * @default
+             */
+            normalized_crs: string;
+            /**
              * Geometry Authority
-             * @default bundle
+             * @default none
              * @enum {string}
              */
-            geometry_authority: "bundle" | "none";
+            geometry_authority: "data_resource_catalog" | "none";
             /** Relation Refs */
             relation_refs?: string[];
-            /** Related Parcel Bsms */
-            related_parcel_bsms?: string[];
             /** Provenance Refs */
             provenance_refs?: string[];
             /** L1 Fact Refs */
@@ -1411,6 +1397,79 @@ export interface components {
             links: components["schemas"]["ResourceLinks"];
         };
         /**
+         * SourceFeatureIdentity
+         * @description Identity for a generic DATA source record.
+         *
+         *     This is the canonical identity on the V2 path.  A source feature may be
+         *     unnamed and is never required to carry a cadastral BSM.  ``entity_refs``
+         *     live on :class:`FeatureEvidenceRef` because one source record can be
+         *     linked to multiple cognition entities during reconciliation.
+         */
+        SourceFeatureIdentity: {
+            /**
+             * Canonical Name
+             * @default
+             */
+            canonical_name: string;
+            /**
+             * Entity Type
+             * @default
+             */
+            entity_type: string;
+            /**
+             * Role
+             * @default
+             */
+            role: string;
+            /** Aliases */
+            aliases?: string[];
+            /**
+             * Source Feature Id
+             * @default
+             */
+            source_feature_id: string;
+            /**
+             * Source Layer
+             * @default
+             */
+            source_layer: string;
+            /**
+             * Geometry Digest
+             * @default
+             */
+            geometry_digest: string;
+            /**
+             * Source Dataset Ref
+             * @default
+             */
+            source_dataset_ref: string;
+            /**
+             * Source Snapshot Digest
+             * @default
+             */
+            source_snapshot_digest: string;
+            /**
+             * Crs
+             * @default
+             */
+            crs: string;
+            /**
+             * Source Crs
+             * @default
+             */
+            source_crs: string;
+            /**
+             * Normalized Crs
+             * @default
+             */
+            normalized_crs: string;
+            /**
+             * Source Snapshot Ref
+             * @default
+             */
+            source_snapshot_ref: string;
+        };
+        /**
          * SpatialCognitionEvidence
          * @description KG + bundle spatial cognition, separate from factual evidence.
          */
@@ -1462,7 +1521,7 @@ export interface components {
             tolerance?: number | null;
             /**
              * Crs
-             * @default EPSG:4326
+             * @default
              */
             crs: string;
             /**
@@ -1792,7 +1851,8 @@ export interface operations {
     };
     get_current_source_layers_api_v1_source_layers_get: {
         parameters: {
-            query?: {
+            query: {
+                session_id: string;
                 village_name?: string;
             };
             header?: never;

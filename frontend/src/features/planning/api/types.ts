@@ -113,7 +113,7 @@ export interface CurrentSourceLayer {
 export interface CurrentSourceRaster {
   source_name: string;
   layer_name: string;
-  layer_type: 'dem' | 'dom';
+  layer_type: string;
   format: string;
   crs: string;
   available: boolean;

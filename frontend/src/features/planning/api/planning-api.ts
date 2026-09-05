@@ -528,12 +528,15 @@ export const planningApi = {
   },
 
   /**
-   * Get the configured current GIS context from the backend DataCatalog.
+   * Get the normalized current GIS context from the active session DATA catalog.
    * This endpoint is intentionally separate from DELIVER /map-layers.
    */
-  async getCurrentSourceLayers(villageName = '金田村'): Promise<CurrentSourceLayerCollection> {
+  async getCurrentSourceLayers(villageName = '', sessionId = ''): Promise<CurrentSourceLayerCollection> {
+    const params = new URLSearchParams();
+    if (sessionId) params.set('session_id', sessionId);
+    if (villageName) params.set('village_name', villageName);
     return apiRequest<CurrentSourceLayerCollection>(
-      `/api/v1/source-layers?village_name=${encodeURIComponent(villageName)}`,
+      `/api/v1/source-layers?${params.toString()}`,
     );
   },
 

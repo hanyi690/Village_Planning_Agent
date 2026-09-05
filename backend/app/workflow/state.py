@@ -343,7 +343,7 @@ class WorkflowState(TypedDict, total=False):
     status: Annotated[str, _merge_control]
     delivery_status: Annotated[str, _merge_control]
     context_ref: Annotated[dict[str, Any], _merge_artifact_refs]
-    # DATA catalog is an explicit bootstrap input for prefer_v2/v2_only. It
+    # DATA catalog is an explicit bootstrap input for v2_only. It
     # is never sent to the LLM; checkpoints should persist only its digest/ref
     # when the host runtime provides a durable catalog registry.
     data_catalog: Annotated[Any, _merge_control]
@@ -354,7 +354,6 @@ class WorkflowState(TypedDict, total=False):
     world_model_snapshot_digest: Annotated[str, _merge_control]
     world_model_epoch: Annotated[str, _merge_control]
     cognition_round: Annotated[CognitionRound | None, _merge_control]
-    world_model_shadow_diff_ref: Annotated[str, _merge_control]
     context_fingerprint: Annotated[str, _merge_control]
     artifact_root: Annotated[str, _merge_identity]
     artifact_refs: Annotated[dict[str, ArtifactRef], _merge_artifact_refs]

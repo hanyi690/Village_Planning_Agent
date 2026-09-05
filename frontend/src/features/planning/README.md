@@ -39,9 +39,10 @@ Resume：POST /api/v1/sessions/{id}/resume（mode: interrupt | checkpoint）
   envelope（`schema_version=1.0`、`seq`、`type`、`data`）。
 - 地图图层以 `/map-layers` 的 `DeliverySpatialSnapshot` 投影为准；
   `utils/gis-normalize.ts` 做 v1 词汇 → 内部渲染词汇映射。
-- `/source-layers` 只提供已配置的金田村（`金田` / `金田村` / `jintian`）静态现状参考图层；
-  对未配置村庄后端返回空上下文和诊断，不得把金田村数据伪装成其他村庄数据。它不替代会话
-  交付，也不会被自动注入到其他村庄的会话。规划图层必须来自该会话的 `DeliverySpatialSnapshot`。
+- `/source-layers` 必须携带当前 `session_id`，只投影该会话已准入 DATA catalog 的 normalized
+  现状图层；没有 session 或 catalog 时返回空上下文和诊断，不得跨会话复用任何固定村庄数据。
+  它不替代会话交付，也不会自动注入规划结果。规划图层必须来自该会话的
+  `DeliverySpatialSnapshot`。
 - v1 只呈现当前会话的报告与证据；跨会话报告和版本历史没有前端兼容 API，避免把已下线
   的端点伪装成可用能力。
 - `partial` / `diagnostic_only` / `statutory_complete=false` 由 `DeliveryStatusBanner`

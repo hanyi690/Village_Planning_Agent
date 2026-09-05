@@ -578,13 +578,6 @@ const FILTERS: Array<{ key: LayerFilter; label: string }> = [
 
 const CONTROL_NAMES = ['永久基本农田', '生态保护红线', '历史文化保护', '村庄建设边界'];
 
-function isJintianReferenceVillage(villageName: string | undefined): boolean {
-  const normalized = String(villageName || '')
-    .trim()
-    .toLowerCase();
-  return normalized === '金田' || normalized === '金田村' || normalized === 'jintian';
-}
-
 function featureCount(layer?: GISLayerConfig): number {
   return layer ? (layer.featureCount ?? layer.geojson.features.length) : 0;
 }
@@ -1356,7 +1349,7 @@ function PlanningTaskPanel(props: PlanningTaskPanelProps) {
           <div className="min-w-0">
             <div className="text-[12px] font-semibold text-[#2d7e61]">规划任务模板</div>
             <p className="mt-0.5 text-[11px] leading-5 text-[#718f83]">
-              一键加载完整现状报告 + 金田村 DataCatalog GIS 参考数据。
+              一键加载完整现状报告；GIS 仅来自当前 session 已准入的 DATA catalog。
             </p>
             <div className="mt-2">
               <OverviewLevelTabs value={props.overviewLevel} onChange={props.onOverviewLevelChange} />
@@ -1469,8 +1462,8 @@ function PlanningTaskPanel(props: PlanningTaskPanelProps) {
               onChange={(files) => props.onFilesChange('villageDataFiles', files)}
             />
             <div className="mt-3 rounded-lg bg-[#eef8f3] px-3 py-2 text-[11px] leading-5 text-[#5f8174]">
-              村庄名称将绑定 DataCatalog GIS 参考数据；一键示例不会上传 GIS
-              文件。非 GIS 附件会先由 MinerU 转成 Markdown；图表保留为文本表格，图片先登记为待补充的多模态证据，不阻塞规划。
+              GIS 图层只从当前 session 的已准入 DATA catalog 加载；一键示例不会注入
+              隐式 GIS 文件。非 GIS 附件会先由 MinerU 转成 Markdown；图表保留为文本表格，图片先登记为待补充的多模态证据，不阻塞规划。
             </div>
           </section>
           <section className="rounded-2xl border border-[#dcebe4] bg-white p-4 shadow-sm">
@@ -2067,14 +2060,10 @@ function UnifiedPlanningWorkbench() {
     () => buildSpatialWorkflowSteps(positioningTrace, artifactKeys, reports.layer3),
     [artifactKeys, positioningTrace, reports.layer3],
   );
-  // The static package is a JinTian reference only.  Never inject it into a
-  // different session while that session is waiting for its own GIS upload or
-  // DELIVER snapshot.
-  // A new project defaults to the bundled JinTian reference only while the
-  // village field is still blank.  Once a different village is entered (or a
-  // session is restored), never reuse the reference source for that context.
-  const referenceVillageName = activeVillageName || (!sessionId ? '金田村' : '');
-  const shouldLoadCurrentSource = shouldLoadGisResult && isJintianReferenceVillage(referenceVillageName);
+  // Source layers belong to the active session's admitted DATA catalog.
+  // There is no bundled-village fallback and no cross-session reuse.
+  const referenceVillageName = activeVillageName;
+  const shouldLoadCurrentSource = shouldLoadGisResult && Boolean(sessionId);
   const visibleCurrentGisSource = shouldLoadCurrentSource ? currentGisSource : null;
   const showingReferenceGis = Boolean(
     shouldLoadCurrentSource && sessionId && !hasSessionGisLayers && currentGisSource?.layers?.length,
@@ -2115,7 +2104,7 @@ function UnifiedPlanningWorkbench() {
   useEffect(() => {
     if (!shouldLoadCurrentSource) return;
     let cancelled = false;
-    void fetchCurrentSourceLayers(referenceVillageName)
+    void fetchCurrentSourceLayers(referenceVillageName || '', sessionId || '')
       .then((result) => {
         if (!cancelled) setCurrentGisSource(result);
       })
@@ -2127,7 +2116,7 @@ function UnifiedPlanningWorkbench() {
     return () => {
       cancelled = true;
     };
-  }, [referenceVillageName, shouldLoadCurrentSource]);
+  }, [referenceVillageName, sessionId, shouldLoadCurrentSource]);
 
   const loadResult = useCallback(
     async (force = false) => {
@@ -2135,7 +2124,7 @@ function UnifiedPlanningWorkbench() {
       setLoading(true);
       setError('');
       try {
-        const sourceLayers = await fetchCurrentSourceLayers(referenceVillageName || '金田村');
+        const sourceLayers = await fetchCurrentSourceLayers(referenceVillageName || '', sessionId || '');
         setCurrentGisSource(sourceLayers);
         setPayload(null);
       } catch (requestError) {
@@ -2145,7 +2134,7 @@ function UnifiedPlanningWorkbench() {
         setLoading(false);
       }
     },
-    [referenceVillageName],
+    [referenceVillageName, sessionId],
   );
 
   useEffect(() => {
@@ -2687,7 +2676,7 @@ function UnifiedPlanningWorkbench() {
     const mapped: MapFeatureFocus[] = [];
     const seen = new Set<string>();
     const addFocus = (focus: MapFeatureFocus) => {
-      const key = [focus.bundleFeatureBsm, focus.sourceFeatureId, focus.sourceBsm].filter(Boolean).join('|');
+      const key = [focus.resourceRef, focus.sourceDatasetRef, focus.sourceFeatureId].filter(Boolean).join('|');
       if (!key || seen.has(key)) return;
       seen.add(key);
       mapped.push(focus);
@@ -2696,12 +2685,12 @@ function UnifiedPlanningWorkbench() {
       const identity = feature.identity;
       if (!identity) return;
       addFocus({
-        bundleFeatureBsm: identity.bundle_feature_bsm,
+        resourceRef: feature.resource_ref,
+        sourceDatasetRef: identity.source_dataset_ref,
         sourceFeatureId: identity.source_feature_id,
-        sourceBsm: identity.source_bsm || undefined,
       });
-      (feature.related_parcel_bsms || []).slice(0, 6).forEach((parcelBsm) => {
-        addFocus({ bundleFeatureBsm: parcelBsm });
+      (feature.entity_refs || []).slice(0, 6).forEach((entityRef) => {
+        addFocus({ resourceRef: entityRef });
       });
     });
     setEvidenceFocuses(mapped);
@@ -2991,13 +2980,13 @@ function UnifiedPlanningWorkbench() {
 
             {workbenchView === 'drawings' && visibleCurrentGisSource && (
               <section className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-[#dcebe4] bg-[#f8fcf9] px-3 py-2 text-[11px] text-[#5f8174]">
-                <span className="font-semibold text-[#347b61]">现状数据源 · DataCatalog</span>
+                <span className="font-semibold text-[#347b61]">现状数据源 · DATA catalog</span>
                 <span>
                   {visibleCurrentGisSource.layers.length} 个现状图层 · {totalFeatures.toLocaleString()} 个要素
                 </span>
                 {visibleCurrentGisSource.rasters.map((raster) => (
                   <span key={raster.source_name} className={raster.available ? 'text-[#347b61]' : 'text-[#a66a4f]'}>
-                    DEM{' '}
+                    {raster.layer_name || raster.source_name}{' '}
                     {raster.available
                       ? `已接入 · ${raster.width ?? '—'}×${raster.height ?? '—'} · ${raster.crs || '未知坐标系'}`
                       : `不可用 · ${raster.reason || '后端未提供'}`}
@@ -3016,7 +3005,7 @@ function UnifiedPlanningWorkbench() {
               !hasSessionGisLayers &&
               referenceVillageName && (
                 <section className="shrink-0 rounded-xl border border-[#f0d9c7] bg-[#fffaf5] px-3 py-2 text-[11px] text-[#966b4f]">
-                  当前村庄“{referenceVillageName}”未配置现状 DataCatalog 数据源；本页不会复用金田村参考图层，
+                  当前 session 尚未提供村庄“{referenceVillageName}”的已准入 DATA 数据；本页不会注入其他 session 的参考图层，
                   规划图层须等待本会话 DELIVER 空间快照。
                 </section>
               )}
@@ -3346,7 +3335,7 @@ function UnifiedPlanningWorkbench() {
                     )}
                     {showingReferenceGis && !mapLayersLoading && !error && (
                       <div className="pointer-events-none absolute inset-x-0 top-3 z-20 mx-auto w-fit rounded-full border border-[#d8e9e1] bg-white/90 px-4 py-1.5 text-[11px] text-[#33765f] shadow-sm">
-                        当前显示 DataCatalog 真实现状数据；本会话 DELIVER 空间快照尚未就绪，规划图层不会被伪造
+                        当前显示本 session 的真实 DATA 现状数据；本会话 DELIVER 空间快照尚未就绪，规划图层不会被伪造
                       </div>
                     )}
                     {error ? (

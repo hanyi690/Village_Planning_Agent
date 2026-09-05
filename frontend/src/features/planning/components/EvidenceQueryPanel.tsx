@@ -23,7 +23,7 @@ const compactRelationRef = (value: string) => value
   .join(' → ');
 
 export default function EvidenceQueryPanel({ sessionId, villageName, onFocusFeature, onFocusFeatures }: EvidenceQueryPanelProps) {
-  const [query, setQuery] = useState('社前村祠堂的BSM');
+  const [query, setQuery] = useState('当前空间要素');
   const [result, setResult] = useState<EvidenceQueryResponse | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -142,7 +142,7 @@ export default function EvidenceQueryPanel({ sessionId, villageName, onFocusFeat
             }}
             disabled={!sessionId || loading}
             className="min-w-0 flex-1 rounded-lg border border-[#dcebe4] px-2.5 py-2 text-[11px] text-[#315f50] outline-none focus:border-[#42b48a]"
-            placeholder="例如：社前村祠堂的BSM"
+            placeholder="例如：当前空间要素的来源和位置"
           />
           <button
             type="button"
@@ -162,7 +162,7 @@ export default function EvidenceQueryPanel({ sessionId, villageName, onFocusFeat
           />
           本地证据不足时允许外源检索（需要部署配置 provider）
         </label>
-        {!sessionId && <div className="text-[10px] text-[#a27a58]">启动会话后可查询当前 bundle。</div>}
+        {!sessionId && <div className="text-[10px] text-[#a27a58]">启动会话后可查询当前 DATA/WM 快照。</div>}
         {error && <div className="rounded-lg bg-[#fff3ed] px-2.5 py-2 text-[10px] leading-4 text-[#a55d42]">{error}</div>}
         {result && (
           <div className="space-y-2 text-[10px] text-[#5e7b70]">
@@ -274,17 +274,14 @@ export default function EvidenceQueryPanel({ sessionId, villageName, onFocusFeat
                             来源：{fact.source_refs.map((reference) => `${sourceLabel(reference)} [${reference}]`).join('；')}
                           </div>
                         )}
-                        {(fact.feature_bsm || fact.related_parcel_bsms.length > 0) && (
+                        {fact.spatial_refs.length > 0 && (
                           <div className="mt-0.5 break-all text-[9px] text-[#78968b]">
-                            空间关联：{fact.feature_bsm ? `BSM ${fact.feature_bsm}` : '无直接 feature BSM'}
-                            {fact.related_parcel_bsms.length > 0 ? `；关联地块 ${fact.related_parcel_bsms.join('、')}` : ''}
+                            空间关联：{fact.spatial_refs.join('、')}
                           </div>
                         )}
-                        {fact.fact_type === 'bundle_parcel_identity' && (
+                        {fact.spatial_granularity !== 'none' && (
                           <div className="mt-0.5 break-all text-[9px] text-[#5d806f]">
-                            规划地块：源面积 {fact.fields?.source_area_ha || '未提供'} ha；
-                            子几何策略 {fact.fields?.planning_geometry_policy || '未提供'}；
-                            Bundle ref {fact.source_locator || '未提供'}
+                            空间粒度：{fact.spatial_granularity}；空间权威：{fact.source_locator || '由 DATA catalog 提供'}
                           </div>
                         )}
                         {fact.evidence_span && (
@@ -312,9 +309,9 @@ export default function EvidenceQueryPanel({ sessionId, villageName, onFocusFeat
                     {relationEvidence.map((relation) => (
                       <div key={relation.relation_id} className="rounded-md bg-[#f1f6fb] px-2 py-1.5 text-[#617795]">
                         <div>
-                          {relation.subject.identity.canonical_name || relation.subject.identity.bundle_feature_bsm}
+                          {relation.subject.identity.canonical_name || relation.subject.identity.source_feature_id}
                           <span className="mx-1 text-[#8aa5c1]">{compactRelationRef(relation.predicate)}</span>
-                          {relation.object.identity.canonical_name || relation.object.identity.bundle_feature_bsm}
+                          {relation.object.identity.canonical_name || relation.object.identity.source_feature_id}
                         </div>
                         <div className="mt-0.5 text-[9px]">
                           关系证据：{relation.relation_id}
@@ -337,16 +334,16 @@ export default function EvidenceQueryPanel({ sessionId, villageName, onFocusFeat
                 )}
                 {facts.length === 0 && sourceSpans.length === 0 && relationEvidence.length === 0
                   && unresolvedEvidence.length === 0 && conflicts.length === 0 && (
-                    <div className="text-[#8aa59a]">本次没有可展开的文本、事实或关系明细；空间候选仍按 Bundle 几何引用展示。</div>
+                    <div className="text-[#8aa59a]">本次没有可展开的文本、事实或关系明细；空间候选仍按 DATA resource reference 展示。</div>
                   )}
                 <div className="border-t border-[#e5f0ea] pt-1.5 text-[9px] text-[#8aa59a]">
-                  几何只通过候选的 Bundle geometry ref 使用；报告、L1、KG、RAG 和外源内容作为可审计的语义/关系背景，不直接替代几何权威。
+                  几何只通过候选的 DATA resource/representation ref 使用；报告、L1、WM、RAG 和外源内容作为可审计的语义/关系背景，不直接替代几何权威。
                 </div>
               </div>
             </details>
             {candidates.length > 0 ? candidates.slice(0, 12).map((candidate) => (
               <div
-                key={`${candidate.identity.bundle_feature_bsm}-${candidate.identity.source_feature_id || 'feature'}`}
+                key={`${candidate.resource_ref}-${candidate.identity.source_feature_id || 'feature'}`}
                 className="rounded-lg border border-[#e2eee8] bg-[#f8fcfa] px-2.5 py-2"
               >
                 <button
@@ -377,8 +374,8 @@ export default function EvidenceQueryPanel({ sessionId, villageName, onFocusFeat
                     </span>
                   </div>
                   <div className="mt-1 text-[#607f72]">
-                    {candidate.related_parcel_bsms?.length
-                      ? `关联地块（${candidate.related_parcel_bsms.length}）：${candidate.related_parcel_bsms.join('、')}`
+                    {candidate.entity_refs?.length
+                      ? `关联实体（${candidate.entity_refs.length}）：${candidate.entity_refs.join('、')}`
                       : `来源图层：${candidate.identity.source_layer || '未分层'}`}
                   </div>
                   <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[#78968b]">
@@ -390,7 +387,7 @@ export default function EvidenceQueryPanel({ sessionId, villageName, onFocusFeat
                 <details className="mt-1.5 border-t border-[#e5f0ea] pt-1.5">
                   <summary className="cursor-pointer text-[10px] text-[#6e9485]">查看来源与空间标识</summary>
                   <div className="mt-1.5 space-y-0.5 break-all text-[10px] leading-4 text-[#78968b]">
-                    <div>BSM：{candidate.identity.bundle_feature_bsm}</div>
+                    <div>resource：{candidate.resource_ref || '—'}</div>
                     <div>feature：{candidate.identity.source_feature_id || '—'}</div>
                     <div>geometry：{candidate.geometry_ref || '—'}</div>
                     <div>几何权威（非定位置信度）：{percent(candidate.source_authority_score)} · 最终选择：{candidate.selection_confidence == null ? '尚未执行' : percent(candidate.selection_confidence)}</div>

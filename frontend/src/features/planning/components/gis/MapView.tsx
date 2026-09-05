@@ -638,9 +638,9 @@ interface MapViewProps {
 }
 
 export interface MapFeatureFocus {
-  bundleFeatureBsm?: string;
+  resourceRef?: string;
+  sourceDatasetRef?: string;
   sourceFeatureId?: string;
-  sourceBsm?: string;
 }
 
 // Layer rendering priority (numerical order, higher = top layer)
@@ -1173,19 +1173,19 @@ export default function MapView({
     const matched: Feature<Geometry, GeoJsonProperties>[] = [];
     for (const wantedFocus of requestedFocuses) {
       const wanted = [
-        wantedFocus.bundleFeatureBsm,
+        wantedFocus.resourceRef,
+        wantedFocus.sourceDatasetRef,
         wantedFocus.sourceFeatureId,
-        wantedFocus.sourceBsm,
       ].filter((value): value is string => Boolean(value?.trim()))
         .map((value) => value.trim().toLowerCase());
       if (wanted.length === 0) continue;
       for (const layer of filteredLayers) {
         const feature = layer.geojson.features.find((candidate) => {
           const values = [
-            readProperty(candidate.properties, ['BSM', 'bsm', 'bundle_feature_bsm', 'bundleFeatureBsm']),
             String(candidate.id ?? '').trim().toLowerCase(),
-            readProperty(candidate.properties, ['source_feature_id', 'sourceFeatureId', 'feature_id', 'id']),
-            readProperty(candidate.properties, ['source_bsm', 'sourceBsm']),
+            readProperty(candidate.properties, ['resource_ref', 'resourceRef']),
+            readProperty(candidate.properties, ['source_dataset_ref', 'sourceDatasetRef', 'dataset_ref']),
+            readProperty(candidate.properties, ['source_feature_ref', 'sourceFeatureId', 'feature_id', 'id']),
           ];
           return wanted.some((value) => values.includes(value));
         });

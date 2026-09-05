@@ -39,6 +39,9 @@ class UploadIngestionPort(Protocol):
         file: object,
         session_id: str,
         category: str,
+        *,
+        layer_ref: str = "",
+        boundary_scope_mode: str = "",
     ) -> Mapping[str, object]: ...
 
 
