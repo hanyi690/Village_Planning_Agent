@@ -3,10 +3,8 @@
 Consolidates the three competing spatial-semantics implementations into one
 place, all reading from a ``PlanningContext``:
 
-    resolve_text      EXPLORE / GROUND free-text description -> candidates
     resolve_spec      PARSE closed-set SpatialReferenceSpec -> candidates
-    resolve_anchors   intent location hints -> candidate BSMs / anchors
-    bind              deterministic bundle binding (BSM-first)
+    resolve_anchors   intent location hints -> candidate source geometries
 
     Every method takes its facts from ``PlanningContext`` (workspace / gazetteer /
     KG / constraint index) instead of each caller building its own
@@ -44,6 +42,16 @@ logger = get_logger(__name__)
 
 _LOCATION_SEPARATORS = frozenset("、，,；;/ \t\r\n至和与")
 _LOCATION_STRIP = ("自然村", "村", "组", "段", "沿", "线", "附近", "周边", "区域", "一带")
+_DIRECTION_OFFSETS = {
+    "N": (0, 1),
+    "NE": (1, 1),
+    "E": (1, 0),
+    "SE": (1, -1),
+    "S": (0, -1),
+    "SW": (-1, -1),
+    "W": (-1, 0),
+    "NW": (-1, 1),
+}
 
 
 def _bbox_radius_m(bbox) -> float:
@@ -241,13 +249,7 @@ class SpatialResolver:
             "current_world",
             None,
         )
-        mode = str(
-            getattr(context, "world_model_mode", "off") or "off"
-        ).strip().lower()
-        if current_world_port is None and (
-            mode in {"shadow", "prefer_v2", "v2_only"}
-            or not getattr(context, "kg", None)
-        ):
+        if current_world_port is None:
             raise TypeError("SpatialResolver requires a CurrentWorldQueryPort")
         self.context = context
         if ground_llm_budget is None:
@@ -272,11 +274,7 @@ class SpatialResolver:
 
     @property
     def kg(self):
-        mode = str(getattr(self.context, "world_model_mode", "off") or "off").strip().lower()
-        if mode in {"shadow", "prefer_v2", "v2_only"}:
-            return getattr(getattr(self.context, "ports", None), "current_world", None)
-        kg = getattr(self.context, "kg", None)
-        return getattr(kg, "read_port", kg)
+        return getattr(getattr(self.context, "ports", None), "current_world", None)
 
     @property
     def constraint_index(self):
@@ -328,6 +326,24 @@ class SpatialResolver:
             # transformed therefore remains an explicit unresolved gap.
             geometry = getattr(feature, "normalized_geometry", None)
             if not isinstance(geometry, dict):
+                continue
+            normalized_kind = str(
+                getattr(feature, "normalized_geometry_kind", "") or ""
+            ).strip().casefold()
+            if normalized_kind in {"", "unknown"}:
+                normalized_kind = {
+                    "point": "point",
+                    "multipoint": "point",
+                    "linestring": "line",
+                    "multilinestring": "line",
+                    "polygon": "polygon",
+                    "multipolygon": "polygon",
+                    "geometrycollection": "collection",
+                }.get(str(geometry.get("type") or "").casefold(), "")
+            if normalized_kind not in {"point", "line", "polygon"}:
+                # A complete GeometryCollection remains readable DATA, but it
+                # is not an executable grounding candidate.  Never coerce it
+                # into a polygon/line/point from the source family.
                 continue
             attrs = getattr(feature, "raw_attributes", {}) or {}
             if attr_filter and any(str(attrs.get(key, "")) != str(value) for key, value in attr_filter.items()):
@@ -403,7 +419,7 @@ class SpatialResolver:
                 resource_ref=resource_ref,
                 source_ref=resource_ref,
                 source_refs=[resource_ref],
-                feature_kind=str(feature.geometry_kind or "unknown"),
+                feature_kind=normalized_kind,
             ))
             if len(candidates) >= 64:
                 break
@@ -424,9 +440,6 @@ class SpatialResolver:
         """
 
         finder = getattr(self.kg, "find_entities", None)
-        # In ``world_model_mode=off`` the legacy PlanningKG remains the
-        # compatibility read surface. In v2, source-feature joins use only
-        # the explicitly scoped current-world port.
         port = getattr(getattr(self.context, "ports", None), "current_world", None)
         port_finder = getattr(port, "find_entities", None)
         if not callable(finder) and callable(port_finder):
@@ -604,32 +617,7 @@ class SpatialResolver:
             provenance=dict(provenance or {}),
         )
 
-    # ── 1. Free-text description (EXPLORE / GROUND) ────────────────
-
-    def resolve_text(self, desc: str) -> "ResolvedSpatialDescription":
-        """Resolve a natural-language spatial description to candidate BSMs.
-
-        Delegates to ``grounding.resolve_spatial_description`` with all
-        context-injected dependencies (gazetteer / KG / constraint index).
-        """
-        from .grounding import resolve_spatial_description
-
-        if not desc or self.workspace is None:
-            from .grounding import ResolvedSpatialDescription
-
-            return ResolvedSpatialDescription(
-                evidence_text=desc,
-                unresolved_reason="empty desc or bundle",
-            )
-        return resolve_spatial_description(
-            desc,
-            self.workspace,
-            kg=self.kg,
-            gazetteer=self.gazetteer,
-            constraint_index=self.constraint_index,
-        )
-
-    # ── 2. Closed-set spec (PARSE -> GROUND boundary) ──────────────
+    # ── Closed-set spec (PARSE -> GROUND boundary) ──────────────
 
     def resolve_spec(
         self,
@@ -1047,10 +1035,7 @@ class SpatialResolver:
         confidence = 0.9 if reference_geometries else (0.7 if final_bsms else 0.3)
         if not final_bsms and bbox:
             # Directional bbox with no KG match stays as retrieval scope only.
-            from .grounding import query_parcels_in_bbox
-
-            parcels = self.context.current_parcels()
-            bbox_scope_bsms = query_parcels_in_bbox(parcels, bbox)
+            bbox_scope_bsms = self._source_feature_refs_in_bbox(bbox)
             provenance["path"] += "+geometry:bbox"
             search_scope = self._build_search_scope(
                 scope_bsms=bbox_scope_bsms,
@@ -2570,30 +2555,68 @@ class SpatialResolver:
         return "unknown"
 
     def _directional_bbox(self, direction: str) -> Optional[tuple]:
-        """Directional bbox around the bundle's village center."""
-        from .grounding import (
-            _village_center,
-            resolve_directional_bbox,
-        )
+        """Return a scope-only directional bbox from the admitted boundary."""
 
-        parcels = self.context.current_parcels()
-        center = _village_center(parcels) if parcels else None
-        if center is None:
+        scope = getattr(self.context, "boundary_scope_artifact", None)
+        geometry = getattr(scope, "geometry", None)
+        if not isinstance(geometry, dict):
             return None
-        return resolve_directional_bbox(center, direction)
+        try:
+            from shapely.geometry import shape
 
-    # ── 4. Deterministic bundle binding (BSM-first) ────────────────
+            boundary = shape(geometry)
+            if boundary.is_empty or not boundary.is_valid:
+                return None
+            min_x, min_y, max_x, max_y = boundary.bounds
+        except Exception:
+            return None
+        direction_key = str(direction or "").strip().upper()
+        if direction_key not in _DIRECTION_OFFSETS:
+            return None
+        center = boundary.representative_point()
+        width = (max_x - min_x) / 2.0
+        height = (max_y - min_y) / 2.0
+        offset_x, offset_y = _DIRECTION_OFFSETS[direction_key]
+        if offset_x:
+            left = center.x if offset_x > 0 else min_x
+            right = max_x if offset_x > 0 else center.x
+        else:
+            left, right = min_x, max_x
+        if offset_y:
+            bottom = center.y if offset_y > 0 else min_y
+            top = max_y if offset_y > 0 else center.y
+        else:
+            bottom, top = min_y, max_y
+        if width == 0 and height == 0:
+            return None
+        return (left, bottom, right, top)
 
-    def bind(self, instructions: Any) -> Dict[str, Any]:
-        """Bind instruction candidates to immutable bundle geometry.
+    def _source_feature_refs_in_bbox(self, bbox: tuple[float, float, float, float]) -> list[str]:
+        """Return DATA source refs intersecting a scope-only bbox."""
 
-        Delegates to ``bundle_binder`` with a gazetteer injected from the
-        context so the binder never hardcodes a village name.
-        """
-        from .bundle_binder import DeterministicBundleBinder
+        catalog = getattr(self.context, "data_resource_catalog", None)
+        snapshot = getattr(catalog, "snapshot", None)
+        if snapshot is None:
+            return []
+        try:
+            from shapely.geometry import box, shape
 
-        binder = DeterministicBundleBinder(self.workspace)
-        return binder.bind(instructions, gazetteer=self.gazetteer)
+            query = box(*bbox)
+        except Exception:
+            return []
+        refs: list[str] = []
+        for feature in getattr(snapshot, "features", ()) or ():
+            geometry = getattr(feature, "normalized_geometry", None)
+            if not isinstance(geometry, dict):
+                continue
+            try:
+                candidate = shape(geometry)
+                if candidate.is_empty or not candidate.is_valid or not candidate.intersects(query):
+                    continue
+            except Exception:
+                continue
+            refs.append(f"resource:{feature.dataset_ref}:{feature.source_feature_ref}")
+        return refs[:64]
 
 
 __all__ = ["SpatialResolver"]

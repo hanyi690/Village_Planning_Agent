@@ -2,7 +2,7 @@
 
 Pure data container (no imports from agent/services/api). Holds the
 single authoritative view of a planning session: the DATA workspace/catalog,
-the session KG reference, the gazetteer, the constraint index and the report
+the DATA-backed World Model reference, the constraint index and the report
 summaries that the downstream EXPLORE/PARSE/GROUND/SELECT pipeline reads.
 
 The context may hold typed data/evidence ports, but artifact descriptors are
@@ -42,18 +42,19 @@ class PlanningContext:
         workspace: data-owned ``SpatialWorkspace`` (may be None when unavailable).
         data_resource_catalog: Generic Data source/representation/capability
             index. The legacy Bundle remains private to the workspace.
-        kg: Live session ``PlanningKG`` instance (may be None).
-        world_model: DATA-backed ``WorldModelKGStore`` when a normalized
-            catalog is available.  This is the cognition authority in V2;
-            ``kg`` remains only the legacy compatibility projection in
-            ``off``/``shadow`` migration modes.
-        kg_session_ref: KG session key used by ``KGManager``.
-        kg_version: KG mutation version (invalidates cached SPARQL results).
-        gazetteer: Village gazetteer (may be None when not resolvable).
+        kg: Internal alias for the current DATA-backed World Model store while
+            consumers finish reading the context contract; it is never a
+            legacy PlanningKG instance.
+        world_model: DATA-backed ``WorldModelKGStore`` for the normalized
+            catalog and the sole cognition authority.
+        kg_session_ref: Current World Model session reference.
+        kg_version: Current World Model version used for cache invalidation.
+        gazetteer: Reserved optional nomenclature port; no legacy gazetteer
+            implementation is loaded by Context Runtime.
         constraint_index: Optional derived constraint index (may be None).
         input_documents: Runtime text working set resolved from admitted
         document artifacts; bodies are not copied into context metadata.
-        reports: Bundle-owned report manifest, ``{dim_key: {summary,
+        reports: Report-owned report manifest, ``{dim_key: {summary,
             instruction, report_id, layers: {L1/L2/L3: {...}}}}``. Report
             bodies are opened through the evidence/report retrieval boundary.
         report_summary_index: Layered report summaries keyed by dimension.
@@ -71,8 +72,8 @@ class PlanningContext:
             loaded from local provider caches; these support names and
             location binding but never replace workspace geometry.
         ports: Typed ``PlanningPorts`` bundle of injected dependency-inversion
-        port implementations (semantic_query, spatial_query, gazetteer,
-            nomenclature_registry, context_provider). May be empty.
+        port implementations (current_world, network_retry and commit ports).
+        May be empty before DATA bootstrap completes.
     """
 
     session_id: str = ""
@@ -93,13 +94,8 @@ class PlanningContext:
     cognition_round: CognitionRound | None = None
     kg_session_ref: str = ""
     kg_version: int = 0
-    # Migration mode remains explicit for World Model rollout diagnostics.
+    # The current runtime mode is fixed by the DATA/WM contract.
     world_model_mode: str = "v2_only"
-    # In shadow mode the V2 graph is built and written for comparison, while
-    # the legacy KG remains the read authority until an explicit cutover.
-    world_model_shadow: Any = None
-    world_model_shadow_diff: Any = None
-    world_model_shadow_diff_ref: str = ""
     gazetteer: Any = None
     constraint_index: Any = None
     input_documents: List[Dict[str, Any]] = field(default_factory=list)
@@ -212,16 +208,6 @@ class PlanningContext:
                 or getattr(self.kg, "snapshot_digest", "")
                 or ""
             ),
-            "world_model_shadow_snapshot_ref": str(
-                getattr(self.world_model_shadow, "snapshot_ref", "") or ""
-            ),
-            "world_model_shadow_snapshot_digest": str(
-                getattr(self.world_model_shadow, "snapshot_digest", "") or ""
-            ),
-            "world_model_shadow_diff_digest": str(
-                getattr(self.world_model_shadow_diff, "digest", "") or ""
-            ),
-            "world_model_shadow_diff_ref": self.world_model_shadow_diff_ref,
             "has_workspace": self.has_workspace,
             "has_data_resource_catalog": self.data_resource_catalog is not None,
             "data_resource_catalog_digest": str(
@@ -289,7 +275,6 @@ class PlanningContext:
             "data_resource_catalog": self.data_resource_catalog is not None,
             "kg": self.kg is not None,
             "world_model": self.world_model is not None,
-            "world_model_shadow": self.world_model_shadow is not None,
             "current_world": getattr(self.ports, "current_world", None) is not None,
             "network_retry": getattr(self.ports, "network_retry", None) is not None,
             "world_model_commit": getattr(self.ports, "world_model_commit", None) is not None,

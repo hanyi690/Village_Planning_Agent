@@ -148,7 +148,10 @@ def _project_scope_bbox_wgs84(
     candidates: list[tuple[int, tuple[float, float, float, float], str]] = []
     snapshot = _model_value(data_catalog, "snapshot", data_catalog)
     for feature in tuple(_model_value(snapshot, "features", ()) or ()):
-        if str(_model_value(feature, "geometry_kind", "") or "") != "polygon":
+        normalized_kind = str(
+            _model_value(feature, "normalized_geometry_kind", "") or ""
+        ).strip().casefold()
+        if normalized_kind != "polygon":
             continue
         key = (
             str(_model_value(feature, "dataset_ref", "") or ""),
@@ -370,32 +373,18 @@ def get_cached_context(session_id: str) -> Optional[PlanningContext]:
 
 def context_has_cognition_ports(
     context: PlanningContext | None,
-    *,
-    world_model_mode: str | None = None,
 ) -> bool:
     """Return whether a Context satisfies the configured cognition boundary.
 
     DATA bootstrap may intentionally publish a Context before Cognition runs.
-    Such a Context is useful to KG, but it is not reusable by EVIDENCE/L1 in a
-    V2-authoritative mode.  Keeping this predicate in Context Runtime prevents
-    workflow stages from inventing different definitions of "KG ready".
+    Such a Context is not reusable by EVIDENCE/L1 until the current-world read
+    and commit ports are present. Keeping this predicate in Context Runtime
+    prevents workflow stages from inventing different definitions of readiness.
     """
 
     if context is None:
         return False
-    mode = str(
-        world_model_mode
-        if world_model_mode is not None
-        else getattr(context, "world_model_mode", "off")
-        or "off"
-    ).strip().lower()
-    if mode not in {"shadow", "prefer_v2", "v2_only"}:
-        return True
-    model = getattr(context, "world_model", None) or getattr(
-        context,
-        "world_model_shadow",
-        None,
-    )
+    model = getattr(context, "world_model", None)
     ports = getattr(context, "ports", None)
     return bool(
         model is not None
@@ -429,7 +418,7 @@ async def build_planning_context(
         include_reports: Load layer report content + summary index (DB I/O).
             Set False for pure spatial bootstrapping.
         data_catalog: Optional normalized catalog or raw records. Required by
-            ``COGNITION_WORLD_MODEL_MODE=prefer_v2|v2_only`` and used as the generic
+            ``COGNITION_WORLD_MODEL_MODE=v2_only`` and used as the generic
             source failure when the DATA catalog is unavailable.
         boundary_scope_artifact: Optional immutable admitted boundary used to
             scope provider observations; it is never reconstructed from a filename.
@@ -446,9 +435,17 @@ async def build_planning_context(
         the underlying data is unavailable).
     """
     build_started = perf_counter()
-    from app.core.settings import COGNITION_WORLD_MODEL_MODE
+    stage_started = build_started
+    stage_timings: dict[str, float] = {}
 
-    world_model_mode = str(COGNITION_WORLD_MODEL_MODE or "off").strip().lower()
+    def record_stage(name: str) -> None:
+        nonlocal stage_started
+        stage_timings[name] = (perf_counter() - stage_started) * 1000
+        stage_started = perf_counter()
+    # DATA-backed World Model is the only supported context authority.
+    # Keeping this constant here makes an accidental legacy mode impossible
+    # without changing the executable context contract.
+    world_model_mode = "v2_only"
     if not refresh:
         cached = get_cached_context(session_id)
         if cached is not None:
@@ -456,7 +453,7 @@ async def build_planning_context(
                 version is None or str(getattr(cached, "version", "")) == str(version)
             )
             cached_mode_matches = (
-                str(getattr(cached, "world_model_mode", "off") or "off").strip().lower()
+                str(getattr(cached, "world_model_mode", "v2_only") or "v2_only").strip().lower()
                 == world_model_mode
             )
             cached_snapshot = getattr(cached, "data_snapshot", None)
@@ -495,10 +492,7 @@ async def build_planning_context(
                 or getattr(schema_mapping_snapshot, "decision_fingerprint", "")
                 or ""
             )
-            cached_world_model = (
-                getattr(cached, "world_model", None)
-                or getattr(cached, "world_model_shadow", None)
-            )
+            cached_world_model = getattr(cached, "world_model", None)
             cached_world_model_matches = (
                 not expected_world_model_digest
                 or str(getattr(cached_world_model, "snapshot_digest", "") or "")
@@ -520,10 +514,7 @@ async def build_planning_context(
                 )
             )
             cached_cognition_ready = bool(defer_cognition_bootstrap) or (
-                context_has_cognition_ports(
-                    cached,
-                    world_model_mode=world_model_mode,
-                )
+                context_has_cognition_ports(cached)
             )
             if (
                 cached_version_matches
@@ -561,6 +552,11 @@ async def build_planning_context(
     # field shapes into KG/GROUND.
     if data_catalog is not None:
         from app.data.resource_catalog import DataResourceCatalog
+        from app.data.admission import (
+            CURRENT_WORLD_ADMISSION_POLICY_VERSION,
+            assert_current_world_catalog,
+            current_world_snapshot,
+        )
 
         if not isinstance(data_catalog, DataResourceCatalog):
             data_catalog = DataResourceCatalog.from_records(
@@ -568,6 +564,22 @@ async def build_planning_context(
                 dataset_ref=f"session:{session_id}:input",
                 name=resolved_village,
             )
+        try:
+            if data_catalog.snapshot.admission_policy_version == CURRENT_WORLD_ADMISSION_POLICY_VERSION:
+                # Admission already published the filtered immutable view.
+                # Validate an untrusted restored snapshot, but do not rebuild
+                # the same catalog during every context bootstrap.
+                assert_current_world_catalog(data_catalog.snapshot)
+            else:
+                data_catalog = DataResourceCatalog(
+                    current_world_snapshot(data_catalog.snapshot)
+                )
+                assert_current_world_catalog(data_catalog.snapshot)
+        except (TypeError, ValueError) as exc:
+            raise ContextBuildError(
+                "DATA current-world admission invariant failed"
+            ) from exc
+        record_stage("canonicalize_catalog")
 
     # 1.5 Data manifest and generic resource catalog. DATA is materialized
     # before KG so every later semantic projection has a stable snapshot and
@@ -581,33 +593,13 @@ async def build_planning_context(
         village_name=resolved_village,
         source="data_catalog",
     )
+    record_stage("build_data_manifest")
     workspace = SpatialWorkspace(data_snapshot, catalog=data_catalog)
-    data_resource_catalog = None
-    try:
-        data_resource_catalog = workspace.to_resource_catalog(
-            snapshot_id=data_snapshot.snapshot_id,
-        )
-    except Exception as exc:
-        logger.warning(
-            "[PlanningContext] generic data resource catalog unavailable: %s",
-            type(exc).__name__,
-        )
+    data_resource_catalog = workspace.to_resource_catalog(
+        snapshot_id=data_snapshot.snapshot_id,
+    )
     if data_resource_catalog is not None:
         try:
-            from app.data.admission import (
-                assert_current_world_catalog,
-                current_world_snapshot,
-            )
-            from app.data.resource_catalog import DataResourceCatalog
-
-            # Canonicalize once before the DATA snapshot and World Model are
-            # built.  DATA artifact persistence performs the same idempotent
-            # admission projection; using its canonical view here guarantees
-            # that DATA, KG and EVIDENCE share one catalog digest.
-            data_resource_catalog = DataResourceCatalog(
-                current_world_snapshot(data_resource_catalog.snapshot)
-            )
-            assert_current_world_catalog(data_resource_catalog.snapshot)
             if incoming_dependency_digest:
                 data_resource_catalog.data_dependency_graph_digest = incoming_dependency_digest
             else:
@@ -618,6 +610,7 @@ async def build_planning_context(
                         data_resource_catalog,
                     ).graph_digest
                 )
+            record_stage("build_data_dependency_graph")
         except (TypeError, ValueError) as exc:
             raise ContextBuildError(
                 "DATA current-world admission invariant failed"
@@ -661,13 +654,13 @@ async def build_planning_context(
                     "[PlanningContext] schema mapping snapshot unavailable: %s",
                     type(exc).__name__,
                 )
+        record_stage("schema_mapping")
 
     # 2. DATA-backed World Model (idempotent: pre-built products short-circuit)
     kg_session_ref = ""
     kg_version = 0
     kg = None
     world_model = None
-    world_model_shadow = None
     kg_error: Optional[str] = None
     # Build the store once. The old implementation performed the same cached
     # lookup again for v2 modes, which obscured the authority boundary.
@@ -689,12 +682,9 @@ async def build_planning_context(
                 artifact_root=artifact_root,
                 expected_snapshot_digest=str(expected_world_model_digest or ""),
             )
-            if world_model_mode == "shadow":
-                world_model_shadow = world_model
-            else:
-                kg = world_model
-                kg_session_ref = world_model.session_ref
-                kg_version = world_model.version
+            kg = world_model
+            kg_session_ref = world_model.session_ref
+            kg_version = world_model.version
         except Exception as exc:
             kg_error = type(exc).__name__
             logger.warning(
@@ -714,40 +704,8 @@ async def build_planning_context(
     world_model_commit_port = None
     cognition_commit_port = None
     try:
-        if gazetteer is not None:
-            from app.infrastructure.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
-
-            gazetteer_port = KGGazetteerAdapter(gazetteer)
-    except Exception as e:
-        logger.warning(
-            "[PlanningContext] gazetteer adapter build failed: %s",
-            type(e).__name__,
-        )
-    try:
-        if kg is not None and world_model_mode not in {"prefer_v2", "v2_only"}:
-            from app.infrastructure.kg.adapters.spatial_query_adapter import KGSpatialQueryAdapter
-
-            spatial_query_port = KGSpatialQueryAdapter(kg)
-    except Exception as e:
-        logger.warning(
-            "[PlanningContext] spatial_query adapter build failed: %s",
-            type(e).__name__,
-        )
-    try:
-        if kg is not None and world_model_mode not in {"prefer_v2", "v2_only"}:
-            from app.infrastructure.kg.adapters.semantic_query_adapter import KGSemanticQueryAdapter
-
-            semantic_query_port = KGSemanticQueryAdapter(kg)
-    except Exception as e:
-        logger.warning(
-            "[PlanningContext] semantic_query adapter build failed: %s",
-            type(e).__name__,
-        )
-    try:
         # Current consumers receive the explicitly scoped source/world view.
-        world_model_for_port = world_model or (
-            world_model_shadow if world_model_mode == "shadow" else None
-        ) or kg
+        world_model_for_port = world_model
         if world_model_for_port is not None:
             current_world_port = getattr(
                 world_model_for_port,
@@ -771,24 +729,13 @@ async def build_planning_context(
             type(e).__name__,
         )
     try:
-        world_model_for_commit = world_model or (
-            world_model_shadow if world_model_mode == "shadow" else None
-        )
-        if world_model_for_commit is not None or kg is not None:
-            if world_model_mode == "shadow" and world_model_shadow is not None:
-                world_model_commit_port = world_model_shadow
-            else:
-                world_model_commit_port = world_model_for_commit or kg
+        world_model_commit_port = world_model
     except Exception as e:
         logger.warning(
             "[PlanningContext] world_model commit adapter build failed: %s",
             type(e).__name__,
         )
-    # The DATA-backed graph is a valid write surface for intent and planned
-    # lineage in a cold-start session. Current assertions remain a later
-    # Cognition transaction concern.
-    if world_model_mode == "shadow" and world_model_shadow is not None:
-        world_model_commit_port = world_model_shadow
+    # The DATA-backed graph is the only write surface for Cognition lineage.
     cognition_commit_port = world_model_commit_port
     ports = PlanningPorts(
         gazetteer=gazetteer_port,
@@ -808,7 +755,7 @@ async def build_planning_context(
     # Reports are loaded through the explicitly admitted document channel.
 
     runtime_documents: list[Dict[str, Any]] = []
-    if session_id:
+    if session_id and include_reports:
         try:
             from app.data.catalog.session_documents import (
                 evidence_documents,
@@ -828,6 +775,7 @@ async def build_planning_context(
     # Generic DATA is projected once into the cognition World Model.
     networks = _build_context_networks(workspace)
     demands = _build_context_demands(workspace)
+    record_stage("network_and_demand_views")
     external_search_port = None
     try:
         from app.infrastructure.search.provider_registry import get_active_external_provider
@@ -865,34 +813,12 @@ async def build_planning_context(
             "[PlanningContext] cached map observations unavailable: %s",
             type(exc).__name__,
         )
+    record_stage("scope_and_observation_cache")
     # Context hydration is read-only.  Cached coordinates remain available to
     # Evidence and GROUND through ``external_observation_snapshot``; only the
     # Cognition application may project support assertions and publish a new
     # immutable World Model snapshot.  Mutating a restored store here would
     # change its digest after the Cognition CAS commit.
-    world_model_shadow_diff = None
-    world_model_shadow_diff_ref = ""
-    if world_model_shadow is not None and data_resource_catalog is not None:
-        try:
-            from app.infrastructure.cognition_runtime.shadow_compare import (
-                build_shadow_diff,
-                persist_shadow_diff,
-            )
-
-            world_model_shadow_diff = build_shadow_diff(
-                session_id=session_id,
-                v1_kg=kg,
-                v2_world_model=world_model_shadow,
-                source_features=getattr(data_resource_catalog.snapshot, "features", ()) or (),
-                v1_snapshot_ref=str(getattr(kg, "session_id", "") or session_id),
-                v1_snapshot_digest=str(getattr(kg, "snapshot_digest", "") or ""),
-            )
-            world_model_shadow_diff_ref = persist_shadow_diff(world_model_shadow_diff)
-        except Exception as exc:
-            logger.warning(
-                "[PlanningContext] world-model shadow diff unavailable: %s",
-                type(exc).__name__,
-            )
     if kg is not None:
         kg_version = int(getattr(kg, "version", kg_version) or kg_version)
     context = PlanningContext(
@@ -912,9 +838,6 @@ async def build_planning_context(
         kg_session_ref=kg_session_ref,
         kg_version=kg_version,
         world_model_mode=world_model_mode,
-        world_model_shadow=world_model_shadow,
-        world_model_shadow_diff=world_model_shadow_diff,
-        world_model_shadow_diff_ref=world_model_shadow_diff_ref,
         schema_mapping_snapshot=schema_mapping_snapshot,
         gazetteer=gazetteer,
         constraint_index=constraint_index,
@@ -966,16 +889,6 @@ async def build_planning_context(
         "world_model_mode": world_model_mode,
         "world_model_snapshot_ref": str(getattr(kg, "snapshot_ref", "") or ""),
         "world_model_snapshot_digest": str(getattr(kg, "snapshot_digest", "") or ""),
-        "world_model_shadow_snapshot_ref": str(
-            getattr(world_model_shadow, "snapshot_ref", "") or ""
-        ),
-        "world_model_shadow_snapshot_digest": str(
-            getattr(world_model_shadow, "snapshot_digest", "") or ""
-        ),
-        "world_model_shadow_diff_digest": str(
-            getattr(world_model_shadow_diff, "digest", "") or ""
-        ),
-        "world_model_shadow_diff_ref": world_model_shadow_diff_ref,
         "schema_mapping_digest": str(
             getattr(schema_mapping_snapshot, "digest", "")
             or getattr(schema_mapping_snapshot, "candidate_digest", "")
@@ -1001,8 +914,7 @@ async def build_planning_context(
 
     actual_world_model_digest = str(
         getattr(
-            getattr(context, "world_model", None)
-            or getattr(context, "world_model_shadow", None),
+            getattr(context, "world_model", None),
             "snapshot_digest",
             "",
         )
@@ -1019,11 +931,7 @@ async def build_planning_context(
 
     if (
         not defer_cognition_bootstrap
-        and world_model_mode in {"shadow", "prefer_v2", "v2_only"}
-        and not context_has_cognition_ports(
-            context,
-            world_model_mode=world_model_mode,
-        )
+        and not context_has_cognition_ports(context)
     ):
         raise ContextBuildError(
             "cognition context is incomplete: WorldModel read/commit ports are required"
@@ -1041,6 +949,12 @@ async def build_planning_context(
         constraint_index is not None,
         len(reports),
         (perf_counter() - build_started) * 1000,
+    )
+    logger.info(
+        "[PlanningContext] stage_ms session=%s features=%d %s",
+        session_id,
+        len(getattr(getattr(data_resource_catalog, "snapshot", None), "features", ()) or ()),
+        " ".join(f"{key}={value:.1f}" for key, value in stage_timings.items()),
     )
     return context
 

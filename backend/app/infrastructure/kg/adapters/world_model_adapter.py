@@ -13,6 +13,21 @@ from app.infrastructure.kg.ontology import PLN
 _WORLD_GRAPH = "urn:planning:graph:world"
 
 
+class _LazyNetworkRetryAdapter:
+    """Defer the compatibility retry index until a road retry is requested."""
+
+    def __init__(self, kg: Any) -> None:
+        self._kg = kg
+        self._adapter: Any | None = None
+
+    def __call__(self, retry_payload: Any) -> Any:
+        if self._adapter is None:
+            from app.spatial.network import RDFLibKGSpatialRetryAdapter
+
+            self._adapter = RDFLibKGSpatialRetryAdapter(self._kg)
+        return self._adapter(retry_payload)
+
+
 class KGWorldModelAdapter:
     def __init__(self, kg: Any):
         self._kg = kg
@@ -964,11 +979,14 @@ class KGWorldModelAdapter:
         )
 
     def build_network_retry_adapter(self) -> Any:
-        """Return the legacy road-retry view through the world-model port."""
+        """Return a lazy road-retry view through the world-model port.
 
-        from app.spatial.network import RDFLibKGSpatialRetryAdapter
+        Building the retry index scans every RDF subject and is not needed by
+        DATA, WM current-view reads, or Evidence.  Keep the port available to
+        later road execution while moving that cost to its first actual use.
+        """
 
-        return RDFLibKGSpatialRetryAdapter(self._kg)
+        return _LazyNetworkRetryAdapter(self._kg)
 
 
 __all__ = ["KGWorldModelAdapter"]

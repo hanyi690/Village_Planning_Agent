@@ -1,34 +1,29 @@
-# infrastructure/kg 知识图谱适配
+# infrastructure/kg：DATA-backed World Model 的 RDF 适配层
 
-> 本 README 以 `backend/app/infrastructure/kg/` 实际代码为准（核验日期 2026-08-15）。
-> 旧文档中的 `app/infrastructure/kg` / `app.kg` 路径已不存在；本包是 KG 的唯一实现位置。
+本目录只保留当前实现：DATA catalog 投影出的不可变 World Model、当前视图读取适配器、
+外部观测适配器和统一 ontology。旧的 KG builder、manager、session KG、SPARQL 查询包、
+enrichment、gazetteer 和空间索引已经物理删除；它们不再是运行时或文档契约的一部分。
 
-## 定位
+## 当前文件职责
 
-规划知识图谱（PlanningKG）的构建、存储、查询与富化适配：把已准入 DATA catalog 的
-空间事实投影为 RDF 图（rdflib）+ SemanticMemoryStore，提供 SPARQL/
-模板查询给分析/接地/执行阶段使用。
-
-## 目录职责
-
-| 目录/文件 | 职责 |
+| 文件 | 职责 |
 |---|---|
-| `builder/` | KGBuilder 组合式构建：`base.PlanningKG`、`builder.KGBuilder`、`registry`（BuildContext/BuilderSpec）、`layer1_core`/`layer1_extended`/`layer1_control_lines`、`layer2`/`layer3`/`layer4`、`entity_cluster_topology`、`enrichment` 挂载点 |
-| `service.py` | `build_knowledge_graph_data`：从 bundle 构建 KG 数据 |
-| `manager.py` | 会话级 KG 生命周期、缓存与 DATA digest 绑定 |
-| `manager.py` | `KGManager` + `CacheKey.compute_layer1_cache_key` + LRU 缓存 |
-| `queries/` | 查询层：`contracts`、`semantic`、`cognition`、`execute_queries`、`spatial_ref`、`sparql`；顶层 `__init__` 导出 `query_kg`/`get_entity_context`/`get_parcel_semantic_context` 等 |
-| `enrichment/` | 富化：`bindings`、`descriptions`、`relations`、`report_entity_enrichment` |
-| `gazetteer/` | 地名词典适配 |
-| `adapters/` | `gazetteer_adapter`/`semantic_query_adapter`/`spatial_query_adapter`（实现 contracts/ports） |
-| `ontology.py` | `PLN`/`GEO` 命名空间、EntityTypes、Relations、SemanticPredicates、GeoPredicates |
-| `memory.py` | `SemanticMemoryStore`（关系量化属性） |
-| `interface.py` | `open_kg_session`/`query_session_sparql`/`query_session_template`/`require_session_kg`/`close_kg_session`（stage-0 稳定边界） |
-| `dlq.py` | 死信队列分类（DlqCategory/DlqEntry/DlqReport） |
-| `process_worker.py` | 构建进程 worker |
+| `ontology.py` | World Model 使用的 `PLN`/`GEO` 命名空间和受控谓词集合。 |
+| `adapters/source_catalog_adapter.py` | 将已准入的 `DataResourceCatalog` 投影为确定性的 source/world RDF 三元组。仅读 catalog，不修改原始/归一化几何。 |
+| `adapters/current_world_adapter.py` | 给 WM、Evidence、GROUND 提供当前 world/source 图的有界只读查询，并按 WM snapshot digest 缓存索引。 |
+| `adapters/world_model_adapter.py` | Cognition 提交边界和网络重试的窄适配；不是旧 KG 查询入口。 |
+| `adapters/external_observation_adapter.py` | 将 provider observation cache 变成带来源、范围和 digest 的只读外部观察。 |
 
-## 边界规则
+## 唯一数据流
 
-- KG 只存空间实体及其关系；几何计算在 `app/spatial/`，KG 只存计算结果。
-- RDF 存纯关系，量化细节存 `SemanticMemoryStore`。
-- KG 是事实/意图/成果的语义索引，不是工作流状态容器，也不是所有空间计算的替代品。
+```text
+admitted DataResourceCatalog
+  -> source_catalog_adapter
+  -> WorldModelKGStore (CAS + compare-and-set)
+  -> CurrentWorldQueryAdapter
+  -> WM / Evidence / GROUND
+```
+
+World Model 只消费已准入 DATA。原始文件、normalized geometry、provider cache 均不在这里
+被改写；Evidence 可以引用 source/world entity 和 external observation，但不能把观察升级为
+世界事实。所有写入通过 Cognition/World Model commit port，并绑定 source snapshot digest。

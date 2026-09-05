@@ -16,7 +16,7 @@ provider 类型上浮为业务事实；领域层不反向依赖这里的具体�
 | `events/` | 事件持久化与 SSE | `repository.EventRepository`（SQLite run_events）、`connection_hub.EventConnectionHub`（在线队列）、`sse_publisher`（发事件/工具状态/GIS 事件）、`sse_events.py`（GIS 事件模型）、`event_factory` |
 | `runtime/` | 规划运行时 | `planning_runtime_service.PlanningRuntimeService`：graph 单例、`trigger_planning_execution`、`resume_from_interrupt`、`fork_checkpoint`、`aget_state` |
 | `llm/` | LLM 适配 | `factory.create_llm`（openai/zhipuai/minimax）、`instructor_client`、`manager`（统一调用/上下文/输出边界）、`planning_claims.PlanningClaimGenerator`、`retry`、`stats_collector`、`tracing`；`prompts/`；`tools/`（ToolRegistry + DATA/evidence/knowledge/reports 工具） |
-| `kg/` | 知识图谱 | `builder/`（KGBuilder + layer1-4）、`service.build_knowledge_graph_data`、`session_kg`（进程池 + CAS）、`manager`（LRU 缓存）、`queries/`（SPARQL/模板查询）、`enrichment/`（bindings/descriptions/relations/report_entity_enrichment）、`gazetteer/`、`adapters/`、`dlq`、`memory`、`ontology` |
+| `kg/` | DATA-backed World Model 适配 | `ontology`、`source_catalog_adapter`、`current_world_adapter`、`world_model_adapter`、`external_observation_adapter`；旧 KG builder/manager/session/query/enrichment/gazetteer/spatial index 已物理删除 |
 | `rag/` | RAG 检索 | `service.RagService`、`vector_store`（chroma/faiss/qdrant + Aliyun embeddings）、`chunker`、`cli`（管理命令）、`context`、`utils/` |
 | `rendering/` | 交付渲染 | `html_render.render_interactive_map`、`static_render`（PNG）、`map_layers.build_map_layers`、`colors` |
 | `export/` | 交付导出 | `delivery_snapshot`（快照→GeoJSON 图层）、`export_package.export_delivery_package`、`gdb` |

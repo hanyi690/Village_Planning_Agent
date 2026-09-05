@@ -46,7 +46,7 @@ _SOURCE_FAMILY_ALIASES = {
     "planning_text": "text",
     "professional_text": "text",
     "source_document": "text",
-    "bundle_document": "text",
+    "document": "text",
     "local_text": "text",
     "artifact": "artifact",
     "history": "text",

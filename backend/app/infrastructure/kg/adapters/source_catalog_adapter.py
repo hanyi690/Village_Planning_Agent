@@ -5,7 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections import OrderedDict
 from collections.abc import Mapping
+from functools import lru_cache
+from threading import RLock
 from typing import Any
 
 from rdflib import Graph, Literal, RDF
@@ -17,6 +20,127 @@ from app.contracts.data.source_contracts import (
     source_local_cognition_ref,
 )
 from app.infrastructure.kg.ontology import PLN
+
+
+_RDF_LITERAL = Literal
+
+
+@lru_cache(maxsize=32768)
+def _plain_literal(value: Any) -> Literal:
+    """Reuse immutable plain literals during the RDF projection hot path."""
+
+    return _RDF_LITERAL(value)
+
+
+class _CachedNamespace:
+    """Cache ontology predicate lookups without changing URI values."""
+
+    __slots__ = ("_namespace", "_values")
+
+    def __init__(self, namespace: Any) -> None:
+        self._namespace = namespace
+        self._values: dict[str, Any] = {}
+
+    def __getattr__(self, name: str) -> Any:
+        value = self._values.get(name)
+        if value is None:
+            value = getattr(self._namespace, name)
+            self._values[name] = value
+        return value
+
+
+_CACHED_PLN = _CachedNamespace(PLN)
+
+_PROJECTION_CACHE_LIMIT = 2
+_PROJECTION_CACHE_LOCK = RLock()
+_PROJECTION_CACHE: OrderedDict[
+    tuple[str, str, str],
+    tuple[tuple[tuple[Any, Any, Any], ...], tuple[tuple[Any, Any, Any], ...], int],
+] = OrderedDict()
+
+_ANCHOR_CACHE_LIMIT = 8192
+_ANCHOR_CACHE_LOCK = RLock()
+_ANCHOR_CACHE: OrderedDict[tuple[str, str], tuple[float, float] | None] = OrderedDict()
+
+
+class _BufferedGraph:
+    """Collect one projection transaction and publish it with ``addN``.
+
+    RDFLib's public ``Graph.add`` performs store bookkeeping for every triple.
+    Projection is a write-once transaction, so buffering preserves the exact
+    graph contents while moving that bookkeeping to one bulk store operation.
+    """
+
+    __slots__ = ("_target", "_pending")
+
+    def __init__(self, target: Graph) -> None:
+        self._target = target
+        self._pending: list[tuple[Any, Any, Any]] = []
+
+    def add(self, triple: tuple[Any, Any, Any]) -> None:
+        self._pending.append(triple)
+
+    def flush(self) -> None:
+        if not self._pending:
+            return
+        pending = self._pending
+        self._pending = []
+        self._target.store.addN(
+            (subject, predicate, obj, self._target)
+            for subject, predicate, obj in pending
+        )
+
+    def __iter__(self):
+        self.flush()
+        return iter(self._target)
+
+
+def _projection_cache_key(
+    snapshot: DataResourceCatalogSnapshot,
+    schema_mapping_snapshot: Any,
+    *,
+    split_graphs: bool,
+) -> tuple[str, str, str] | None:
+    snapshot_digest = str(getattr(snapshot, "digest", "") or "").strip()
+    if not snapshot_digest:
+        return None
+    mapping_digest = str(
+        getattr(schema_mapping_snapshot, "mapping_fingerprint", "")
+        or getattr(schema_mapping_snapshot, "decision_fingerprint", "")
+        or getattr(schema_mapping_snapshot, "candidate_digest", "")
+        or ""
+    ).strip()
+    if schema_mapping_snapshot is not None and not mapping_digest:
+        return None
+    return (
+        "source-catalog-projection-v1",
+        snapshot_digest,
+        f"{mapping_digest}:{'split' if split_graphs else 'single'}",
+    )
+
+
+def _replay_projection_cache(
+    entry: tuple[tuple[tuple[Any, Any, Any], ...], tuple[tuple[Any, Any, Any], ...], int],
+    source_graph: Graph,
+    world_graph: Graph | None,
+) -> int:
+    source_triples, world_triples, projected = entry
+    target_graph = world_graph if world_graph is not None else source_graph
+    if world_graph is None:
+        target_graph.store.addN(
+            (subject, predicate, obj, target_graph)
+            for subject, predicate, obj in source_triples
+        )
+        return projected
+    source_graph.store.addN(
+        (subject, predicate, obj, source_graph)
+        for subject, predicate, obj in source_triples
+    )
+    world_graph.store.addN(
+        (subject, predicate, obj, world_graph)
+        for subject, predicate, obj in world_triples
+    )
+    return projected
 
 
 def _uri(prefix: str, value: str) -> Any:
@@ -110,10 +234,26 @@ def _coordinate_support_key(feature: Any) -> str | None:
     return f"coord:{round(anchor[0] / 0.0003)}:{round(anchor[1] / 0.0003)}"
 
 
-# Kept as a private compatibility alias for callers that imported the old
-# helper.  New identity code must use ``_source_identity`` below, while this
-# value is explicitly named as support-only.
-_coordinate_identity = _coordinate_support_key
+def _feature_geometry_anchor(feature: Any) -> tuple[float, float] | None:
+    """Reuse the deterministic support anchor for repeated WM projections."""
+
+    feature_digest = str(getattr(feature, "source_feature_digest", "") or "")
+    geometry, source_crs = _feature_geometry(feature)
+    cache_key = (feature_digest, str(source_crs or ""))
+    if not feature_digest:
+        return _geometry_anchor(geometry, source_crs=source_crs)
+    with _ANCHOR_CACHE_LOCK:
+        if cache_key in _ANCHOR_CACHE:
+            anchor = _ANCHOR_CACHE.pop(cache_key)
+            _ANCHOR_CACHE[cache_key] = anchor
+            return anchor
+    anchor = _geometry_anchor(geometry, source_crs=source_crs)
+    with _ANCHOR_CACHE_LOCK:
+        _ANCHOR_CACHE[cache_key] = anchor
+        _ANCHOR_CACHE.move_to_end(cache_key)
+        while len(_ANCHOR_CACHE) > _ANCHOR_CACHE_LIMIT:
+            _ANCHOR_CACHE.popitem(last=False)
+    return anchor
 
 
 def _source_identity(feature: Any) -> str:
@@ -344,6 +484,13 @@ def _line_component_identities(
         if endpoints is not None:
             indexed.append((index, feature, endpoints))
     parent = {index: index for index, _, _ in indexed}
+    endpoints_by_index = {
+        index: endpoints for index, _feature, endpoints in indexed
+    }
+    tokens_by_index = {
+        index: semantic_tokens(feature)
+        for index, feature, _endpoints in indexed
+    }
 
     def find(value: int) -> int:
         while parent[value] != value:
@@ -357,20 +504,52 @@ def _line_component_identities(
             parent[root_right] = root_left
 
     tolerance = 0.0003
-    for left, feature_left, endpoints_left in indexed:
-        for right, feature_right, endpoints_right in indexed:
-            if right <= left or endpoints_left is None or endpoints_right is None:
-                continue
-            tokens_left = semantic_tokens(feature_left)
-            tokens_right = semantic_tokens(feature_right)
-            if not tokens_left or not tokens_right or not tokens_left.intersection(tokens_right):
-                continue
-            if any(
-                (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 <= tolerance ** 2
-                for a in endpoints_left
-                for b in endpoints_right
-            ):
-                union(left, right)
+    # Candidate pairs are found through a fixed-size endpoint grid.  The
+    # exact distance check below is unchanged; the grid only removes pairs
+    # that cannot possibly be within ``tolerance``.  Tokens are also computed
+    # once per feature instead of once per quadratic pair.
+    cell_size = tolerance
+    endpoint_grid: dict[tuple[int, int], list[tuple[int, tuple[float, float]]]] = {}
+
+    def cell(point: tuple[float, float]) -> tuple[int, int]:
+        return (
+            int(point[0] // cell_size),
+            int(point[1] // cell_size),
+        )
+
+    for index, _feature, endpoints in indexed:
+        for point in endpoints:
+            endpoint_grid.setdefault(cell(point), []).append((index, point))
+
+    candidate_pairs: set[tuple[int, int]] = set()
+    for left, _feature, endpoints_left in indexed:
+        tokens_left = tokens_by_index[left]
+        if not tokens_left:
+            continue
+        for point in endpoints_left:
+            point_cell = cell(point)
+            for delta_x in (-1, 0, 1):
+                for delta_y in (-1, 0, 1):
+                    for right, _other_point in endpoint_grid.get(
+                        (point_cell[0] + delta_x, point_cell[1] + delta_y),
+                        (),
+                    ):
+                        if right > left:
+                            candidate_pairs.add((left, right))
+
+    for left, right in sorted(candidate_pairs):
+        tokens_left = tokens_by_index[left]
+        tokens_right = tokens_by_index[right]
+        if not tokens_left.intersection(tokens_right):
+            continue
+        endpoints_left = endpoints_by_index[left]
+        endpoints_right = endpoints_by_index[right]
+        if any(
+            (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 <= tolerance ** 2
+            for a in endpoints_left
+            for b in endpoints_right
+        ):
+            union(left, right)
     components: dict[int, list[Any]] = {}
     for index, feature, _endpoints in indexed:
         components.setdefault(find(index), []).append(feature)
@@ -407,6 +586,30 @@ def _part_identity(feature: Any) -> str:
     return str(feature.source_feature_ref)
 
 
+def _representation_kind(feature: Any) -> str:
+    """Return the normalized kind used by current-world consumers."""
+
+    normalized = str(
+        getattr(feature, "normalized_geometry_kind", "") or ""
+    ).casefold()
+    if normalized and normalized != "unknown":
+        return normalized
+    normalized_geometry = getattr(feature, "normalized_geometry", None)
+    if isinstance(normalized_geometry, dict):
+        inferred = {
+            "point": "point",
+            "multipoint": "point",
+            "linestring": "line",
+            "multilinestring": "line",
+            "polygon": "polygon",
+            "multipolygon": "polygon",
+            "geometrycollection": "collection",
+        }.get(str(normalized_geometry.get("type") or "").casefold(), "")
+        if inferred:
+            return inferred
+    return str(getattr(feature, "geometry_kind", "") or "").casefold()
+
+
 def project_source_catalog(
     graph: Graph,
     catalog: Any,
@@ -416,12 +619,46 @@ def project_source_catalog(
 ) -> int:
     """Add source-backed WorldEntity/Representation nodes without fixed layers."""
 
+    # Terms created below are immutable; reuse repeated literals and ontology
+    # predicates while leaving the external RDFLib Graph contract untouched.
+    Literal = _plain_literal
+    PLN = _CACHED_PLN
     snapshot = getattr(catalog, "snapshot", catalog)
     if not isinstance(snapshot, DataResourceCatalogSnapshot):
         raise TypeError("catalog must expose a DataResourceCatalogSnapshot")
     from app.data.admission import assert_cognition_ready_catalog
 
     assert_cognition_ready_catalog(snapshot)
+    split_graphs = world_graph is not None and world_graph is not graph
+    cache_key = _projection_cache_key(
+        snapshot,
+        schema_mapping_snapshot,
+        split_graphs=split_graphs,
+    )
+    if cache_key is not None:
+        with _PROJECTION_CACHE_LOCK:
+            cached_entry = _PROJECTION_CACHE.get(cache_key)
+            if cached_entry is not None:
+                _PROJECTION_CACHE.move_to_end(cache_key)
+        if cached_entry is not None:
+            return _replay_projection_cache(
+                cached_entry,
+                graph,
+                world_graph if split_graphs else None,
+            )
+    source_existing = frozenset(graph)
+    world_existing = (
+        frozenset(world_graph)
+        if split_graphs and world_graph is not None
+        else frozenset()
+    )
+    source_graph = _BufferedGraph(graph)
+    world_buffer = (
+        _BufferedGraph(world_graph)
+        if split_graphs and world_graph is not None
+        else source_graph
+    )
+    graph = source_graph
     semantic_view = _semantic_view(schema_mapping_snapshot)
     datasets = tuple(snapshot.datasets or (snapshot.dataset,))
     dataset_nodes: dict[str, Any] = {}
@@ -481,14 +718,13 @@ def project_source_catalog(
             graph.add((source_record, PLN.normalizedCrs, Literal(feature.normalized_crs)))
         graph.add((source_record, PLN.geometryKind, Literal(feature.geometry_kind)))
 
-    source_graph = graph
-    graph = world_graph if world_graph is not None else graph
     spatial_features = [
         feature
         for feature in snapshot.features
-        if str(feature.geometry_kind).casefold()
-        in {"point", "line", "polygon", "multipatch"}
+        if _representation_kind(feature)
+        in {"point", "line", "polygon", "multipatch", "collection"}
     ]
+    graph = world_buffer
     representation_by_feature: dict[tuple[str, str], list[Any]] = {}
     for representation in snapshot.representations:
         representation_by_feature.setdefault(
@@ -570,7 +806,7 @@ def project_source_catalog(
                 graph.add((part, PLN.sourceDataset, dataset_node))
             if feature.layer_ref:
                 graph.add((part, PLN.sourceLayerRef, Literal(feature.layer_ref)))
-            graph.add((part, PLN.geometryKind, Literal(feature.geometry_kind)))
+            graph.add((part, PLN.geometryKind, Literal(_representation_kind(feature))))
             graph.add((part, PLN.sourceFeatureDigest, Literal(feature.source_feature_digest)))
             graph.add((part, PLN.sourceCrs, Literal(getattr(feature, "source_crs", "") or "")))
             graph.add((part, PLN.normalizedCrs, Literal(getattr(feature, "normalized_crs", "") or "")))
@@ -624,7 +860,7 @@ def project_source_catalog(
                     semantic_view.get("representation_role", {}).get(
                         (
                             _feature_key(feature),
-                            str(getattr(feature, "geometry_kind", "") or "").casefold(),
+                            _representation_kind(feature),
                         ),
                         "",
                     )
@@ -664,7 +900,7 @@ def project_source_catalog(
         # second WorldEntity.  A derived multi-line representation keeps only
         # component refs, so geometry still resolves through DATA.
         if len(group) > 1 and all(
-            str(getattr(item, "geometry_kind", "")).casefold() == "line"
+            _representation_kind(item) == "line"
             for item in group
         ):
             derived_part = _uri("entity_part", f"{identity}:derived_centerline")
@@ -754,8 +990,7 @@ def project_source_catalog(
     anchored: list[tuple[Any, str, tuple[float, float]]] = []
     for feature in spatial_features:
         identity = feature_identities.get(id(feature), "")
-        geometry, source_crs = _feature_geometry(feature)
-        anchor = _geometry_anchor(geometry, source_crs=source_crs)
+        anchor = _feature_geometry_anchor(feature)
         if identity and anchor is not None:
             anchored.append((feature, identity, anchor))
     cells: dict[tuple[int, int], list[int]] = {}
@@ -810,25 +1045,25 @@ def project_source_catalog(
         support_key = f"coordinate_support:{support_digest}"
         cluster_id = f"{support_key}:{'|'.join(identities)}"
         cluster = _uri("spatial_support_cluster", cluster_id)
-        assertions.add((cluster, RDF.type, PLN.SpatialSupportCluster))
-        assertions.add((cluster, PLN.supportKey, Literal(support_key)))
-        assertions.add((cluster, PLN.supportReason, Literal("coordinate_proximity")))
-        assertions.add((
+        graph.add((cluster, RDF.type, PLN.SpatialSupportCluster))
+        graph.add((cluster, PLN.supportKey, Literal(support_key)))
+        graph.add((cluster, PLN.supportReason, Literal("coordinate_proximity")))
+        graph.add((
             cluster,
             PLN.supportAlgorithmVersion,
             Literal("wgs84-anchor-mean-radius-v1"),
         ))
-        assertions.add((
+        graph.add((
             cluster,
             PLN.supportToleranceDegrees,
             _decimal_literal(tolerance),
         ))
-        assertions.add((
+        graph.add((
             cluster,
             PLN.sourceSnapshotRef,
             Literal(str(getattr(snapshot, "snapshot_id", "") or "")),
         ))
-        assertions.add((
+        graph.add((
             cluster,
             PLN.sourceCatalogDigest,
             Literal(str(getattr(snapshot, "digest", "") or "")),
@@ -839,30 +1074,48 @@ def project_source_catalog(
                 "spatial_support_evidence",
                 f"{support_key}:{source_ref}:{feature.source_feature_digest}",
             )
-            assertions.add((cluster, PLN.hasSupportEvidence, evidence_node))
-            assertions.add((evidence_node, RDF.type, PLN.SpatialSupportEvidence))
-            assertions.add((evidence_node, PLN.sourceResourceRef, Literal(source_ref)))
-            assertions.add((
+            graph.add((cluster, PLN.hasSupportEvidence, evidence_node))
+            graph.add((evidence_node, RDF.type, PLN.SpatialSupportEvidence))
+            graph.add((evidence_node, PLN.sourceResourceRef, Literal(source_ref)))
+            graph.add((
                 evidence_node,
                 PLN.sourceFeatureDigest,
                 Literal(feature.source_feature_digest),
             ))
-            assertions.add((evidence_node, PLN.sourceDatasetRef, Literal(feature.dataset_ref)))
-            assertions.add((evidence_node, PLN.sourceFeatureRef, Literal(feature.source_feature_ref)))
-            assertions.add((
+            graph.add((evidence_node, PLN.sourceDatasetRef, Literal(feature.dataset_ref)))
+            graph.add((evidence_node, PLN.sourceFeatureRef, Literal(feature.source_feature_ref)))
+            graph.add((
                 evidence_node,
                 PLN.supportAnchorX,
                 _decimal_literal(anchor[0]),
             ))
-            assertions.add((
+            graph.add((
                 evidence_node,
                 PLN.supportAnchorY,
                 _decimal_literal(anchor[1]),
             ))
-            assertions.add((evidence_node, PLN.supportEntityIdentity, Literal(identity)))
+            graph.add((evidence_node, PLN.supportEntityIdentity, Literal(identity)))
         for identity in identities:
-            assertions.add((cluster, PLN.supports_entity, _uri("world_entity", identity)))
-            assertions.add((cluster, PLN.supportEntityIdentity, Literal(identity)))
+            graph.add((cluster, PLN.supports_entity, _uri("world_entity", identity)))
+            graph.add((cluster, PLN.supportEntityIdentity, Literal(identity)))
+    source_graph.flush()
+    if split_graphs and world_graph is not None:
+        graph.flush()
+    if cache_key is not None:
+        source_triples = tuple(
+            triple for triple in source_graph if triple not in source_existing
+        )
+        world_triples = (
+            tuple(triple for triple in graph if triple not in world_existing)
+            if split_graphs
+            else ()
+        )
+        entry = (source_triples, world_triples, projected)
+        with _PROJECTION_CACHE_LOCK:
+            _PROJECTION_CACHE[cache_key] = entry
+            _PROJECTION_CACHE.move_to_end(cache_key)
+            while len(_PROJECTION_CACHE) > _PROJECTION_CACHE_LIMIT:
+                _PROJECTION_CACHE.popitem(last=False)
     return projected
 
 
@@ -918,7 +1171,7 @@ def build_logical_part_proposals(
     # from a layer name or a business field such as BSM/DLBM.
     groups: dict[str, list[Any]] = {}
     for feature in snapshot.features:
-        if str(getattr(feature, "geometry_kind", "")).casefold() not in {
+        if _representation_kind(feature) not in {
             "polygon",
             "multipatch",
         }:

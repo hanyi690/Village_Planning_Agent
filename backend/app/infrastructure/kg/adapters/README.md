@@ -1,46 +1,14 @@
-# KG Adapters — 端口实现适配器
+# KG adapters：当前 World Model 的窄适配
 
-> **定位**：KG 侧对 `app.contracts.ports` 各 Protocol 的**实现**。每个适配器把 KG 子模块包装在端口背后，使 agent / app.spatial 层只依赖端口接口而非 KG 实现。
-> **Updated: 2026-08-05**
+当前保留的适配器只服务于 DATA-backed World Model：
 
----
+| 文件 | 用途 |
+|---|---|
+| `current_world_adapter.py` | 给 WM/Evidence/GROUND 提供按 snapshot digest 缓存的有界只读查询。 |
+| `source_catalog_adapter.py` | 把已准入 DATA catalog 投影为 source/world RDF。 |
+| `world_model_adapter.py` | 提供 Cognition commit 和网络重试的窄边界。 |
+| `external_observation_adapter.py` | 读取 provider observation cache，并保留 provider、scope、CRS、coverage 和 digest。 |
 
-## 职责边界
-
-**负责**：实现由 `app/contracts/ports/` 定义的依赖倒置端口，桥接 KG 能力与消费方。
-
-**不负责**：
-- 不定义端口（端口定义在 `ports/`）
-- 不做端口之外的业务逻辑（薄适配）
-- 不 import 上层编排（`app.workflow` / `app.api`）与业务算法
-
----
-
-## 输入/输出契约
-
-| 文件 | 类 | 实现端口 | 核心方法 |
-|---|---|---|---|
-| `gazetteer_adapter.py` | `KGGazetteerAdapter` | `GazetteerPort` | `resolve(run_id, name, fuzzy=False)` → `GazetteerEntryLike \| None`（包装 `kg/gazetteer`） |
-| `spatial_query_adapter.py` | `KGSpatialQueryAdapter` | `SpatialQueryPort` | `query_by_bbox` / `query_by_geometry` / `compute_overlap` / `nearest_features` / `resolve_candidates`（包装会话 KG） |
-
-**注入路径**：`app.infrastructure.context_runtime.manager` 的 `build_planning_context` 在构建 `PlanningPorts` 时实例化这两个适配器（gazetteer 非 None → `KGGazetteerAdapter`；kg 非 None → `KGSpatialQueryAdapter`）。
-
----
-
-## 依赖方向
-
-```
-kg/adapters/ → app/contracts/ports（实现接口）、app/infrastructure/kg（gazetteer / 会话 KG）、app/contracts
-   ▲ 被 app/application/context 注入到 PlanningPorts，供 app.spatial / app.workflow 层消费
-```
-
-- 允许：`app/contracts/ports`、`app/infrastructure/kg` 内部、`app/contracts`（`GazetteerEntryLike` / `SpatialReferenceSpec` / `CandidateSet`）
-- 禁止：`app/workflow` / `app/api` / 业务算法
-
----
-
-## 禁止行为
-
-- 在适配器内复刻 KG 业务逻辑（应调用 kg 子模块既有能力）
-- 让消费方直接 import 适配器（消费方应只依赖端口类型）
-- 适配器持有长生命周期状态 / 单例（实现应可注入、可替换）
+适配器不读取文件名、不回退旧 Bundle、不猜 CRS、不修改 catalog 几何，也不向 Evidence
+直接发布未经验证的世界事实。消费方依赖 `app.contracts.ports` 或 Evidence contract，
+不会反向导入已删除的 KG builder/query/gazetteer 实现。

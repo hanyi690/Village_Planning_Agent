@@ -15,9 +15,36 @@ def _current_world_catalog(catalog: Any) -> Any:
     from app.data.admission import assert_current_world_catalog, current_world_snapshot
     from app.data.resource_catalog import DataResourceCatalog
 
+    if isinstance(catalog, DataResourceCatalog):
+        assert_current_world_catalog(snapshot)
+        return catalog
     current = current_world_snapshot(snapshot)
     assert_current_world_catalog(current)
     return DataResourceCatalog(current)
+
+
+def _representation_kind(feature: Any) -> str:
+    """Return the normalized kind used for executable spatial views."""
+
+    normalized = str(
+        getattr(feature, "normalized_geometry_kind", "") or ""
+    ).casefold()
+    if normalized and normalized != "unknown":
+        return normalized
+    normalized_geometry = getattr(feature, "normalized_geometry", None)
+    if isinstance(normalized_geometry, dict):
+        inferred = {
+            "point": "point",
+            "multipoint": "point",
+            "linestring": "line",
+            "multilinestring": "line",
+            "polygon": "polygon",
+            "multipolygon": "polygon",
+            "geometrycollection": "collection",
+        }.get(str(normalized_geometry.get("type") or "").casefold(), "")
+        if inferred:
+            return inferred
+    return str(getattr(feature, "geometry_kind", "") or "").casefold()
 
 
 class SpatialWorkspace:
@@ -84,7 +111,7 @@ class SpatialWorkspace:
     def _layer_views(self) -> tuple[dict[str, list[Any]], dict[str, list[Any]], dict[str, list[Any]]]:
         groups = (defaultdict(list), defaultdict(list), defaultdict(list))
         for feature in self._features():
-            kind = str(getattr(feature, "geometry_kind", "") or "").casefold()
+            kind = _representation_kind(feature)
             index = {"point": 0, "line": 1, "polygon": 2}.get(kind)
             if index is None:
                 continue
@@ -131,7 +158,7 @@ class SpatialWorkspace:
         wanted_attributes = attributes or {}
         result: list[Any] = []
         for feature in self._features():
-            if wanted_kind and str(getattr(feature, "geometry_kind", "") or "").casefold() != wanted_kind:
+            if wanted_kind and _representation_kind(feature) != wanted_kind:
                 continue
             if wanted_layer and wanted_layer not in str(getattr(feature, "layer_ref", "") or "").casefold():
                 continue

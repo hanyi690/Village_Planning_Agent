@@ -21,6 +21,24 @@ class CurrentWorldQueryAdapter:
 
     def __init__(self, store: Any):
         self._store = store
+        self._metadata_token = ""
+        self._current_world_digest_cache = ""
+        self._source_geometry_refs_token = ""
+        self._source_geometry_refs_cache: dict[str, tuple[str, ...]] = {}
+        self._entity_rows_token = ""
+        self._entity_rows_cache: tuple[
+            dict[str, dict[str, Any]],
+            dict[str, set[str]],
+            dict[str, set[str]],
+            dict[str, set[str]],
+        ] | None = None
+        self._bounded_entity_rows_token = ""
+        self._bounded_entity_rows_cache: tuple[
+            dict[str, dict[str, Any]],
+            dict[str, set[str]],
+            dict[str, set[str]],
+            dict[str, set[str]],
+        ] | None = None
 
     @property
     def snapshot_ref(self) -> str:
@@ -52,22 +70,45 @@ class CurrentWorldQueryAdapter:
     def _name_key(value: Any) -> str:
         return "".join(str(value or "").split()).casefold()
 
-    def _metadata(self, row: dict[str, Any]) -> dict[str, Any]:
+    def _metadata(
+        self,
+        row: dict[str, Any],
+        *,
+        include_current_digest: bool = True,
+    ) -> dict[str, Any]:
+        if include_current_digest:
+            token = self.snapshot_digest
+            if token != self._metadata_token:
+                self._metadata_token = token
+                self._current_world_digest_cache = str(
+                    getattr(self._store, "current_world_digest", "") or ""
+                )
         row["snapshot_ref"] = self.snapshot_ref
         row["snapshot_digest"] = self.snapshot_digest
-        row["current_world_digest"] = self.current_world_digest
+        if include_current_digest:
+            row["current_world_digest"] = self._current_world_digest_cache
         return row
 
     def _source_geometry_refs(self, source_record: Any) -> list[str]:
-        world = self._store.world_graph
-        return sorted({
-            self._text(world, representation, PLN.geometryRef)
-            for representation in world.subjects(
-                PLN.derivedFromSourceRecord,
-                source_record,
-            )
-            if self._text(world, representation, PLN.geometryRef)
-        })
+        token = self.snapshot_digest
+        if token != self._source_geometry_refs_token:
+            world = self._store.world_graph
+            index: dict[str, set[str]] = {}
+            for representation in world.subjects(RDF.type, PLN.SpatialRepresentation):
+                geometry_ref = self._text(world, representation, PLN.geometryRef)
+                if not geometry_ref:
+                    continue
+                for record in world.objects(
+                    representation,
+                    PLN.derivedFromSourceRecord,
+                ):
+                    index.setdefault(str(record), set()).add(geometry_ref)
+            self._source_geometry_refs_token = token
+            self._source_geometry_refs_cache = {
+                key: tuple(sorted(values))
+                for key, values in index.items()
+            }
+        return list(self._source_geometry_refs_cache.get(str(source_record), ()))
 
     def find_source_records(
         self,
@@ -144,6 +185,7 @@ class CurrentWorldQueryAdapter:
         representation: Any,
         *,
         entity_part_ref: str = "",
+        include_current_digest: bool = True,
     ) -> dict[str, Any]:
         graph = self._store.world_graph
         source_record_refs = self._values(
@@ -207,23 +249,45 @@ class CurrentWorldQueryAdapter:
                 else "available"
             ),
         }
-        return self._metadata(row)
+        return self._metadata(
+            row,
+            include_current_digest=include_current_digest,
+        )
 
-    def _entity_rows(self) -> tuple[
+    def _entity_rows(
+        self,
+        *,
+        limit: int | None = None,
+        include_current_digest: bool = True,
+    ) -> tuple[
         dict[str, dict[str, Any]],
         dict[str, set[str]],
         dict[str, set[str]],
         dict[str, set[str]],
     ]:
+        token = f"{self.snapshot_digest}:{int(include_current_digest)}"
+        bounded = limit is not None
+        if bounded:
+            if (
+                self._bounded_entity_rows_cache is not None
+                and token == self._bounded_entity_rows_token
+                and len(self._bounded_entity_rows_cache[0]) >= max(1, int(limit or 1))
+            ):
+                return self._bounded_entity_rows_cache
+        elif self._entity_rows_cache is not None and token == self._entity_rows_token:
+            return self._entity_rows_cache
         graph = self._store.world_graph
         rows: dict[str, dict[str, Any]] = {}
         by_ref: dict[str, set[str]] = {}
         by_source: dict[str, set[str]] = {}
         by_name: dict[str, set[str]] = {}
-        for subject in sorted(
+        subjects = sorted(
             set(graph.subjects(RDF.type, PLN.WorldEntity)),
             key=str,
-        ):
+        )
+        if bounded:
+            subjects = subjects[:max(1, int(limit or 1))]
+        for subject in subjects:
             entity_ref = str(subject)
             entity_identity = self._text(graph, subject, PLN.entityIdentity)
             parts: list[dict[str, Any]] = []
@@ -258,7 +322,7 @@ class CurrentWorldQueryAdapter:
                     "geometry_kind": self._text(graph, part, PLN.geometryKind),
                     "status": self._text(graph, part, PLN.entityPartStatus)
                     or "observed",
-                }))
+                }, include_current_digest=include_current_digest))
                 for source_ref in source_refs:
                     by_source.setdefault(source_ref, set()).add(entity_ref)
                     dataset = self._text(graph, part, PLN.sourceDatasetRef)
@@ -273,13 +337,17 @@ class CurrentWorldQueryAdapter:
                     self._representation_row(
                         representation,
                         entity_part_ref=part_ref,
+                        include_current_digest=include_current_digest,
                     )
                 )
             for representation in graph.objects(
                 subject,
                 PLN.hasSpatialRepresentation,
             ):
-                representations.append(self._representation_row(representation))
+                representations.append(self._representation_row(
+                    representation,
+                    include_current_digest=include_current_digest,
+                ))
             deduped_representations = {
                 row["representation_ref"]: row
                 for row in representations
@@ -312,7 +380,7 @@ class CurrentWorldQueryAdapter:
                     deduped_representations[key]
                     for key in sorted(deduped_representations)
                 ],
-            })
+            }, include_current_digest=include_current_digest)
             rows[entity_ref] = row
             for key in (entity_ref, entity_identity):
                 if key:
@@ -321,7 +389,14 @@ class CurrentWorldQueryAdapter:
                 key = self._name_key(label)
                 if key:
                     by_name.setdefault(key, set()).add(entity_ref)
-        return rows, by_ref, by_source, by_name
+        result = (rows, by_ref, by_source, by_name)
+        if bounded:
+            self._bounded_entity_rows_token = token
+            self._bounded_entity_rows_cache = result
+        else:
+            self._entity_rows_token = token
+            self._entity_rows_cache = result
+        return result
 
     def find_entities(
         self,
@@ -332,10 +407,15 @@ class CurrentWorldQueryAdapter:
         name: str = "",
         entity_type: str = "",
         limit: int = 50,
+        include_current_digest: bool = True,
     ) -> list[dict[str, Any]]:
         """Return bounded entity/part rows from ``WORLD_GRAPH`` only."""
 
-        rows, by_ref, by_source, by_name = self._entity_rows()
+        has_filter = bool(identity or entity_ref or source_feature_ref or name or entity_type)
+        rows, by_ref, by_source, by_name = self._entity_rows(
+            limit=limit if not has_filter else None,
+            include_current_digest=include_current_digest,
+        )
         candidates: set[str] | None = None
 
         def intersect(values: set[str]) -> None:

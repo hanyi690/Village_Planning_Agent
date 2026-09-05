@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import OrderedDict
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import Any, Literal, Mapping, Sequence
 
 import networkx as nx
@@ -21,6 +23,11 @@ from shapely.geometry import LineString, Point, shape
 from shapely.ops import transform
 
 NetworkImpedance = Literal["distance_m", "travel_time_min"]
+
+
+_NETWORK_CACHE_LIMIT = 32
+_NETWORK_CACHE_LOCK = RLock()
+_NETWORK_CACHE: OrderedDict[tuple[Any, ...], "NetworkGraphSnapshot"] = OrderedDict()
 
 
 def _geometry(value: Any):
@@ -59,6 +66,44 @@ def _as_lines(geometry: Any) -> list[LineString]:
     if geometry.geom_type == "MultiLineString":
         return [item for item in geometry.geoms if not item.is_empty]
     return []
+
+
+def _network_cache_key(
+    road_features: Sequence[Any],
+    *,
+    impedance: NetworkImpedance,
+    network_ref: str,
+    source_crs: str,
+    metric_crs: str,
+    snap_tolerance_m: float,
+    default_speed_kmh: float,
+    source_binding: str,
+    version: str,
+    source_refs: Sequence[str],
+) -> tuple[Any, ...] | None:
+    """Build a cache key from DATA-owned immutable feature digests."""
+
+    feature_digests: list[str] = []
+    for feature in road_features:
+        digest = str(getattr(feature, "source_feature_digest", "") or "").strip()
+        if not digest:
+            # Generic ad-hoc mappings do not expose a DATA identity.  Do not
+            # serialize their geometry merely to make a cache key.
+            return None
+        feature_digests.append(digest)
+    return (
+        "network-graph-v1",
+        tuple(feature_digests),
+        impedance,
+        network_ref,
+        source_crs,
+        metric_crs,
+        float(snap_tolerance_m),
+        float(default_speed_kmh),
+        source_binding,
+        version,
+        tuple(str(item) for item in source_refs),
+    )
 
 
 @dataclass(frozen=True)
@@ -208,6 +253,24 @@ def build_network_graph(
         raise ValueError("default_speed_kmh must be > 0")
     if impedance not in {"distance_m", "travel_time_min"}:
         raise ValueError(f"unsupported impedance: {impedance}")
+    cache_key = _network_cache_key(
+        road_features,
+        impedance=impedance,
+        network_ref=network_ref,
+        source_crs=source_crs,
+        metric_crs=metric_crs,
+        snap_tolerance_m=snap_tolerance_m,
+        default_speed_kmh=default_speed_kmh,
+        source_binding=source_binding,
+        version=version,
+        source_refs=source_refs,
+    )
+    if cache_key is not None:
+        with _NETWORK_CACHE_LOCK:
+            cached = _NETWORK_CACHE.get(cache_key)
+            if cached is not None:
+                _NETWORK_CACHE.move_to_end(cache_key)
+                return cached
     converter_cache: dict[str, Any] = {}
     metric_lines: list[tuple[str, LineString]] = []
     for index, feature in enumerate(road_features):
@@ -309,7 +372,7 @@ def build_network_graph(
         for item in (source_refs or (network_ref,))
         if str(item).strip()
     }))
-    return NetworkGraphSnapshot(
+    result = NetworkGraphSnapshot(
         network_ref=network_ref,
         impedance=impedance,
         crs=source_crs,
@@ -326,6 +389,13 @@ def build_network_graph(
         _graph=graph,
         _node_points=node_points,
     )
+    if cache_key is not None:
+        with _NETWORK_CACHE_LOCK:
+            _NETWORK_CACHE[cache_key] = result
+            _NETWORK_CACHE.move_to_end(cache_key)
+            while len(_NETWORK_CACHE) > _NETWORK_CACHE_LIMIT:
+                _NETWORK_CACHE.popitem(last=False)
+    return result
 
 
 __all__ = [

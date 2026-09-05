@@ -1,4 +1,4 @@
-"""Ontology definitions for PlanningKG (v5.0).
+"""Ontology definitions for the DATA-backed World Model.
 
 Naming convention:
   - GisXxx / gis_* = GIS map-layer concepts (data themes, layer_registry)
@@ -11,9 +11,9 @@ Added L3 RoadTarget, L4 PlannedZone/PlannedFacility/PlannedRoad/PlannedAxis.
 Removed 8 relations: constrained_by, achieves, conflicts_with, conducted_from,
 controls_use, protects, adjacent_to, location_constraint.
 
-[v4.7] ThreeZone/ThreeLine removed from active entity types (all()) -
-           transitioned to ConstraintIndex-based spatial queries.
-           The type constants remain as class attributes for backward compat.
+[current] ThreeZone/ThreeLine are represented by current DATA control-line
+           resources and ConstraintIndex; they are not separate World Entity
+           classes.
 
 [v4.8] Spatial cognition schema:
           - Three-dimension predicates: gis_type_ref, geometry_kind, semantic_group,
@@ -45,7 +45,7 @@ Relations: 8 total (v4.9 GeoSPARQL aligned)
            pln:co_located, pln:overlaps, pln:connected_via_road,
            geo:sfWithin, geo:sfIntersects, geo:sfContains
   Semantic: pln:derived_from, pln:serves
-  (within_zone, designated_as, connects, delineates kept for backward compat but not in active set)
+  (within_zone, designated_as and delineates are not World Model predicates)
 """
 
 from __future__ import annotations
@@ -62,9 +62,9 @@ GEO = Namespace("http://www.opengis.net/ont/geosparql#")
 
 
 class ThreeLineSubtypes:
-    """三线 subtype constants — bundle-key values for the four 三线 ControlLine subtypes.
+    """Current DATA vocabulary for the four 三线 ControlLine subtypes.
 
-    These match keys in ``control_line_mapping.THREE_LINE_BUNDLE_TO_PYDANTIC``.
+    These are stable source-role vocabulary values, not a Bundle API.
     Three-lines are法定约束底数 (statutory constraint base data), not derived:
       ecological_redline:    生态保护红线 (state-mandated)
       farmland_redline:      永久基本农田 (subset of 耕地保护红线, highest priority)
@@ -135,11 +135,7 @@ class EntityIdPolicy:
 class EntityTypes:
     """Active entity type URIs for the planning ontology (v6.0).
 
-    v4.6: removed Constraint, PlanningIndicator, ControlRule, LandUseCategory,
-    PlanIntent, Axis (non-spatial). Added RoadTarget (L3), PlannedZone,
-    PlannedFacility, PlannedRoad, PlannedAxis (L4).
-    v4.7: ThreeZone/ThreeLine removed from all() - migrated to ConstraintIndex.
-          The type constants remain for backward compat (3rd-party scripts).
+    Business feature types are separate from World Model support types.
     v4.8: LayerGroup added - virtual entity aggregating layer-group membership
           for layer-card-level queries (not a spatial entity, carries no BSM).
     v6.0: ThreeLine NOT added as separate entity - the four 三线 subtypes are
@@ -358,11 +354,9 @@ class SemanticPredicates:
 class BusinessFeatureSelector:
     """Select source-backed business features by their complete GIS identity.
 
-    ``rdf:type`` intentionally remains a broad compatibility classification:
-    lines such as roads, administrative boundaries, and contours can share a
-    legacy type during migration. Business queries must use this selector so
-    that the registry type, semantic group, geometry kind, and source identity
-    are all part of the selection contract.
+    ``rdf:type`` is a broad ontology class. Business queries use this selector
+    so registry type, semantic group, geometry kind and source identity are
+    all part of the selection contract.
     """
 
     gis_type_ref: str
@@ -443,9 +437,3 @@ class ProvenancePredicates:
     decision_confidence = PLN.decision_confidence
     decision_evidence = PLN.decision_evidence
     mapping_basis = PLN.mapping_basis
-
-
-# ============================================================
-# GIS layer metadata and semantic-enrichment derivation moved to
-#   app.infrastructure.kg.builder.enrichment
-# ============================================================

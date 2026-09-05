@@ -1,8 +1,8 @@
 """DATA-backed cognitive World Model store.
 
-The World Model is the KG projection of the normalized DATA catalog.  This
-module is intentionally independent from ``VillageBundle``, parcel fields and
-the legacy ``KGManager``.  A context receives one store for one DATA snapshot;
+The World Model is the RDF projection of the normalized DATA catalog.  This
+module is independent from legacy Bundle/parcel assembly and manager code. A
+context receives one store for one DATA snapshot;
 the store exposes the read/write ports used by GROUND and EXECUTE while the
 RDF graph remains an implementation detail.
 
@@ -18,14 +18,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from io import BytesIO
 from pathlib import Path
 from threading import RLock
 from time import perf_counter
 from typing import Any
 
 from rdflib import BNode, Dataset, Literal, RDF, URIRef
-from rdflib.plugins.serializers.trig import TrigSerializer
 
 from app.infrastructure.kg.adapters.source_catalog_adapter import project_source_catalog
 from app.infrastructure.kg.adapters.current_world_adapter import CurrentWorldQueryAdapter
@@ -56,7 +54,7 @@ IDENTITY_GRAPH = URIRef("urn:planning:graph:identity-binding")
 WORLD_MODEL_PROJECTION_VERSION = "source-catalog-projection-v11"
 WORLD_MODEL_SCHEMA_VERSION = "world-model-trig-v12"
 WORLD_MODEL_CODE_VERSION = "world-model-store-v12"
-WORLD_MODEL_DIGEST_ALGORITHM = "sha256-sorted-rdflib-n3-quads-v1"
+WORLD_MODEL_DIGEST_ALGORITHM = "sha256-sorted-rdflib-n3-quads-v2-length-prefixed"
 _VIEW_METADATA_PREDICATES = frozenset({
     PLN.worldModelVersion,
     PLN.worldModelProjectionVersion,
@@ -66,29 +64,24 @@ _VIEW_METADATA_PREDICATES = frozenset({
 })
 
 
-class _RoundTripTrigSerializer(TrigSerializer):
-    """Preserve each Literal lexical form already held by the RDF graph.
+def _graph_payload_and_digest(dataset: Dataset) -> tuple[bytes, str]:
+    """Serialize stable named graphs without RDFLib's expensive subject index.
 
-    This boundary does not recover precision discarded before Literal
-    construction.  It prevents the stock Turtle shorthand formatter from
-    applying a second, six-digit float rounding during CAS serialization.
+    The payload is deliberately conservative TriG: full N3 terms, explicit
+    graph blocks, and lexical sorting.  It is equivalent to the previous
+    serializer at the RDF term level, preserves decimal lexical forms, and is
+    parsed by RDFLib on restore.  Avoiding Turtle abbreviation and the
+    serializer's repeated Dataset union traversal makes WM cold persistence
+    proportional to the number of quads rather than its subject-ordering
+    bookkeeping.
     """
 
-    def label(self, node: Any, position: int) -> str:
-        if isinstance(node, Literal):
-            return node.n3(self.store.namespace_manager)
-        return super().label(node, position)
-
-
-def _roundtrip_trig(dataset: Dataset) -> bytes:
-    stream = BytesIO()
-    _RoundTripTrigSerializer(dataset).serialize(stream, encoding="utf-8")
-    return stream.getvalue()
-
-
-def _stable_graph_digest(dataset: Dataset) -> str:
-    rows: list[str] = []
+    graph_blocks: list[tuple[str, str]] = []
+    digest_rows: list[str] = []
+    term_labels: dict[Any, str] = {}
+    default_graph_id = dataset.default_graph.identifier
     for context in dataset.graphs():
+        rows: list[str] = []
         for subject, predicate, obj in context:
             terms = (context.identifier, subject, predicate, obj)
             if any(isinstance(term, BNode) for term in terms):
@@ -96,18 +89,42 @@ def _stable_graph_digest(dataset: Dataset) -> str:
                     "World Model persistence requires stable URI/Literal terms; "
                     "blank nodes are not permitted"
                 )
-            rows.append(json.dumps(
-                [term.n3() for term in terms],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ))
-    return hashlib.sha256("\n".join(sorted(rows)).encode("utf-8")).hexdigest()
+            labels: list[str] = []
+            for term in terms:
+                label = term_labels.get(term)
+                if label is None:
+                    label = term.n3()
+                    term_labels[term] = label
+                labels.append(label)
+            digest_rows.append("".join(f"{len(label)}:{label}" for label in labels))
+            rows.append(" ".join(labels[1:]) + " .")
+        if not rows:
+            continue
+        rows.sort()
+        graph_label = "" if context.identifier == default_graph_id else context.identifier.n3()
+        opening = "{" if not graph_label else f"{graph_label} {{"
+        block = opening + "\n" + "\n".join(f"    {row}" for row in rows) + "\n}"
+        graph_blocks.append((graph_label, block))
+    graph_blocks.sort(key=lambda item: item[0])
+    payload = ("\n".join(block for _, block in graph_blocks) + "\n").encode("utf-8")
+    digest = hashlib.sha256("\n".join(sorted(digest_rows)).encode("utf-8")).hexdigest()
+    return payload, digest
 
+
+def _roundtrip_trig(dataset: Dataset) -> bytes:
+    """Serialize stable named graphs without RDFLib's expensive subject index."""
+
+    return _graph_payload_and_digest(dataset)[0]
+
+
+def _stable_graph_digest(dataset: Dataset) -> str:
+    return _graph_payload_and_digest(dataset)[1]
 
 def _stable_context_digest(*contexts: Any) -> str:
     """Digest only the named graphs that form one logical view."""
 
     rows: list[str] = []
+    term_labels: dict[Any, str] = {}
     for context in contexts:
         for subject, predicate, obj in context:
             if predicate in _VIEW_METADATA_PREDICATES:
@@ -117,12 +134,22 @@ def _stable_context_digest(*contexts: Any) -> str:
                 raise RuntimeError(
                     "World Model view persistence requires stable terms"
                 )
-            rows.append(json.dumps(
-                [term.n3() for term in terms],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ))
+            encoded_terms = []
+            for term in terms:
+                try:
+                    encoded_terms.append(term_labels[term])
+                except KeyError:
+                    label = term.n3()
+                    term_labels[term] = label
+                    encoded_terms.append(label)
+            rows.append("".join(f"{len(label)}:{label}" for label in encoded_terms))
     return hashlib.sha256("\n".join(sorted(rows)).encode("utf-8")).hexdigest()
+
+
+def _graph_triple_count(dataset: Dataset) -> int:
+    """Count named-graph triples without invoking Dataset's union iterator."""
+
+    return sum(len(context) for context in dataset.graphs())
 
 
 def _digest(value: Any) -> str:
@@ -187,6 +214,8 @@ class WorldModelKGStore:
         self._cas_branch_id = "main"
         self._descriptor_digest = ""
         self._committed_payload = b""
+        self._current_world_digest_token: tuple[Any, ...] | None = None
+        self._current_world_digest_cache = ""
         self.projection_version = WORLD_MODEL_PROJECTION_VERSION
         self.schema_version = WORLD_MODEL_SCHEMA_VERSION
         self.code_version = WORLD_MODEL_CODE_VERSION
@@ -210,12 +239,20 @@ class WorldModelKGStore:
             self._project_catalog()
             projection_ms = (perf_counter() - projection_started) * 1000
         self._write_version_marker()
-        self.snapshot_digest = self._graph_digest()
+        if restored:
+            initial_payload = None
+            self.snapshot_digest = self._graph_digest()
+        else:
+            initial_payload, self.snapshot_digest = _graph_payload_and_digest(self.g)
         persistence_ms = 0.0
         if not restored:
             try:
                 persistence_started = perf_counter()
-                self._persist_snapshot(parent_descriptor=self._descriptor_digest)
+                self._persist_snapshot(
+                    parent_descriptor=self._descriptor_digest,
+                    snapshot_digest=self.snapshot_digest,
+                    payload=initial_payload,
+                )
                 persistence_ms = (perf_counter() - persistence_started) * 1000
             except Exception as exc:
                 if self._restore_persisted_snapshot():
@@ -235,7 +272,7 @@ class WorldModelKGStore:
             "restore_ms=%.1f projection_ms=%.1f persistence_ms=%.1f total_ms=%.1f",
             self.session_id,
             restored,
-            len(self.g),
+            _graph_triple_count(self.g),
             restore_ms,
             projection_ms,
             persistence_ms,
@@ -252,18 +289,28 @@ class WorldModelKGStore:
     @property
     def current_world_digest(self) -> str:
         """Digest of source + current world view, excluding planned state."""
-
-        return _stable_context_digest(self.source_graph, self.world_graph)
+        token = (
+            self.snapshot_digest,
+            len(self.source_graph),
+            len(self.world_graph),
+        )
+        if token != self._current_world_digest_token:
+            self._current_world_digest_token = token
+            self._current_world_digest_cache = _stable_context_digest(
+                self.source_graph,
+                self.world_graph,
+            )
+        return self._current_world_digest_cache
 
     def _snapshot_quads(self) -> list[tuple[Any, Any, Any, Any]]:
         return [
             (subject, predicate, obj, context.identifier)
-            for context in self.g.contexts()
+            for context in self.g.graphs()
             for subject, predicate, obj in context
         ]
 
     def _restore_quads(self, quads: list[tuple[Any, Any, Any, Any]]) -> None:
-        for context in list(self.g.contexts()):
+        for context in list(self.g.graphs()):
             context.remove((None, None, None))
         for subject, predicate, obj, graph_id in quads:
             self.g.graph(graph_id).add((subject, predicate, obj))
@@ -552,12 +599,14 @@ class WorldModelKGStore:
         parent_descriptor: str = "",
         commit_parents: dict[str, str] | None = None,
         commit_provenance: dict[str, Any] | None = None,
+        snapshot_digest: str = "",
+        payload: bytes | None = None,
     ) -> str:
         """Write an immutable TriG blob and update the branch pointer atomically."""
 
         repository = self._repository()
-        self.snapshot_digest = self._graph_digest()
-        payload = _roundtrip_trig(self.g)
+        self.snapshot_digest = snapshot_digest or self._graph_digest()
+        payload = payload if payload is not None else _roundtrip_trig(self.g)
         descriptor = repository.put_bytes(
             payload,
             schema_id="session_world_model_trig",
@@ -614,9 +663,12 @@ class WorldModelKGStore:
                 previous_descriptor = self._descriptor_digest
                 self.version += 1
                 self._write_version_marker()
-                self.snapshot_digest = self._graph_digest()
+                payload, self.snapshot_digest = _graph_payload_and_digest(self.g)
                 try:
-                    self._persist_snapshot(parent_descriptor=previous_descriptor)
+                    self._persist_snapshot(
+                        parent_descriptor=previous_descriptor,
+                        payload=payload,
+                    )
                 except Exception:
                     # A CAS conflict means another writer committed first.
                     # Discard this unpublished in-memory projection and move
@@ -733,7 +785,7 @@ class WorldModelKGStore:
             if not intent_ref:
                 intent_ref = f"intent:{_digest(payload)[:32]}"
             node = URIRef(f"{PLN_NS}intent_{_digest(intent_ref)[:24]}")
-            before = len(self.g)
+            before = _graph_triple_count(self.g)
             graph_snapshot = self._snapshot_quads()
             previous_version = self.version
             previous_snapshot_digest = self.snapshot_digest
@@ -745,7 +797,7 @@ class WorldModelKGStore:
                     continue
                 predicate = URIRef(f"{PLN_NS}intent_{_text(key)}")
                 self.intent_graph.add((node, predicate, Literal(json.dumps(value, ensure_ascii=False, default=str, sort_keys=True))))
-            if len(self.g) == before:
+            if _graph_triple_count(self.g) == before:
                 return {"status": "committed", "intent_ref": intent_ref, "triple_delta": 0, "world_model_version": self.version}
             previous_digest = self._descriptor_digest
             self.version += 1
@@ -764,7 +816,7 @@ class WorldModelKGStore:
             return {
                 "status": "committed",
                 "intent_ref": intent_ref,
-                "triple_delta": max(0, len(self.g) - before),
+                "triple_delta": max(0, _graph_triple_count(self.g) - before),
                 "world_model_version": self.version,
                 "world_model_snapshot_ref": self.snapshot_ref,
             }
@@ -1942,6 +1994,13 @@ def clear_world_model_stores() -> None:
         _STORES.clear()
 
 
+def clear_world_model_store(session_id: str) -> None:
+    """Release one session's in-process current-world store."""
+
+    with _STORE_LOCK:
+        _STORES.pop(_text(session_id), None)
+
+
 __all__ = [
     "WORLD_MODEL_CODE_VERSION",
     "WORLD_MODEL_DIGEST_ALGORITHM",
@@ -1949,5 +2008,6 @@ __all__ = [
     "WORLD_MODEL_SCHEMA_VERSION",
     "WorldModelKGStore",
     "get_world_model_store",
+    "clear_world_model_store",
     "clear_world_model_stores",
 ]

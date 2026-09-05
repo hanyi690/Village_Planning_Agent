@@ -1,15 +1,16 @@
-"""Spatial cognition contracts — ContextBlock + SpatialCognitiveUnit hierarchy.
+"""Spatial cognition value objects consumed by upper-layer prompt/rendering code.
 
 [v4.4] SpatialCognitiveUnit 三层抽象统一了所有空间认知元素：
   - 认知锚点（FacilityAnchor, ResidentialClusterAnchor, ...）
   - 规划意图（ZoneTarget, FacilityTarget, RoadTarget）
   - 规划状态（PlannedState 见 planned_state_contracts.py）
 
-与 Schema 层 SpatialFeature → PointFeature/LineFeature/PolygonFeature 对齐。
-下游可按形态统一遍历（isinstance 分发），按语义具体处理。
+这些对象不是 DATA admission model，也不构成 DATA catalog。当前 DATA→WM/Evidence 主链
+使用 `SourceFeature`、`SpatialRepresentation` 和 `BoundaryScopeArtifact`；本文件只保留
+仍被空间关系工具和 prompt formatter 直接消费的轻量 cognition value objects。
 
-Produced by: app.spatial.query.context.compute_context_blocks(VillageBundle)
-Consumed by: PARSE Agent, LAYOUT Pipeline, KG builder, prompt formatters
+Produced by: explicit DATA/WM context builders or upper-layer relation tools
+Consumed by: prompt formatters and spatial relation helpers
 """
 
 from __future__ import annotations

@@ -42,7 +42,6 @@ from .stage_contracts import (
     CognitionStageSnapshot,
     L1WorldProjectionSnapshot,
 )
-from .shadow_diff import CognitionShadowDiff, ShadowDiffItem
 from .source import SourceCatalogSnapshot, SourceCollectionSnapshot, SourceRecord
 
 __all__ = [
@@ -68,8 +67,6 @@ __all__ = [
     "CognitionRoundStatus",
     "requirement_set_digest",
     "L1WorldProjectionSnapshot",
-    "CognitionShadowDiff",
-    "ShadowDiffItem",
     "SchemaMappingDecision",
     "SCHEMA_MAPPING_CODE_CONTRACT_VERSION",
     "SchemaMappingProposal",

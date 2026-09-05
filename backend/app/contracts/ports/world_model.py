@@ -42,6 +42,7 @@ class CurrentWorldQueryPort(Protocol):
         name: str = "",
         entity_type: str = "",
         limit: int = 50,
+        include_current_digest: bool = True,
     ) -> list[dict[str, Any]]: ...
 
     def representations_for(
